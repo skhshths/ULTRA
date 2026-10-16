@@ -168,6 +168,10 @@ struct Settings {
     bgmode: String,
     /// How much a background image is darkened, 0-90 (%).
     bgdim: u8,
+    /// Swirl glyph colour (#rrggbb); empty = follow the accent.
+    swirlcolor: String,
+    /// Swirl visibility, 30-300 (%).
+    swirlbright: u16,
 }
 
 impl Default for Settings {
@@ -190,6 +194,8 @@ impl Default for Settings {
             bgcolor: "#141414".into(),
             bgmode: "swirl".into(),
             bgdim: 45,
+            swirlcolor: String::new(),
+            swirlbright: 100,
         }
     }
 }
@@ -1330,6 +1336,12 @@ impl App {
                 }
             }
             "bgdim" => self.cfg.bgdim = v.as_u64().unwrap_or(45).min(90) as u8,
+            "swirlcolor" => match v.as_str() {
+                Some(c) if is_hex_color(c) => self.cfg.swirlcolor = c.to_ascii_lowercase(),
+                Some("") | Some("auto") => self.cfg.swirlcolor.clear(),
+                _ => return,
+            },
+            "swirlbright" => self.cfg.swirlbright = v.as_u64().unwrap_or(100).clamp(30, 300) as u16,
             _ => return,
         }
         self.save_settings();

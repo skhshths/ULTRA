@@ -307,17 +307,20 @@ input[type=range] { accent-color: var(--acc); width: 140px; }
     <div class="desc">ad networks and tracking beacons are refused at the network level.<br>sign-in providers are never blocked.</div></div><div class="sw" id="sw-block"></div></div>
   <div class="sec">LOOK</div>
   <div class="row"><div><div class="name">theme</div><div class="desc" id="themename">mint</div></div><div class="swatches" id="swatches"></div></div>
-  <div class="row" style="border-bottom:0;padding-bottom:6px"><div><div class="name">colour picker</div><div class="desc">drag to pick. accent recolours the whole ui; background tints everything behind it.</div></div>
-    <div class="seg" id="pk-target"><button data-p="accent" class="on">accent</button><button data-p="bgcolor">background</button></div></div>
+  <div class="row" style="border-bottom:0;padding-bottom:6px"><div><div class="name">colour picker</div><div class="desc">drag to pick. accent recolours the whole ui, background tints everything behind it,<br>swirl colours the ascii swirl (auto follows the accent).</div></div>
+    <div class="seg" id="pk-target"><button data-p="accent" class="on">accent</button><button data-p="bgcolor">background</button><button data-p="swirlcolor">swirl</button></div></div>
   <div class="picker">
     <div class="top">
       <div><div class="pk-sv" id="pk-sv"><canvas width="220" height="120"></canvas><div class="pk-dot" id="pk-dot"></div></div>
         <div class="pk-hue" id="pk-hue" style="margin-top:8px"><div class="pk-bar" id="pk-bar"></div></div></div>
-      <div class="pk-side"><div class="pk-prev" id="pk-prev"></div><input id="pk-hex" spellcheck="false" maxlength="7"><div class="pk-rgb" id="pk-rgb"></div></div>
+      <div class="pk-side"><div class="pk-prev" id="pk-prev"></div><input id="pk-hex" spellcheck="false" maxlength="7"><div class="pk-rgb" id="pk-rgb"></div>
+        <button class="run" id="pk-auto" title="let the swirl follow the accent again">auto</button></div>
     </div>
   </div>
   <div class="row"><div><div class="name">background</div><div class="desc">animated swirl, a plain colour, or your own image (png, jpg, webp).</div></div>
     <div class="seg" id="bgmode"><button data-m="swirl">swirl</button><button data-m="solid">solid</button><button data-m="image">image</button></div></div>
+  <div class="row" id="r-swirl"><div><div class="name">swirl visibility</div><div class="desc">how bright the swirl's glyphs are.</div></div>
+    <div class="bgctl"><input type="range" id="sw-bright" min="30" max="300" step="5"><span id="sw-brightv" style="width:40px;color:var(--mid)"></span></div></div>
   <div class="row" id="r-bgimg"><div><div class="name">background image</div><div class="desc" id="bgimgdesc">no image chosen.</div></div>
     <div class="bgctl"><button class="run" id="bg-pick">choose…</button><button class="run" id="bg-clear">remove</button><input type="file" id="bg-file" accept="image/png,image/jpeg,image/webp" hidden></div></div>
   <div class="row" id="r-bgdim"><div><div class="name">dim image</div><div class="desc">darkens the picture so text stays readable.</div></div>
@@ -391,7 +394,9 @@ function applyTheme(c, force) {
   if (picking && !force) return;
   const accHex = c.theme === 'custom' ? (c.accent || '#9fe3d0') : (THEMES[c.theme] || THEMES.mint);
   const bgHex = /^#[0-9a-f]{6}$/i.test(c.bgcolor || '') ? c.bgcolor : '#141414';
-  const key = accHex + bgHex;
+  const swHex = /^#[0-9a-f]{6}$/i.test(c.swirlcolor || '') ? c.swirlcolor : '';
+  const bright = Math.min(300, Math.max(30, c.swirlbright ?? 100)) / 100;
+  const key = accHex + bgHex + swHex + bright;
   if (THEME === key) return;
   THEME = key;
   const acc = hex2rgb(accHex), bgc = hex2rgb(bgHex);
@@ -402,7 +407,8 @@ function applyTheme(c, force) {
   r.setProperty('--acc-deep', rgb2hex(mix(acc, bgc, .6)));
   r.setProperty('--acc-sel', rgb2hex(mix(acc, bgc, .3)));
   r.setProperty('--acc-bg', rgb2hex(mix(acc, bgc, .12)));
-  if (window.__ultraBg) window.__ultraBg.setTint(mix(acc, [190, 190, 190], .15).map(Math.round).join(','), bgHex);
+  const glyph = swHex ? hex2rgb(swHex) : mix(acc, [190, 190, 190], .15);
+  if (window.__ultraBg) window.__ultraBg.setTint(glyph.map(Math.round).join(','), bgHex, bright);
 }
 applyTheme(CFG0);
 document.body.classList.toggle('scan', !!CFG0.scanlines && !SPEED);
@@ -520,6 +526,9 @@ function applyBg(c) {
   document.documentElement.style.setProperty('--bgdim', ((c.bgdim ?? 45) / 100).toFixed(2));
   $('#bgmode').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === mode));
   $('#r-bgimg').style.display = mode === 'image' ? '' : 'none';
+  $('#r-swirl').style.display = mode === 'swirl' ? '' : 'none';
+  if (document.activeElement !== $('#sw-bright')) $('#sw-bright').value = c.swirlbright ?? 100;
+  setText($('#sw-brightv'), (c.swirlbright ?? 100) + '%');
   $('#r-bgdim').style.display = mode === 'image' ? '' : 'none';
   if (document.activeElement !== $('#bg-dim')) $('#bg-dim').value = c.bgdim ?? 45;
   setText($('#bg-dimv'), (c.bgdim ?? 45) + '%');
@@ -547,6 +556,8 @@ $('#bg-file').onchange = (e) => {
 };
 $('#bg-dim').oninput = (e) => { document.documentElement.style.setProperty('--bgdim', (e.target.value / 100).toFixed(2)); setText($('#bg-dimv'), e.target.value + '%'); };
 $('#bg-dim').onchange = (e) => send('set', ['bgdim', +e.target.value]);
+$('#sw-bright').oninput = (e) => { setText($('#sw-brightv'), e.target.value + '%'); applyTheme({ ...cfg(), swirlbright: +e.target.value }, true); };
+$('#sw-bright').onchange = (e) => send('set', ['swirlbright', +e.target.value]);
 
 // ── colour picker: saturation/value square + hue strip, for the accent or the background ──
 let pkTarget = 'accent', hsv = [0, 0, 1];
@@ -581,13 +592,15 @@ function showPicker() {
 }
 function pickerHex() {
   const c = cfg();
-  return pkTarget === 'accent' ? (c.theme === 'custom' ? c.accent : THEMES[c.theme] || THEMES.mint) : (c.bgcolor || '#141414');
+  const acc = c.theme === 'custom' ? c.accent : THEMES[c.theme] || THEMES.mint;
+  if (pkTarget === 'swirlcolor') return c.swirlcolor || rgb2hex(mix(hex2rgb(acc || '#9fe3d0'), [190, 190, 190], .15));
+  return pkTarget === 'accent' ? acc : (c.bgcolor || '#141414');
 }
 function syncPicker() { hsv = rgb2hsv(hex2rgb(pickerHex() || '#9fe3d0')); drawSV(); showPicker(); }
 // Live preview while dragging; the setting is saved when the drag ends.
 function previewPick() {
   const hex = showPicker(), c = { ...cfg() };
-  if (pkTarget === 'accent') { c.theme = 'custom'; c.accent = hex; } else c.bgcolor = hex;
+  if (pkTarget === 'accent') { c.theme = 'custom'; c.accent = hex; } else c[pkTarget] = hex;
   applyTheme(c, true);
   return hex;
 }
@@ -612,8 +625,11 @@ $('#pk-target').onclick = (e) => {
   const t = e.target.dataset.p; if (!t) return;
   pkTarget = t;
   $('#pk-target').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.p === t));
+  $('#pk-auto').style.display = t === 'swirlcolor' ? '' : 'none';
   syncPicker();
 };
+$('#pk-auto').style.display = 'none';
+$('#pk-auto').onclick = () => send('set', ['swirlcolor', 'auto']);
 $('#cfg').addEventListener('pointerdown', (e) => { if (e.target.id === 'cfg') closeCfg(); });
 $('#trim').onclick = () => send('trim');
 $('#zoomchip').onclick = () => send('zoom');
@@ -640,6 +656,7 @@ const CMDS = [
   { k: 'theme', a: '<name>', d: Object.keys(THEMES).join(' · '), opts: Object.keys(THEMES), run: (x) => THEMES[x] && send('set', ['theme', x]) },
   { k: 'bg', a: '<swirl|solid|image>', d: 'background style', opts: ['swirl', 'solid', 'image'], run: (x) => ['swirl', 'solid', 'image'].includes(x) && send('set', ['bgmode', x]) },
   { k: 'accent', a: '<#rrggbb>', d: 'custom accent colour', run: (x) => /^#?[0-9a-f]{6}$/i.test(x) && send('set', ['accent', (x[0] === '#' ? x : '#' + x).toLowerCase()]) },
+  { k: 'swirl', a: '<#rrggbb|auto>', d: 'swirl glyph colour', opts: ['auto'], run: (x) => (x === 'auto' || /^#?[0-9a-f]{6}$/i.test(x)) && send('set', ['swirlcolor', x === 'auto' ? 'auto' : (x[0] === '#' ? x : '#' + x).toLowerCase()]) },
   { k: 'speed', a: '[on|off]', d: 'ULTRASPEED: 100% speed, 0% looks', opts: ['on', 'off'], run: (x) => send('set', ['ultraspeed', onoff(x, SPEED)]) },
   { k: 'stats', a: '[on|off]', d: 'per-pane memory & cpu', opts: ['on', 'off'], run: (x) => send('set', ['stats', onoff(x, !!cfg().stats)]) },
   { k: 'block', a: '[on|off]', d: 'ad & tracker blocking', opts: ['on', 'off'], run: (x) => send('set', ['block', onoff(x, cfg().block ?? true)]) },
@@ -1135,7 +1152,7 @@ const bg = (() => {
   const GL = 'abcdef0123456789ghijklmnopqrstuvwxyz0123456789';
   const CW = 7, LH = 14, LV = 7, BAND = 0.32, FREQ = 3.4, FPS_MS = 90;
   let W = 0, H = 0, dpr = 1, phase = 0, frame = 0, running = false, last = 0, enabled = !SPEED && (CFG0.bgmode || 'swirl') === 'swirl';
-  let cells = null, F = null, M = null, G = null, atlas = null, tint = '190,190,190', fill = '#141414';
+  let cells = null, F = null, M = null, G = null, atlas = null, tint = '190,190,190', fill = '#141414', bright = 1;
   const hash = (x, y) => { let h = (x * 374761393 + y * 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
   const sm = (v) => v * v * (3 - 2 * v);
   function vn(x, y) {
@@ -1169,7 +1186,7 @@ const bg = (() => {
     a.setTransform(dpr, 0, 0, dpr, 0, 0);
     a.font = '10px Consolas, "Cascadia Mono", monospace'; a.textBaseline = 'top';
     for (let l = 0; l < LV; l++) {
-      a.fillStyle = `rgba(${tint},${(0.045 + l * 0.038).toFixed(3)})`;
+      a.fillStyle = `rgba(${tint},${Math.min(1, (0.045 + l * 0.038) * bright).toFixed(3)})`;
       for (let g = 0; g < GL.length; g++) a.fillText(GL[g], g * CW, l * LH);
     }
   }
@@ -1211,7 +1228,7 @@ const bg = (() => {
       if (on) { resize(); return; }
       running = false; cells = F = M = G = atlas = null; cv.width = cv.height = 0;
     },
-    setTint(rgb, bgHex) { tint = rgb; fill = bgHex || fill; if (enabled && F) { buildAtlas(); draw(); } },
+    setTint(rgb, bgHex, b) { tint = rgb; fill = bgHex || fill; bright = b || 1; if (enabled && F) { buildAtlas(); draw(); } },
     bench() { const t = performance.now(); for (let i = 0; i < 20; i++) draw(); const d = (performance.now() - t) / 20;
       const t2 = performance.now(); compute(); return { drawMs: +d.toFixed(2), computeMs: +(performance.now() - t2).toFixed(1), cells: F.length }; },
   };
