@@ -1,0 +1,79 @@
+# Build Windows + macOS on every push to main and publish them as the "latest" release,
+# so the README's download links always serve the newest build.
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows
+      - run: cargo build --release
+      - run: copy target\release\ultra.exe ..\ULTRA-windows-x64.exe
+        shell: cmd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: ULTRA-windows-x64.exe
+
+  macos:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: mac
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mac
+      - run: sh tools/bundle.sh universal
+      - run: ditto -c -k --keepParent target/ULTRA.app ../ULTRA-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: ULTRA-macos.zip
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Replace the "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest ULTRA-windows-x64.exe ULTRA-macos.zip \
+            --title "ULTRA (latest build)" \
+            --target "$GITHUB_SHA" \
+            --latest \
+            --notes "Newest build of ULTRA, from commit ${GITHUB_SHA::7}.
+
+          - **Windows 10/11:** download \`ULTRA-windows-x64.exe\` and run it. If SmartScreen appears, click *More info → Run anyway*.
+          - **macOS 11+ (early preview):** download \`ULTRA-macos.zip\`, drag ULTRA.app to Applications, then right-click → Open the first time.
+
+          See the [README](https://github.com/skhshths/ULTRA#readme) for help getting started."

@@ -1,6 +1,6 @@
 # ULTRA for Windows
 
-The macOS version lives in [`../mac`](../mac).
+Just want to use it? [Download the latest ULTRA for Windows](https://github.com/skhshths/ULTRA/releases/latest/download/ULTRA-windows-x64.exe). The macOS version lives in [`../mac`](../mac).
 
 A minimalist, tiling, memory-frugal browser for Windows, written in Rust on top of
 WebView2 (via [wry](https://github.com/tauri-apps/wry) and [tao](https://github.com/tauri-apps/tao)).
@@ -44,11 +44,6 @@ The exe lands in `target/release/ultra.exe`. Requires the Microsoft Edge WebView
 
 ## Support prompt
 
-On the fifth launch only, a slim "buy us a coffee" strip appears under the top bar a few
-seconds after startup (never over a page, the tutorial or an open panel). The launch count is
-`launches` in `settings.json`.
+On the fifth launch only, a slim "buy us a coffee" strip offers a way to support ULTRA. Dismiss it and it never comes back.
 
-To make the button take payments, put your tip page in `SUPPORT_URL` near the top of
-`src/main.rs` (a PayPal.Me link, a Venmo business profile, a Ko-fi or Buy Me a Coffee page) and
-rebuild. "buy us a coffee" then opens that page in a new tab. While it's empty, every choice just
-closes the strip.
+(Maintainers: where the button points is set in `SUPPORT_URL`; see [BUILDING.md](../BUILDING.md#support-prompt-maintainers).)

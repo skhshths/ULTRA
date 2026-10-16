@@ -149,11 +149,9 @@ video players, ad iframes, PDFs, and sites that swallow keys. On Windows that is
 
 ## Support prompt
 
-On the fifth launch only, a slim "buy us a coffee" strip appears under the top bar a few
-seconds after startup (never over a page, the tutorial or an open panel). The launch count is
-`launches` in `settings.json`. Put your tip page in `SUPPORT_URL` near the top of `src/main.rs`
-to make the button open it; while it's empty, every choice just closes the strip. Same as on
-Windows.
+On the fifth launch only, a slim "buy us a coffee" strip offers a way to support ULTRA. Dismiss it and it never comes back.
+
+(Maintainers: where the button points is set in `SUPPORT_URL`; see [BUILDING.md](../BUILDING.md#support-prompt-maintainers).)
 
 ## Permissions you may see
 
