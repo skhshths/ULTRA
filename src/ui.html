@@ -264,7 +264,7 @@ body.speed .spd { display: inline; }
 body.speed .ovl, body.speed .card, body.speed .pbox, body.speed .tc { transform: none; }
 
 /* background styles */
-#bgimg { position: fixed; inset: 0; z-index: 0; display: none; background: center / cover no-repeat; }
+#bgimg { position: fixed; inset: 0; z-index: 0; display: none; background: center / cover no-repeat; transition: background-image 1.2s ease; }
 #bgimg::after { content: ''; position: absolute; inset: 0; background: var(--bg); opacity: var(--bgdim, .45); }
 body.bgimage #bgimg { display: block; }
 body.bgimage canvas#bg, body.bgsolid canvas#bg { display: none; }
@@ -402,10 +402,14 @@ body.bmbar #bmbar { display: flex; }
         <button class="pk-reset" id="pk-reset">↺ default</button></div>
     </div>
   </div>
-  <div class="row"><div><div class="name">background</div><div class="desc">ascii swirl, matrix rain, starfield, drifting gradient, a plain colour, or your own image.</div></div>
-    <div class="seg" id="bgmode"><button data-m="swirl">swirl</button><button data-m="matrix">matrix</button><button data-m="stars">stars</button><button data-m="gradient">gradient</button><button data-m="solid">solid</button><button data-m="image">image</button></div></div>
+  <div class="row"><div><div class="name">background</div><div class="desc">ascii swirl, matrix rain, starfield, gradient, audio bars, a plain colour, an image, or a slideshow of a folder.</div></div>
+    <div class="seg" id="bgmode"><button data-m="swirl">swirl</button><button data-m="matrix">matrix</button><button data-m="stars">stars</button><button data-m="gradient">gradient</button><button data-m="bars">bars</button><button data-m="solid">solid</button><button data-m="image">image</button><button data-m="slideshow">slideshow</button></div></div>
   <div class="row" id="r-swirl"><div><div class="name">pattern brightness</div><div class="desc">how bright the animated background is.</div></div>
     <div class="bgctl"><input type="range" id="sw-bright" min="30" max="300" step="5"><span id="sw-brightv" style="width:40px;color:var(--mid)"></span></div></div>
+  <div class="row" id="r-slide"><div><div class="name">slideshow folder</div><div class="desc" id="slidedesc">no folder chosen.</div></div>
+    <div class="bgctl"><button class="run" id="slide-pick">choose folder…</button><button class="run" id="slide-next">next ›</button></div></div>
+  <div class="row" id="r-slidesecs"><div><div class="name">change every</div><div class="desc">how long each image stays up before the next fades in.</div></div>
+    <div class="seg" id="slidesecs"><button data-s="10">10s</button><button data-s="30">30s</button><button data-s="60">1m</button><button data-s="300">5m</button><button data-s="900">15m</button><button data-s="3600">1h</button></div></div>
   <div class="row" id="r-bgimg"><div><div class="name">background image</div><div class="desc" id="bgimgdesc">no image chosen.</div></div>
     <div class="bgctl"><button class="run" id="bg-pick">choose…</button><button class="run" id="bg-clear">remove</button><input type="file" id="bg-file" accept="image/png,image/jpeg,image/webp" hidden></div></div>
   <div class="row" id="r-bgdim"><div><div class="name">dim image</div><div class="desc">darkens the picture so text stays readable.</div></div>
@@ -642,12 +646,15 @@ $('#seg').onclick = (e) => { if (e.target.dataset.e) send('set', ['search', e.ta
 swatches.onclick = (e) => { if (e.target.dataset.t) send('set', ['theme', e.target.dataset.t]); };
 
 // ── background style ──
-let bgImg = null;
+let bgImg = null, slideImg = null, slideName = '', shownPic = null;
 function applyBg(c) {
   const mode = c.bgmode || 'swirl';
-  document.body.classList.toggle('bgimage', mode === 'image' && !!bgImg);
-  document.body.classList.toggle('bgsolid', mode === 'solid' || (mode === 'image' && !bgImg));
-  const canvasMode = ['swirl', 'matrix', 'stars', 'gradient'].includes(mode);
+  const pic = mode === 'image' ? bgImg : mode === 'slideshow' ? slideImg : null;
+  // Only touch the (possibly huge) data URL when the picture actually changes.
+  if (pic !== shownPic) { shownPic = pic; $('#bgimg').style.backgroundImage = pic ? `url("${pic}")` : 'none'; }
+  document.body.classList.toggle('bgimage', !!pic);
+  document.body.classList.toggle('bgsolid', mode === 'solid' || ((mode === 'image' || mode === 'slideshow') && !pic));
+  const canvasMode = ['swirl', 'matrix', 'stars', 'gradient', 'bars'].includes(mode);
   if (canvasMode) bg.setMode(mode);
   bg.setEnabled(!SPEED && canvasMode);
   document.documentElement.style.setProperty('--bgdim', ((c.bgdim ?? 45) / 100).toFixed(2));
@@ -656,21 +663,29 @@ function applyBg(c) {
   $('#r-swirl').style.display = canvasMode ? '' : 'none';
   if (document.activeElement !== $('#sw-bright')) $('#sw-bright').value = c.swirlbright ?? 100;
   setText($('#sw-brightv'), (c.swirlbright ?? 100) + '%');
-  $('#r-bgdim').style.display = mode === 'image' ? '' : 'none';
+  $('#r-bgdim').style.display = mode === 'image' || mode === 'slideshow' ? '' : 'none';
+  $('#r-slide').style.display = mode === 'slideshow' ? '' : 'none';
+  $('#r-slidesecs').style.display = mode === 'slideshow' ? '' : 'none';
+  $('#slidesecs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', +b.dataset.s === (c.slidesecs ?? 60)));
+  setText($('#slidedesc'), c.slidedir ? (slideName ? `${c.slidedir} · showing ${slideName}` : c.slidedir) : 'no folder chosen.');
   if (document.activeElement !== $('#bg-dim')) $('#bg-dim').value = c.bgdim ?? 45;
   setText($('#bg-dimv'), (c.bgdim ?? 45) + '%');
 }
+ultra.setSlide = (url, name) => { slideImg = url; slideName = name || ''; applyBg(cfg()); };
 ultra.setBgImage = (url) => {
   bgImg = url;
-  $('#bgimg').style.backgroundImage = url ? `url("${url}")` : 'none';
   setText($('#bgimgdesc'), url ? `${Math.round(url.length * 0.75 / 1024)} KB image, saved with your settings.` : 'no image chosen.');
   applyBg(cfg());
 };
 $('#bgmode').onclick = (e) => {
   const m = e.target.dataset.m; if (!m) return;
   if (m === 'image' && !bgImg) $('#bg-file').click();
+  if (m === 'slideshow' && !cfg().slidedir) { send('pickfolder'); return; }
   send('set', ['bgmode', m]);
 };
+$('#slide-pick').onclick = () => send('pickfolder');
+$('#slide-next').onclick = () => send('nextslide');
+$('#slidesecs').onclick = (e) => { const v = +e.target.dataset.s; if (v) send('set', ['slidesecs', v]); };
 $('#bg-pick').onclick = () => $('#bg-file').click();
 $('#bg-clear').onclick = () => send('bgclear');
 $('#bg-file').onchange = (e) => {
@@ -797,7 +812,8 @@ const CMDS = [
   { k: 'reopen', d: 'reopen the last closed tab', run: () => send('reopen') },
   { k: 'devtools', d: 'developer tools for the focused page', run: () => send('devtools') },
   { k: 'theme', a: '<name>', d: Object.keys(THEMES).join(' · '), opts: Object.keys(THEMES), run: (x) => THEMES[x] && send('set', ['theme', x]) },
-  { k: 'bg', a: '<style>', d: 'swirl · matrix · stars · gradient · solid · image', opts: ['swirl', 'matrix', 'stars', 'gradient', 'solid', 'image'], run: (x) => ['swirl', 'matrix', 'stars', 'gradient', 'solid', 'image'].includes(x) && send('set', ['bgmode', x]) },
+  { k: 'bg', a: '<style>', d: 'swirl · matrix · stars · gradient · bars · solid · image · slideshow', opts: ['swirl', 'matrix', 'stars', 'gradient', 'bars', 'solid', 'image', 'slideshow'], run: (x) => ['swirl', 'matrix', 'stars', 'gradient', 'bars', 'solid', 'image', 'slideshow'].includes(x) && send('set', ['bgmode', x]) },
+  { k: 'next image', d: 'skip to the next slideshow image', run: () => send('nextslide') },
   { k: 'accent', a: '<#rrggbb>', d: 'custom accent colour', run: (x) => /^#?[0-9a-f]{6}$/i.test(x) && send('set', ['accent', (x[0] === '#' ? x : '#' + x).toLowerCase()]) },
   { k: 'swirl', a: '<#rrggbb|auto>', d: 'swirl glyph colour', opts: ['auto'], run: (x) => (x === 'auto' || /^#?[0-9a-f]{6}$/i.test(x)) && send('set', ['swirlcolor', x === 'auto' ? 'auto' : (x[0] === '#' ? x : '#' + x).toLowerCase()]) },
   { k: 'speed', a: '[on|off]', d: 'ULTRASPEED: 100% speed, 0% looks', opts: ['on', 'off'], run: (x) => send('set', ['ultraspeed', onoff(x, SPEED)]) },
@@ -1382,6 +1398,7 @@ bmbar.addEventListener('mousedown', (e) => {
 bmbar.addEventListener('contextmenu', (e) => { e.preventDefault(); const b = e.target.closest('.bmk'); if (b) send('unbookmark', b.dataset.u); });
 bmbar.addEventListener('wheel', (e) => { bmbar.scrollLeft += e.deltaY + e.deltaX; e.preventDefault(); }, { passive: false });
 ultra.audio = (l) => bg.setAudio(l);
+ultra.bars = (b) => bg.setBars(b);
 
 // ── window chrome ──
 $('#bar').addEventListener('mousedown', (e) => {
@@ -1445,8 +1462,12 @@ const bg = (() => {
   const cv = $('#bg'), cx = cv.getContext('2d', { alpha: false });
   const GL = 'abcdef0123456789ghijklmnopqrstuvwxyz0123456789';
   const CW = 7, LH = 14, LV = 7, BAND = 0.32, FREQ = 3.4;
-  const FPS = { swirl: 90, matrix: 70, stars: 33, gradient: 110 };
-  const CANVAS = ['swirl', 'matrix', 'stars', 'gradient'];
+  const FPS = { swirl: 90, matrix: 70, stars: 33, gradient: 110, bars: 33 };
+  const CANVAS = ['swirl', 'matrix', 'stars', 'gradient', 'bars'];
+  const NB = 40;
+  // Bars: latest spectrum from Rust, displayed heights, falling peak caps.
+  const barT = new Float32Array(NB), barV = new Float32Array(NB), caps = new Float32Array(NB);
+  let lastBars = 0;
   let mode = CANVAS.includes(CFG0.bgmode) ? CFG0.bgmode : 'swirl';
   let W = 0, H = 0, dpr = 1, phase = 0, frame = 0, running = false, last = 0, enabled = !SPEED && CANVAS.includes(CFG0.bgmode || 'swirl');
   let cells = null, F = null, M = null, G = null, atlas = null, tint = '190,190,190', fill = '#141414', bright = 1;
@@ -1553,6 +1574,29 @@ const bg = (() => {
       if (stars[i * 3 + 2] <= .02) { stars[i * 3] = Math.random() * 2 - 1; stars[i * 3 + 1] = Math.random() * 2 - 1; stars[i * 3 + 2] = 1; }
     }
   }
+  // Audio bars across the bottom-middle of the screen. Real spectrum when Rust sends one;
+  // otherwise driven by the volume level, and a slow breathing idle when silent.
+  function drawBars() {
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx.fillStyle = fill; cx.fillRect(0, 0, W, H);
+    const now = performance.now(), live = now - lastBars < 300;
+    const width = Math.min(W * .62, 1100), x0 = (W - width) / 2, maxH = H * .32, base = H - 32;
+    const bw = width / NB, gap = Math.max(2, bw * .24);
+    for (let i = 0; i < NB; i++) {
+      const t = live ? barT[i]
+        : aLv > .01 ? aLv * (.35 + .65 * (.5 + .5 * Math.sin(now / 170 + i * 1.7))) * (1 - i / NB * .45) + (i < 8 ? beat * .3 : 0)
+        : .025 + .02 * Math.sin(now / 700 + i * .45);
+      barV[i] += (t - barV[i]) * (t > barV[i] ? .55 : .18);
+      caps[i] = barV[i] > caps[i] ? barV[i] : Math.max(0, caps[i] - .008);
+      const v = Math.min(1, barV[i]), h = Math.max(2, v * maxH), x = x0 + i * bw;
+      cx.fillStyle = `rgba(${tint},${Math.min(1, (.3 + .6 * v) * bright).toFixed(3)})`;
+      cx.fillRect(x, base - h, bw - gap, h);
+      cx.fillStyle = `rgba(${tint},${Math.min(1, .07 * bright).toFixed(3)})`; // faint reflection
+      cx.fillRect(x, base + 3, bw - gap, h * .22);
+      cx.fillStyle = `rgba(${tint},${Math.min(1, .85 * bright).toFixed(3)})`; // peak cap
+      cx.fillRect(x, base - Math.min(1, caps[i]) * maxH - 5, bw - gap, 2);
+    }
+  }
   function drawGradient() {
     cx.setTransform(dpr, 0, 0, dpr, 0, 0);
     cx.fillStyle = fill; cx.fillRect(0, 0, W, H);
@@ -1570,6 +1614,7 @@ const bg = (() => {
     if (mode === 'swirl') drawSwirl();
     else if (mode === 'matrix') stepMatrix();
     else if (mode === 'stars') drawStars();
+    else if (mode === 'bars') drawBars();
     else drawGradient();
   }
   // Smooth the mixer level, detect beats (a jump well above the running average), and
@@ -1618,6 +1663,11 @@ const bg = (() => {
       wantAnim = on;
       if ((on || audible()) && enabled && !running) { running = true; requestAnimationFrame(loop); }
       else if (!on && !audible()) running = false;
+    },
+    setBars(b) {
+      for (let i = 0; i < NB; i++) barT[i] = +b[i] || 0;
+      lastBars = performance.now();
+      if (enabled && !running) { running = true; requestAnimationFrame(loop); }
     },
     setAudio(l) {
       aTarget = Math.max(0, Math.min(1, +l || 0));

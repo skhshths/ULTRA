@@ -18,6 +18,8 @@ mod blocker;
 mod layout;
 mod library;
 mod privacy;
+mod slideshow;
+mod spectrum;
 mod stats;
 
 use std::{
@@ -98,7 +100,7 @@ const BROWSER_ARGS: &str = "--enable-features=msSmartScreenProtection";
 const THEMES: &[&str] = &[
     "mint", "amber", "red", "mono", "ice", "matrix", "violet", "pink", "orange", "cyan", "gold", "lime", "custom",
 ];
-const BG_MODES: &[&str] = &["swirl", "matrix", "stars", "gradient", "solid", "image"];
+const BG_MODES: &[&str] = &["swirl", "matrix", "stars", "gradient", "bars", "solid", "image", "slideshow"];
 /// Largest background image accepted (as a base64 data URL).
 const BG_MAX: usize = 16 * 1024 * 1024;
 
@@ -112,6 +114,8 @@ enum UserEvent {
     Procs(Vec<u32>),
     /// JS heap (MB) reported by a page.
     Heap(u64, String),
+    /// Next slideshow image, loaded off-thread: (data url, file name).
+    Slide(String, String),
     /// A WebView2 process died: (slot, 0 = the chrome UI; failure kind).
     Failed(u64, i32),
 }
@@ -204,6 +208,9 @@ struct Settings {
     audio: bool,
     /// Bookmarks bar under the top bar.
     bmbar: bool,
+    /// Slideshow background: folder of images and seconds per image.
+    slidedir: String,
+    slidesecs: u32,
 }
 
 impl Default for Settings {
@@ -232,6 +239,8 @@ impl Default for Settings {
             boot: true,
             audio: true,
             bmbar: true,
+            slidedir: String::new(),
+            slidesecs: 60,
         }
     }
 }
@@ -321,6 +330,13 @@ struct App {
     meter_at: Instant,
     audio_at: Instant,
     audio_on: bool,
+    /// Real audio bars (process-loopback capture), alive only while needed.
+    spectrum: Option<spectrum::Spectrum>,
+    /// Slideshow: images in the folder, position, next change, a load in flight.
+    slides: Vec<PathBuf>,
+    slide_idx: usize,
+    slide_at: Instant,
+    slide_loading: bool,
     boot_until: Instant,
     dirty: Cell<bool>,
     visible: bool,
@@ -1462,6 +1478,9 @@ impl App {
         if let Some(t) = self.refocus_at {
             d = d.min(t);
         }
+        if self.slideshow_on() {
+            d = d.min(self.slide_at);
+        }
         if (self.cfg.audio && !self.cfg.ultraspeed) || self.audio_on {
             d = d.min(self.audio_at);
         }
@@ -1474,6 +1493,7 @@ impl App {
         let enabled = self.cfg.audio && !self.cfg.ultraspeed && self.visible;
         let playing = enabled && self.tabs.iter().any(|t| t.view.as_ref().is_some_and(playing_audio));
         if !playing {
+            self.spectrum = None;
             if self.audio_on {
                 self.audio_on = false;
                 let _ = self.ui.evaluate_script("ultra.audio(0)");
@@ -1496,7 +1516,54 @@ impl App {
         self.audio_on = true;
         let level = if self.meter.is_empty() { 0.0 } else { self.meter.peak() };
         let _ = self.ui.evaluate_script(&format!("ultra.audio({level:.3})"));
+        // Bars background: real spectrum from ULTRA's own audio (UI falls back to the level).
+        if self.cfg.bgmode == "bars" {
+            if self.spectrum.is_none() {
+                let mut pid = 0u32;
+                unsafe {
+                    let _ = self.ui.webview().BrowserProcessId(&mut pid);
+                }
+                if pid != 0 {
+                    self.spectrum = Some(spectrum::Spectrum::start(pid));
+                }
+            }
+            if let Some(b) = self.spectrum.as_ref().and_then(|s| s.bands()) {
+                let list: Vec<String> = b.iter().map(|v| format!("{v:.2}")).collect();
+                let _ = self.ui.evaluate_script(&format!("ultra.bars([{}])", list.join(",")));
+            }
+        } else {
+            self.spectrum = None;
+        }
         self.audio_at = now + Duration::from_millis(33);
+    }
+
+    /// Slideshow: load the next image in the folder on a background thread.
+    fn next_slide(&mut self, now: Instant) {
+        self.slide_at = now + Duration::from_secs(self.cfg.slidesecs.max(5) as u64);
+        if self.slide_loading || self.cfg.slidedir.is_empty() {
+            return;
+        }
+        // Rescan each time round, so images added to the folder show up.
+        if self.slides.is_empty() || self.slide_idx >= self.slides.len() {
+            self.slides = slideshow::list(&self.cfg.slidedir);
+            self.slide_idx = 0;
+        }
+        let Some(path) = self.slides.get(self.slide_idx).cloned() else {
+            self.toast("no png, jpg or webp images in that folder");
+            return;
+        };
+        self.slide_idx += 1;
+        self.slide_loading = true;
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let data = slideshow::load(&path).unwrap_or_default();
+            let _ = proxy.send_event(UserEvent::Slide(data, name));
+        });
+    }
+
+    fn slideshow_on(&self) -> bool {
+        self.cfg.bgmode == "slideshow" && !self.cfg.ultraspeed && !self.cfg.slidedir.is_empty()
     }
 
     /// Alt+tab activates the top-level window, which leaves keyboard focus on that bare
@@ -1550,6 +1617,10 @@ impl App {
             "boot" => self.cfg.boot = v.as_bool().unwrap_or(true),
             "audio" => self.cfg.audio = v.as_bool().unwrap_or(true),
             "bmbar" => self.cfg.bmbar = v.as_bool().unwrap_or(true),
+            "slidesecs" => {
+                self.cfg.slidesecs = v.as_u64().unwrap_or(60).clamp(5, 24 * 3600) as u32;
+                self.slide_at = Instant::now() + Duration::from_secs(self.cfg.slidesecs as u64);
+            }
             "accent" => {
                 if let Some(c) = v.as_str().filter(|c| is_hex_color(c)) {
                     self.cfg.accent = c.to_ascii_lowercase();
@@ -2002,6 +2073,17 @@ impl App {
                     self.sync();
                 }
             }
+            "pickfolder" => {
+                if let Some(dir) = slideshow::pick_folder(self.window.hwnd() as isize) {
+                    self.cfg.slidedir = dir;
+                    self.cfg.bgmode = "slideshow".into();
+                    self.slides.clear();
+                    self.save_settings();
+                    self.next_slide(Instant::now());
+                    self.sync();
+                }
+            }
+            "nextslide" => self.next_slide(Instant::now()),
             "bgclear" => {
                 let _ = fs::remove_file(self.data_dir.join("background.dataurl"));
                 if self.cfg.bgmode == "image" {
@@ -2133,6 +2215,9 @@ impl App {
             "max" => self.window.set_maximized(!self.window.is_maximized()),
             "ready" => {
                 self.send_bg_image();
+                if self.slideshow_on() {
+                    self.next_slide(Instant::now());
+                }
                 self.flush();
                 self.show_window();
                 if self.cfg.tour && !self.tour_offered {
@@ -2259,6 +2344,12 @@ impl App {
                 self.open_in(ws, url);
             }
             UserEvent::Procs(p) => self.on_procs(p),
+            UserEvent::Slide(data, name) => {
+                self.slide_loading = false;
+                if !data.is_empty() && self.slideshow_on() {
+                    let _ = self.ui.evaluate_script(&format!("ultra.setSlide({}, {})", json!(data), json!(name)));
+                }
+            }
             UserEvent::Heap(slot, r) => {
                 if let (Some(i), Ok(mb)) = (self.idx_slot(slot), r.trim().parse::<f64>()) {
                     if self.cfg.stats && mb >= 0.0 {
@@ -2302,6 +2393,21 @@ fn bench(app: &mut App) {
         b.as_bool()
     });
     out += &format!("private webview is InPrivate: {inprivate:?}\n");
+    let mut bpid = 0u32;
+    unsafe {
+        let _ = app.ui.webview().BrowserProcessId(&mut bpid);
+    }
+    let sp = spectrum::Spectrum::start(bpid);
+    std::thread::sleep(Duration::from_millis(1500));
+    let bands = sp.bands();
+    out += &format!(
+        "audio bars capture (process loopback on pid {bpid}): {}\n",
+        match &bands {
+            Some(b) => format!("ok, {} bands, max {:.2}", b.len(), b.iter().cloned().fold(0.0, f32::max)),
+            None => "not available".into(),
+        }
+    );
+    drop(sp);
     let t = Instant::now();
     let _ = spare.set_bounds(rect);
     let _ = spare.load_url("about:blank");
@@ -2425,6 +2531,11 @@ fn main() {
         meter_at: now,
         audio_at: now,
         audio_on: false,
+        spectrum: None,
+        slides: Vec::new(),
+        slide_idx: 0,
+        slide_at: now,
+        slide_loading: false,
         boot_until: now,
         dirty: Cell::new(false),
         visible: false,
@@ -2524,6 +2635,9 @@ fn main() {
                     app.refill_spare();
                 }
                 app.track();
+                if app.slideshow_on() && app.visible && now >= app.slide_at {
+                    app.next_slide(now);
+                }
                 if now >= app.audio_at {
                     app.poll_audio(now);
                 }
