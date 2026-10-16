@@ -1476,6 +1476,10 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            // Back/forward buttons: whether the focused tab's own history allows each way.
+            "nav": self.tabs.get(self.cur()).and_then(|t| t.view.as_ref()).map(|v| {
+                [v.can_go_back().unwrap_or(false), v.can_go_forward().unwrap_or(false)]
+            }).unwrap_or([false, false]),
         });
         let _ = self.ui.evaluate_script(&format!("ultra.render({state})"));
     }
@@ -2340,10 +2344,10 @@ impl App {
                 self.navigate(i, &q);
             }
             "back" => self.with_active(|v| {
-                let _ = v.evaluate_script("history.back()");
+                let _ = v.go_back();
             }),
             "fwd" => self.with_active(|v| {
-                let _ = v.evaluate_script("history.forward()");
+                let _ = v.go_forward();
             }),
             "reload" => self.with_active(|v| {
                 let _ = v.reload();
