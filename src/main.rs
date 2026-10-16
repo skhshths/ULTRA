@@ -127,6 +127,8 @@ struct Tab {
     suspended: bool,
     /// Last time this tab's renderer crashed (a second crash soon after puts it to sleep).
     crashed_at: Option<Instant>,
+    /// Last address recorded in history (a page can report "finished" more than once).
+    remembered: String,
 }
 
 struct Anim {
@@ -1015,6 +1017,7 @@ impl App {
             hidden_at: None,
             suspended: false,
             crashed_at: None,
+            remembered: String::new(),
         };
         self.tabs.insert(at.min(self.tabs.len()), tab);
         id
@@ -1618,8 +1621,9 @@ impl App {
 
     /// Record a finished page load in history (never for private tabs).
     fn remember(&mut self, i: usize) {
-        let t = &self.tabs[i];
-        if t.ws != PRIVATE_WS {
+        let t = &mut self.tabs[i];
+        if t.ws != PRIVATE_WS && t.remembered != t.url {
+            t.remembered = t.url.clone();
             let (u, ti) = (t.url.clone(), t.title.clone());
             self.lib.visit(&u, &ti);
         }
