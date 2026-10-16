@@ -1,12 +1,15 @@
 //! Ad & tracker blocking. Each blocked domain is registered as a WebView2 request
 //! filter, so only matching requests ever cross into ULTRA; ordinary page loads
-//! pay nothing. Matching requests are answered with an empty 403.
+//! pay nothing. Matching background requests are answered with an empty 403;
+//! documents (pages and frames) are never blocked, so clicking a sponsored link
+//! that redirects through an ad domain still works.
 
 use std::{cell::Cell, rc::Rc};
 
 use webview2_com::{
     Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2_22, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+        ICoreWebView2_22, COREWEBVIEW2_WEB_RESOURCE_CONTEXT, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+        COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
         COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
     },
     WebResourceRequestedEventHandler,
@@ -41,6 +44,11 @@ pub fn install(v: &WebView, blocked: Rc<Cell<u64>>) {
     let handler = WebResourceRequestedEventHandler::create(Box::new(move |_, args| {
         if let Some(args) = args {
             unsafe {
+                let mut ctx = COREWEBVIEW2_WEB_RESOURCE_CONTEXT::default();
+                args.ResourceContext(&mut ctx)?;
+                if ctx == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT {
+                    return Ok(()); // a page the user navigated to (or a frame): let it load
+                }
                 let resp = env.CreateWebResourceResponse(
                     None::<&IStream>,
                     403,

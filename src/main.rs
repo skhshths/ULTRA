@@ -40,13 +40,15 @@ use tao::{
 use webview2_com::{
     AddScriptToExecuteOnDocumentCreatedCompletedHandler,
     Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2_13, ICoreWebView2_3, ICoreWebView2_8, COREWEBVIEW2_PROCESS_FAILED_KIND,
+        ICoreWebView2_13, ICoreWebView2_3, ICoreWebView2_8, COREWEBVIEW2_KEY_EVENT_KIND,
+        COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN, COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
+        COREWEBVIEW2_PHYSICAL_KEY_STATUS, COREWEBVIEW2_PROCESS_FAILED_KIND,
         COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
         COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED,
         COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
         COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
     },
-    ProcessFailedEventHandler, TrySuspendCompletedHandler,
+    AcceleratorKeyPressedEventHandler, ProcessFailedEventHandler, TrySuspendCompletedHandler,
 };
 use windows_core::{Interface, BOOL, HSTRING};
 use wry::{
@@ -436,6 +438,80 @@ fn watch_failures(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
     }
 }
 
+/// Map a Ctrl/Alt key combo to an ULTRA command (the same messages pages used to send).
+fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
+    if !ctrl {
+        return None;
+    }
+    let digit = match vk {
+        0x31..=0x39 => Some(vk - 0x30),
+        0x61..=0x69 => Some(vk - 0x60),
+        _ => None,
+    };
+    let zero = vk == 0x30 || vk == 0x60;
+    let key = char::from_u32(vk).filter(|c| c.is_ascii_uppercase());
+    let arrow = match vk {
+        0x25 => Some('l'),
+        0x26 => Some('u'),
+        0x27 => Some('r'),
+        0x28 => Some('d'),
+        _ => None,
+    };
+    Some(match (alt, shift, digit, key) {
+        (true, true, Some(d), _) => format!("tows:{d}"),
+        (true, false, Some(d), _) => format!("ws:{d}"),
+        (true, false, None, _) if zero => "ws:0".into(),
+        (true, _, None, Some('L')) => "lock".into(),
+        (true, _, None, None) if arrow.is_some() => format!("dir:{}", arrow?),
+        (false, true, Some(d), _) => format!("mv:{d}"),
+        (false, true, None, Some('F')) => "zoom".into(),
+        (false, true, None, Some('P')) => "palette".into(),
+        (false, true, None, Some('E')) => "mvnew".into(),
+        (false, true, None, Some('W')) => "closeat".into(),
+        (false, true, None, Some('T')) => "reopen".into(),
+        (false, false, None, Some('T')) => "new".into(),
+        (false, false, None, Some('W')) => "close".into(),
+        (false, false, None, Some('L')) => "focusurl".into(),
+        (false, false, None, Some('K')) => "overview".into(),
+        (false, false, Some(d), _) => format!("tab:{d}"),
+        (false, _, None, None) if vk == 0x09 => if shift { "prev".into() } else { "next".into() },
+        (false, false, None, None) if vk == 0xBC => "settings".into(),
+        _ => return None,
+    })
+}
+
+/// ULTRA's shortcuts, caught natively before the page sees them. Unlike a page script this
+/// works whichever frame has focus (YouTube's player, ad iframes, PDFs, sites that eat keys).
+fn watch_keys(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+    let h = AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
+        let Some(a) = args else { return Ok(()) };
+        let (mut kind, mut vk, mut st) = (COREWEBVIEW2_KEY_EVENT_KIND::default(), 0u32, COREWEBVIEW2_PHYSICAL_KEY_STATUS::default());
+        unsafe {
+            a.KeyEventKind(&mut kind)?;
+            if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN {
+                return Ok(());
+            }
+            a.VirtualKey(&mut vk)?;
+            a.PhysicalKeyStatus(&mut st)?;
+            // Physical state: key events are processed in WebView2's process, not this thread.
+            let down = |k: i32| GetAsyncKeyState(k) < 0;
+            let Some(msg) = shortcut(vk, down(0x11), down(0x10), down(0x12)) else { return Ok(()) };
+            a.SetHandled(true)?;
+            // Held keys auto-repeat: act once, except ctrl+tab cycling.
+            if st.WasKeyDown.as_bool() && vk != 0x09 {
+                return Ok(());
+            }
+            let _ = proxy.send_event(UserEvent::Content(slot, msg));
+        }
+        Ok(())
+    }));
+    let mut token = 0i64;
+    unsafe {
+        let _ = v.controller().add_AcceleratorKeyPressed(&h, &mut token);
+    }
+}
+
 /// Start a fresh ULTRA (session already saved) and exit this one. A relaunched
 /// instance that fails again within 20 s does not relaunch, to avoid a loop.
 fn relaunch() {
@@ -588,6 +664,7 @@ impl App {
         match res {
             Ok(v) => {
                 watch_failures(&v, self.proxy.clone(), slot);
+                watch_keys(&v, self.proxy.clone(), slot);
                 blocker::install(&v, self.blocked.clone());
                 if self.cfg.block {
                     blocker::set_filters(&v, true);
@@ -2241,4 +2318,29 @@ fn main() {
             *flow = ControlFlow::WaitUntil(app.deadline());
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shortcut;
+
+    #[test]
+    fn shortcuts() {
+        let k = |c: char| c as u32;
+        assert_eq!(shortcut(k('T'), true, false, false).as_deref(), Some("new"));
+        assert_eq!(shortcut(k('W'), true, false, false).as_deref(), Some("close"));
+        assert_eq!(shortcut(k('W'), true, true, false).as_deref(), Some("closeat"));
+        assert_eq!(shortcut(k('3'), true, false, false).as_deref(), Some("tab:3"));
+        assert_eq!(shortcut(k('3'), true, true, false).as_deref(), Some("mv:3"));
+        assert_eq!(shortcut(k('3'), true, false, true).as_deref(), Some("ws:3"));
+        assert_eq!(shortcut(k('3'), true, true, true).as_deref(), Some("tows:3"));
+        assert_eq!(shortcut(k('0'), true, false, true).as_deref(), Some("ws:0"));
+        assert_eq!(shortcut(0x27, true, false, true).as_deref(), Some("dir:r"));
+        assert_eq!(shortcut(0x09, true, true, false).as_deref(), Some("prev"));
+        assert_eq!(shortcut(0xBC, true, false, false).as_deref(), Some("settings"));
+        // Not ours: plain keys, ctrl+c, ctrl+f (page find) pass through.
+        assert_eq!(shortcut(k('T'), false, false, false), None);
+        assert_eq!(shortcut(k('C'), true, false, false), None);
+        assert_eq!(shortcut(k('F'), true, false, false), None);
+    }
 }
