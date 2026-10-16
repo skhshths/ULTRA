@@ -318,10 +318,24 @@ body.private .tab.on .n { color: var(--priv); }
 .lbox button { background: none; border: 1px solid #2c2c2c; color: var(--mid); font: inherit; padding: 6px 14px; cursor: default; }
 .lbox button:hover { color: var(--fg); background: #1e1e1e; }
 .lbox button.pri { color: var(--bg); background: var(--priv); border-color: var(--priv); }
-#toast { position: fixed; top: calc(var(--top) + 10px); left: 50%; transform: translate(-50%, -6px); z-index: 9; opacity: 0; pointer-events: none;
-  background: #1a1a1a; border: 1px solid #333; color: var(--fg); padding: 7px 12px; font-size: 11px; white-space: nowrap;
+/* Toasts sit in the top bar (over the right-hand stats), where no page can ever cover them. */
+#toast { position: fixed; top: calc((var(--bar) - 24px) / 2); right: 128px; max-width: 46vw; height: 24px; display: flex; align-items: center;
+  transform: translateY(-4px); z-index: 9; opacity: 0; pointer-events: none; overflow: hidden; text-overflow: ellipsis;
+  background: #1a1a1a; border: 1px solid color-mix(in srgb, var(--acc) 35%, #333); color: var(--fg); padding: 0 12px; font-size: 11px; white-space: nowrap;
   transition: opacity var(--med) var(--ease), transform var(--med) var(--ease); }
-#toast.on { opacity: 1; transform: translate(-50%, 0); }
+#toast.on { opacity: 1; transform: translateY(0); }
+
+/* glance: a link previewed over the layout (the page itself floats on top of this frame) */
+#glancebg { position: fixed; left: 0; right: 0; top: var(--top); bottom: 0; z-index: 4; display: none;
+  background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(2px); }
+#glance { position: fixed; z-index: 4; display: none; border: 1px solid var(--acc); box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+#glance .gh { position: absolute; left: -1px; right: -1px; bottom: 100%; height: 26px; display: flex; align-items: center; gap: 10px;
+  padding: 0 4px 0 10px; background: var(--bg); border: 1px solid var(--acc); border-bottom: 0; font-size: 11px; color: var(--dim); }
+#glance .gt { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#glance .gt b { color: var(--acc); font-weight: 400; } #glance .gt i { font-style: normal; color: var(--fg); }
+#glance .gb { padding: 2px 7px; color: var(--mid); } #glance .gb:hover { color: var(--fg); background: #1e1e1e; }
+body.glance #glancebg, body.glance #glance { display: block; }
+.wsb.iso { box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--acc) 60%, transparent); }
 
 /* address-bar suggestions + bookmark star */
 #star { color: var(--dim); cursor: default; transition: color var(--fast); }
@@ -387,7 +401,9 @@ body.bmbar #bmbar { display: flex; }
   <div class="wc"><div id="wmin">─</div><div id="wmax">□</div><div id="wq" class="q">✕</div></div>
 </div>
 <div id="bmbar"></div><div id="coffee"><span class="msg">☕ <b>enjoying ULTRA?</b> it's made by a tiny team. if it's saved you some time, you can buy us a coffee.</span>
-  <span class="cb" id="coffee-yes">buy us a coffee</span><span class="later" id="coffee-later">not now</span><span class="x" id="coffee-x" title="close">✕</span></div><div id="panes"></div><div id="toast"></div><div id="sugg"></div>
+  <span class="cb" id="coffee-yes">buy us a coffee</span><span class="later" id="coffee-later">not now</span><span class="x" id="coffee-x" title="close">✕</span></div><div id="panes"></div><div id="glancebg"></div><div id="glance"><div class="gh"><span class="gt"></span>
+  <span class="gb" id="g-split" title="keep it, tiled next to the focused pane (ctrl+enter)">⧉ split</span><span class="gb" id="g-tab" title="keep it as a background tab">keep as tab</span><span class="gb" id="g-x" title="close (esc)">✕</span></div></div>
+<div id="toast"></div><div id="sugg"></div>
 <div id="cfg" class="ovl" tabindex="-1"><div class="card">
   <div class="hd"><span>SETTINGS</span><span class="k">ctrl+,</span></div>
   <div class="sec">PERFORMANCE</div>
@@ -396,11 +412,19 @@ body.bmbar #bmbar { display: flex; }
   <div class="row"><div><div class="name">warm tabs</div>
     <div class="desc">hidden tabs kept loaded for instant switching.<br>more = snappier switching, more memory.</div></div>
     <div class="step"><button data-d="-1">−</button><b id="warmv">3</b><button data-d="1">+</button></div></div>
+  <div class="row"><div><div class="name">memory cap</div>
+    <div class="desc">past this, the tabs you used least long ago are put to sleep, one by one.<br>pages on screen and tabs playing sound are never touched.</div></div>
+    <div class="seg" id="memcap"><button data-m="0">off</button><button data-m="1024">1 GB</button><button data-m="2048">2 GB</button><button data-m="4096">4 GB</button><button data-m="8192">8 GB</button></div></div>
   <div class="row" id="r-stats"><div><div class="name">pane stats</div>
     <div class="desc">a slim header on every pane with its page's live memory, total memory &amp; cpu<br>in the bar, plus ↻ to rebuild a bloated page. sampled only while on.</div></div><div class="sw" id="sw-stats"></div></div>
   <div class="sec">PRIVACY</div>
   <div class="row" id="r-block"><div><div class="name">block ads &amp; trackers</div>
     <div class="desc">ad networks and tracking beacons are refused at the network level.<br>sign-in providers are never blocked.</div></div><div class="sw" id="sw-block"></div></div>
+  <div class="row" id="r-declutter"><div><div class="name">hide cookie banners</div>
+    <div class="desc">consent pop-ups from the common cookie tools are hidden and scrolling is given back.<br>the site sees no answer, so it treats you as having declined. "zap" in the palette hides anything else.</div></div><div class="sw" id="sw-declutter"></div></div>
+  <div class="row"><div><div class="name">separate logins</div>
+    <div class="desc">workspaces lit here keep their own cookies &amp; sign-ins: e.g. work accounts in 1, personal in 2.<br>their pages reload once when you switch this.</div></div>
+    <div class="seg" id="iso"><button data-w="0">1</button><button data-w="1">2</button><button data-w="2">3</button><button data-w="3">4</button><button data-w="4">5</button><button data-w="5">6</button><button data-w="6">7</button><button data-w="7">8</button><button data-w="8">9</button></div></div>
   <div class="row"><div><div class="name" style="color:var(--priv)">private workspace</div>
     <div class="desc">ctrl+alt+0. inprivate tabs: no history, cookies, cache or session ever saved.<br>hidden from screen capture, locks after 5 min idle, 5 wrong passwords wipe it.</div></div>
     <div class="ctl"><button class="run" id="priv-pass">set password</button><button class="run" id="priv-lock">lock</button><button class="run" id="priv-wipe">wipe</button></div></div>
@@ -499,7 +523,7 @@ const setText = (el, v) => { if (el.textContent !== v) el.textContent = v; };
 const setHTML = (el, v) => { if (el.innerHTML !== v) el.innerHTML = v; };
 const cfg = () => S.cfg || {};
 // Slot number (1-based) of every tab within its own workspace.
-const slots = () => { const n = {}, m = new Map(); for (const t of S.tabs) { n[t.w] = (n[t.w] || 0) + 1; m.set(t.id, n[t.w]); } return m; };
+const slots = () => { const n = {}, m = new Map(); for (const t of S.tabs) { if (t.g) continue; n[t.w] = (n[t.w] || 0) + 1; m.set(t.id, n[t.w]); } return m; };
 
 // ── themes: every accent-derived colour comes from these variables ──
 const THEMES = {
@@ -578,6 +602,7 @@ window.ultra = {
     $('#zoomchip').style.display = s.zoom != null ? 'inline' : 'none';
     document.body.classList.toggle('maxed', !!s.max);
     document.body.classList.toggle('coffee', !!s.coffee);
+    renderGlance();
     setText($('#wmax'), s.max ? '❐' : '□');
     renderPanes();
     if (ovOn) drawOv();
@@ -608,6 +633,19 @@ window.ultra = {
   },
 };
 const anyOverlay = () => ovOn || cfgOn || palOn || tourOn || !!lockMode;
+// Glance: the page floats natively inside this frame; the strip above it names it and offers keep / close.
+function renderGlance() {
+  const g = S.glance, on = !!g && !anyOverlay();
+  document.body.classList.toggle('glance', on);
+  if (!on) return;
+  place($('#glance'), { x: g.r.x - 1, y: g.r.y - 1, w: g.r.w + 2, h: g.r.h + 2 });
+  const h = host(g.u);
+  setHTML($('#glance .gt'), `<b>◎ glance</b> · <i>${esc(g.t || h)}</i> · ${esc(h)}${g.s ? ' · loading…' : ''}`);
+}
+$('#g-split').onclick = () => send('glance', 'split');
+$('#g-tab').onclick = () => send('glance', 'tab');
+$('#g-x').onclick = () => send('glance', 'close');
+$('#glancebg').onclick = () => send('glance', 'close');
 
 // ── settings ──
 const swatches = $('#swatches');
@@ -628,6 +666,9 @@ function applyCfg(c) {
   setText($('#warmv'), String(c.warm ?? 3));
   $('#sw-stats').classList.toggle('on', !!c.stats);
   $('#sw-block').classList.toggle('on', c.block ?? true);
+  $('#sw-declutter').classList.toggle('on', c.declutter ?? true);
+  $('#memcap').querySelectorAll('button').forEach((b) => b.classList.toggle('on', +b.dataset.m === (c.memcap || 0)));
+  $('#iso').querySelectorAll('button').forEach((b) => b.classList.toggle('on', (c.isolated || []).includes(+b.dataset.w)));
   $('#sw-scan').classList.toggle('on', !!c.scanlines);
   $('#sw-boot').classList.toggle('on', c.boot ?? true);
   $('#sw-audio').classList.toggle('on', c.audio ?? true);
@@ -653,6 +694,9 @@ $('#cfgbtn').onclick = () => cfgOn ? closeCfg() : send('settings', true);
 $('#r-speed').onclick = () => send('set', ['ultraspeed', !SPEED]);
 $('#r-stats').onclick = () => toggle('stats', false);
 $('#r-block').onclick = () => toggle('block', true);
+$('#r-declutter').onclick = () => toggle('declutter', true);
+$('#memcap').onclick = (e) => { if (e.target.dataset.m != null) send('set', ['memcap', +e.target.dataset.m]); };
+$('#iso').onclick = (e) => { if (e.target.dataset.w != null) send('isolate', +e.target.dataset.w); };
 $('#r-scan').onclick = () => toggle('scanlines', false);
 $('#r-boot').onclick = () => toggle('boot', true);
 $('#r-audio').onclick = () => toggle('audio', true);
@@ -843,6 +887,13 @@ const CMDS = [
   { k: 'stats', a: '[on|off]', d: 'per-pane memory & cpu', opts: ['on', 'off'], run: (x) => send('set', ['stats', onoff(x, !!cfg().stats)]) },
   { k: 'block', a: '[on|off]', d: 'ad & tracker blocking', opts: ['on', 'off'], run: (x) => send('set', ['block', onoff(x, cfg().block ?? true)]) },
   { k: 'scanlines', a: '[on|off]', d: 'retro crt lines', opts: ['on', 'off'], run: (x) => send('set', ['scanlines', onoff(x, !!cfg().scanlines)]) },
+  { k: 'reader', d: 'reader view: just the article (f9)', run: () => send('reader') },
+  { k: 'pip', d: 'pop the video out into a floating window (ctrl+alt+p)', run: () => send('pip') },
+  { k: 'zap', d: 'click any element on the page to hide it on this site for good', run: () => send('zap') },
+  { k: 'unzap', d: 'bring back everything hidden on this site', run: () => send('unzap') },
+  { k: 'cookies', a: '[on|off]', d: 'hide cookie banners & consent pop-ups', opts: ['on', 'off'], run: (x) => send('set', ['declutter', onoff(x, cfg().declutter ?? true)]) },
+  { k: 'memcap', a: '<off|1|2|4|8>', d: 'memory cap in GB: hidden tabs sleep past it', opts: ['off', '1', '2', '4', '8'], run: (x) => send('set', ['memcap', x === 'off' ? 0 : Math.round(parseFloat(x) * 1024) || 0]) },
+  { k: 'isolate', a: '[1-9]', d: 'give a workspace its own logins (or share them again)', opts: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], run: (x) => send('isolate', num(x) ? num(x) - 1 : S.ws) },
   { k: 'overview', d: 'every tab at a glance', run: () => send('overview', true) },
   { k: 'settings', d: 'open settings', run: () => send('settings', true) },
   { k: 'tour', d: 'run the tutorial', run: () => send('tour', true) },
@@ -1127,7 +1178,7 @@ function renderWs() {
   const list = [...new Set([...(S.wss || [0]).filter((w) => w !== 9), 9])];
   setHTML(wsbar, list.map((w) => w === 9
     ? `<div class="wsb priv${S.ws === 9 ? ' on' : ''}" data-w="9" title="private workspace (ctrl+alt+0)${S.locked ? ' · locked' : ''}">${S.locked ? '■' : 'P'}</div>`
-    : `<div class="wsb${w === S.ws ? ' on' : ''}" data-w="${w}" title="workspace ${w + 1} (ctrl+alt+${w + 1})">${w + 1}</div>`).join(''));
+    : `<div class="wsb${w === S.ws ? ' on' : ''}${(cfg().isolated || []).includes(w) ? ' iso' : ''}" data-w="${w}" title="workspace ${w + 1} (ctrl+alt+${w + 1})${(cfg().isolated || []).includes(w) ? ' · own logins' : ''}">${w + 1}</div>`).join(''));
 }
 wsbar.onclick = (e) => { const w = e.target.dataset.w; if (w != null) send('ws', +w); };
 
@@ -1138,7 +1189,7 @@ function renderTabs() {
   const seen = new Set();
   let prev = null, slot = 0;
   S.tabs.forEach((t, i) => {
-    if (t.w !== S.ws) return;
+    if (t.w !== S.ws || t.g) return;
     slot++;
     let el = tabEls.get(t.id);
     if (!el) {
@@ -1264,6 +1315,7 @@ function renderPanes() {
   applyPendingFocus();
   bg.animate(homes > 0 || anyOverlay());
   barsFx.animate(homes > 0 || anyOverlay());
+  renderGlance();
 }
 function applyPendingFocus() {
   if (pendingFocus == null || anyOverlay()) return;
@@ -1306,7 +1358,7 @@ function setOv(on) {
 }
 function drawOv() {
   const f = $('#ovq').value.toLowerCase(), sl = slots();
-  ovList = S.tabs.map((t, i) => [t, i]).filter(([t]) => !f || (t.t + ' ' + t.u).toLowerCase().includes(f));
+  ovList = S.tabs.map((t, i) => [t, i]).filter(([t]) => !t.g && (!f || (t.t + ' ' + t.u).toLowerCase().includes(f)));
   if (!ovList.some(([, i]) => i === ovSel)) ovSel = ovList.length ? ovList[0][1] : -1;
   $('#ovgrid').innerHTML = ovList.map(([t, i]) =>
     `<div class="tile${i === ovSel ? ' sel' : ''}${i === S.a ? ' cur' : ''}" data-i="${i}">` +
@@ -1472,6 +1524,10 @@ document.addEventListener('keydown', (e) => {
   }
   else if (c && k === 'tab') m = e.shiftKey ? 'prev' : 'next';
   else if (c && !e.altKey && digit) { if (digit[2] === '9') m = 'last'; else { m = 'slot'; a = +digit[2] - 1; } }
+  else if (k === 'f9' && !c && !e.altKey) m = 'reader';
+  else if (c && e.altKey && !e.shiftKey && code === 'KeyP') m = 'pip';
+  else if (k === 'escape' && S.glance && !anyOverlay()) { e.preventDefault(); send('glance', 'close'); return; }
+  else if (k === 'enter' && c && S.glance && !anyOverlay()) { e.preventDefault(); send('glance', 'split'); return; }
   else if (k === 'f5' || (c && code === 'KeyR')) m = 'reload';
   else if (e.altKey && k === 'arrowleft') m = 'back';
   else if (e.altKey && k === 'arrowright') m = 'fwd';

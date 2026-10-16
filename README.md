@@ -8,6 +8,8 @@ A minimalist, tiling, memory-frugal browser written in Rust.
 - **Light by design**: only visible tabs and a few warm ones stay loaded; hidden tabs freeze,
   then sleep.
 - **Command palette**, tab overview, type-anywhere search, history, bookmarks, saved layouts.
+- **Glance** link previews, **reader view**, **picture-in-picture**, cookie-banner hiding and a
+  "zap" tool for anything else, a **memory cap**, and **separate logins per workspace**.
 - **Ad & tracker blocking**, address-bar spoofing protection, phishing protection.
 - **Looks**: animated backgrounds, audio-reactive visuals, 12 themes and a colour picker.
   **ULTRASPEED** turns every effect off.
@@ -24,5 +26,5 @@ requirements, building, where data is stored, and how it works. The two share th
 UI, tiling engine, settings format and features; the macOS README has a table of how each
 Windows-specific piece is done on the Mac and which shortcuts change (⌘ in place of ctrl).
 
-Shared files (`layout.rs`, `library.rs`, `ui.html`, `content.js`) exist in both folders. When
+Shared files (`layout.rs`, `library.rs`, `ui.html`, `content.js`, `reader.js`) exist in both folders. When
 you change one, port the change to the other so the two builds keep behaving the same.

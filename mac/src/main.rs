@@ -58,6 +58,23 @@ const COFFEE_BAR: f64 = 30.0;
 const COFFEE_LAUNCH: u32 = 5;
 /// ...this long after the window is up, so it never competes with startup.
 const COFFEE_DELAY: Duration = Duration::from_secs(4);
+/// Where "buy us a coffee" goes: paste your tip page (PayPal.Me, Venmo, Ko-fi, Buy Me a Coffee...).
+/// Empty: the button just closes the strip.
+const SUPPORT_URL: &str = "";
+/// Height of the title strip above a glance preview.
+const GLANCE_HDR: f64 = 26.0;
+/// Largest memory cap accepted (MB).
+const MEMCAP_MAX: u64 = 65_536;
+/// Most elements remembered as hidden per site.
+const MAX_ZAPS: usize = 50;
+const READER_JS: &str = include_str!("reader.js");
+/// Accent of each built-in theme (mirrors THEMES in ui.html), for pages ULTRA styles itself.
+const THEME_ACCENTS: &[(&str, &str)] = &[
+    ("mint", "#9fe3d0"), ("amber", "#ffb454"), ("red", "#ff6b5f"), ("mono", "#e8e8e8"), ("ice", "#8ab4ff"), ("matrix", "#4af626"),
+    ("violet", "#b18cff"), ("pink", "#ff7eb6"), ("orange", "#ff9150"), ("cyan", "#5ce1e6"), ("gold", "#ffd75e"), ("lime", "#b6f35c"),
+];
+/// The picture-in-picture keys as the help text names them.
+const PIP_KEYS: &str = "cmd+opt+p";
 const GAP: f64 = 6.0;
 /// Height of the per-pane header strip shown while "pane stats" is on.
 const HDR: f64 = 18.0;
@@ -218,6 +235,12 @@ struct Settings {
     bars: bool,
     /// How many times ULTRA has been started (drives the one-time support prompt).
     launches: u32,
+    /// Memory ceiling in MB (0 = off): past it, the least recently used hidden tabs are put to sleep.
+    memcap: u32,
+    /// Workspaces that keep their own cookies and sign-ins.
+    isolated: Vec<usize>,
+    /// Hide cookie banners and consent overlays.
+    declutter: bool,
 }
 
 impl Default for Settings {
@@ -250,6 +273,9 @@ impl Default for Settings {
             slidesecs: 60,
             bars: false,
             launches: 0,
+            memcap: 0,
+            isolated: Vec::new(),
+            declutter: true,
         }
     }
 }
@@ -350,6 +376,10 @@ struct App {
     /// Support strip: when it is due to appear, and whether it is showing.
     coffee_at: Option<Instant>,
     coffee: bool,
+    /// Tab shown as a floating preview over the layout (ctrl/cmd+shift+click a link).
+    glance: Option<u64>,
+    /// Elements hidden per site with the zap picker: host -> CSS selectors.
+    zaps: BTreeMap<String, Vec<String>>,
     visible: bool,
     show_at: Instant,
     next_tick: Instant,
@@ -459,6 +489,15 @@ fn typeahead_js(on: bool) -> String {
     format!("window.__ultraType = {on};")
 }
 
+fn declutter_js(on: bool) -> String {
+    format!("window.__ultraDeclutter = {on}; window.__ultraDeclutterApply && window.__ultraDeclutterApply();")
+}
+
+/// A selector picked with the zap picker, if it is safe to put in a style sheet.
+fn valid_zap(sel: &str) -> bool {
+    !sel.trim().is_empty() && sel.len() <= 300 && !sel.contains(['{', '}', '<', ';', '\n'])
+}
+
 /// Hidden tabs: WebKit itself suspends a page that is not on screen (timers, animation
 /// frames, layout) once it is hidden, unless it is playing media, so there is nothing to
 /// call here. The `suspended` flag is still kept so the bookkeeping matches Windows.
@@ -467,6 +506,9 @@ fn try_suspend(_v: &WebView) {}
 /// Map a Ctrl/Alt key combo (Windows virtual-key codes; on the Mac "ctrl" is ⌘ and "alt" is
 /// option, see `macos::mac_shortcut`) to an ULTRA command (the same messages pages used to send).
 fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
+    if vk == 0x78 && !ctrl && !shift && !alt {
+        return Some("reader".into()); // F9
+    }
     if !ctrl {
         return None;
     }
@@ -592,7 +634,7 @@ impl App {
 
     /// Global indices of the current workspace's tabs, in bar order.
     fn ws_tabs(&self) -> Vec<usize> {
-        (0..self.tabs.len()).filter(|&i| self.tabs[i].ws == self.ws).collect()
+        (0..self.tabs.len()).filter(|&i| self.tabs[i].ws == self.ws && Some(self.tabs[i].id) != self.glance).collect()
     }
 
     /// Request a UI refresh; it is sent once at the end of the event-loop turn.
@@ -600,7 +642,7 @@ impl App {
         self.dirty.set(true);
     }
 
-    fn build_view(&mut self, slot: u64, url: Option<&str>, bounds: Rect, private: bool) -> Option<WebView> {
+    fn build_view(&mut self, slot: u64, url: Option<&str>, bounds: Rect, private: bool, profile: Option<usize>) -> Option<WebView> {
         let (p1, p2, p3, p4, p5, p6, p7) = (
             self.proxy.clone(),
             self.proxy.clone(),
@@ -613,6 +655,10 @@ impl App {
         let mut b = WebViewBuilder::new_with_web_context(&mut self.ctx);
         if let Some(u) = url {
             b = b.with_url(u);
+        }
+        if let Some(w) = profile.filter(|_| macos::separate_stores()) {
+            // A workspace with its own logins: its own persistent WebKit data store (macOS 14+).
+            b = b.with_data_store_identifier(macos::store_id(w));
         }
         if private {
             // Private tabs share one in-memory WebKit data store for the session (like
@@ -637,6 +683,7 @@ impl App {
             // WebKit pauses hidden pages on its own (media keeps playing).
             .with_background_throttling(BackgroundThrottlingPolicy::Suspend)
             .with_initialization_script_for_main_only(typeahead_js(self.cfg.typeahead), true)
+            .with_initialization_script_for_main_only(declutter_js(self.cfg.declutter), true)
             .with_initialization_script_for_main_only(CONTENT_JS, true)
             .with_ipc_handler(move |r| {
                 let _ = p1.send_event(UserEvent::Content(slot, r.into_body()));
@@ -698,8 +745,10 @@ impl App {
         }
         let url = self.tabs[i].url.clone();
         let private = self.tabs[i].ws == PRIVATE_WS;
-        // Spares are normal-profile webviews, so private tabs always get a fresh InPrivate one.
-        let spare = if private { None } else { self.spares.pop() };
+        let profile = self.profile_of(self.tabs[i].ws);
+        // Spares are default-profile webviews, so private tabs and workspaces with their own
+        // logins always get a fresh webview in the right profile.
+        let spare = if private || profile.is_some() { None } else { self.spares.pop() };
         let got = match spare {
             Some((slot, v)) => {
                 let _ = v.set_bounds(bounds);
@@ -708,7 +757,7 @@ impl App {
             }
             None => {
                 let slot = self.new_slot();
-                self.build_view(slot, Some(&url), bounds, private).map(|v| (slot, v))
+                self.build_view(slot, Some(&url), bounds, private, profile).map(|v| (slot, v))
             }
         };
         self.spare_at = Some(Instant::now() + SPARE_IDLE);
@@ -723,7 +772,7 @@ impl App {
 
     /// Build one spare per quiet moment until the pool is full.
     fn refill_spare(&mut self) {
-        if self.spares.len() >= SPARES {
+        if self.spares.len() >= SPARES || self.over_memcap() {
             return;
         }
         if self.anim.is_some() {
@@ -732,7 +781,7 @@ impl App {
         }
         let slot = self.new_slot();
         let a = self.area();
-        if let Some(v) = self.build_view(slot, None, inset(a, 0.0), false) {
+        if let Some(v) = self.build_view(slot, None, inset(a, 0.0), false, None) {
             self.spares.push((slot, v));
         }
         if self.spares.len() < SPARES {
@@ -778,11 +827,18 @@ impl App {
                 self.wake(i, inset(r, top));
             }
         }
+        let glance = self.glance.and_then(|g| self.idx(g).map(|i| (g, i)));
+        if let Some((_, i)) = glance {
+            let r = self.glance_rect();
+            self.wake(i, inset(r, 0.0));
+        }
         let now = Instant::now();
         // Keep private pages out of screenshots and screen sharing while that workspace is shown.
         privacy::exclude_from_capture(&self.ns_window(), self.ws == PRIVATE_WS);
         let hidden = self.overlay || self.tour || self.gate() || self.booting;
-        let animate = animate && !hidden && !self.cfg.ultraspeed;
+        // A glance covers the layout, so the panes behind it are hidden (but stay warm).
+        let covered = hidden || glance.is_some();
+        let animate = animate && !covered && !self.cfg.ultraspeed;
         let slide = self.slide.take();
         if animate {
             let area = self.area();
@@ -800,7 +856,11 @@ impl App {
         } else {
             self.anim = None;
         }
+        let gid = self.glance;
         for t in &mut self.tabs {
+            if Some(t.id) == gid {
+                continue;
+            }
             match targets.iter().find(|(id, _)| *id == t.id) {
                 Some(&(_, r)) => {
                     t.hidden_at = None;
@@ -809,7 +869,7 @@ impl App {
                         if !animate {
                             let _ = v.set_bounds(inset(r, top));
                         }
-                        let _ = v.set_visible(!hidden);
+                        let _ = v.set_visible(!covered);
                     }
                 }
                 None => {
@@ -818,6 +878,17 @@ impl App {
                         t.hidden_at.get_or_insert(now);
                     }
                 }
+            }
+        }
+        if let Some((_, i)) = glance {
+            let r = self.glance_rect();
+            let t = &mut self.tabs[i];
+            t.hidden_at = None;
+            t.suspended = false;
+            t.last = now;
+            if let Some(v) = &t.view {
+                let _ = v.set_bounds(inset(r, 0.0));
+                let _ = v.set_visible(!hidden);
             }
         }
         if animate {
@@ -832,7 +903,7 @@ impl App {
                 .tabs
                 .iter()
                 .enumerate()
-                .filter(|(_, t)| !self.shown.iter().any(|(id, _)| *id == t.id))
+                .filter(|(_, t)| !self.shown.iter().any(|(id, _)| *id == t.id) && Some(t.id) != self.glance)
                 .filter(|(_, t)| t.view.as_ref().is_some_and(|v| !playing_audio(v)))
                 .min_by_key(|(_, t)| t.last)
                 .map(|(i, _)| i);
@@ -874,6 +945,10 @@ impl App {
             let _ = self.ui.focus();
             return;
         }
+        if let Some(v) = self.glance.and_then(|g| self.idx(g)).and_then(|i| self.tabs[i].view.as_ref()) {
+            let _ = v.focus();
+            return;
+        }
         let i = self.cur();
         match &self.tabs[i].view {
             Some(v) => {
@@ -897,6 +972,10 @@ impl App {
     /// Show tab `i`: focus its pane if visible, otherwise put it in the focused pane
     /// (switching workspace first if it lives elsewhere).
     fn activate(&mut self, i: usize) {
+        // Showing another tab closes any glance (removing it can shift indices, so go by id).
+        let Some(id) = self.tabs.get(i).map(|t| t.id) else { return };
+        self.drop_glance(Some(id));
+        let Some(i) = self.idx(id) else { return };
         let Some((id, ws)) = self.tabs.get(i).map(|t| (t.id, t.ws)) else { return };
         let switched = ws != self.ws;
         if switched {
@@ -919,6 +998,7 @@ impl App {
         if n == self.ws || n >= WORKSPACES {
             return;
         }
+        self.drop_glance(None);
         self.slide = Some(if n > self.ws { 1.0 } else { -1.0 });
         // A workspace holding nothing but one blank tab disappears when left.
         let lone_home = self.root.is_leaf(self.focus)
@@ -980,7 +1060,12 @@ impl App {
         self.zoom = None;
         self.focus = self.root.first_leaf();
         if let Some(i) = self.idx(id) {
+            let old = self.tabs[i].ws;
             self.tabs[i].ws = n;
+            // Its webview belongs to the old workspace's logins: rebuild it in the new one's.
+            if self.profile_of(old) != self.profile_of(n) {
+                self.sleep(i);
+            }
         }
         match &mut self.stash[n] {
             Some((root, f)) => {
@@ -1025,6 +1110,10 @@ impl App {
 
     fn close_tab(&mut self, i: usize) {
         let Some((id, ws)) = self.tabs.get(i).map(|t| (t.id, t.ws)) else { return };
+        if self.glance == Some(id) {
+            self.glance_cmd("close");
+            return;
+        }
         let tiled = !self.root.is_leaf(id) && self.root.contains(id);
         if self.zoom == Some(id) {
             self.zoom = None;
@@ -1177,7 +1266,7 @@ impl App {
         for i in 0..self.tabs.len() {
             let t = &self.tabs[i];
             let visible = self.shown.iter().any(|(id, _)| *id == t.id);
-            if !visible && t.view.as_ref().is_some_and(|v| !playing_audio(v)) {
+            if !visible && Some(t.id) != self.glance && t.view.as_ref().is_some_and(|v| !playing_audio(v)) {
                 self.sleep(i);
             }
         }
@@ -1222,7 +1311,7 @@ impl App {
             self.engine_pids = pids;
             self.pids_dirty = true;
         }
-        if !self.cfg.stats {
+        if !self.cfg.stats && self.cfg.memcap == 0 {
             return;
         }
         let now = Instant::now();
@@ -1248,13 +1337,14 @@ impl App {
         self.cpu_prev.retain(|p, _| per.contains_key(p));
         self.pane_stats.retain(|id, _| self.shown.iter().any(|(x, _)| x == id));
         // Per pane: the memory and CPU of the process rendering that page.
-        for t in self.tabs.iter().filter(|t| self.shown.iter().any(|(x, _)| *x == t.id)) {
+        for t in self.tabs.iter().filter(|_| self.cfg.stats).filter(|t| self.shown.iter().any(|(x, _)| *x == t.id)) {
             if let Some(&(mb, cpu)) = t.view.as_ref().and_then(macos::web_pid).and_then(|pid| per.get(&pid)) {
                 self.pane_stats.insert(t.id, (mb, cpu));
             }
         }
         self.total_mb = total;
         self.total_cpu = total_cpu;
+        self.enforce_memcap();
         self.sync();
     }
 
@@ -1277,7 +1367,7 @@ impl App {
                 let private = t.ws == PRIVATE_WS;
                 // While locked, private tabs show no title or address anywhere.
                 let (title, url) = if private && self.locked { ("locked", "") } else { (t.title.as_str(), t.url.as_str()) };
-                json!({ "id": t.id, "t": title, "u": url, "s": s, "w": t.ws, "p": private, "v": self.root.contains(t.id) })
+                json!({ "id": t.id, "t": title, "u": url, "s": s, "w": t.ws, "p": private, "v": self.root.contains(t.id), "g": Some(t.id) == self.glance })
             })
             .collect();
         let panes: Vec<Value> = self
@@ -1317,6 +1407,10 @@ impl App {
             "bms": self.lib.bookmarks.iter().map(|b| json!({ "u": b.url, "t": b.title })).collect::<Vec<_>>(),
             "tour": self.tour,
             "coffee": self.coffee,
+            "glance": self.glance.and_then(|g| self.idx(g)).map(|i| {
+                let t = &self.tabs[i];
+                json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
+            }),
             "max": self.window.is_maximized(),
             // Full screen hides the window buttons, so the bar can use their space.
             "fs": self.window.fullscreen().is_some(),
@@ -1331,7 +1425,7 @@ impl App {
 
     fn save_session(&self) {
         // Private tabs are never written anywhere: positions are among normal tabs only.
-        let kept: Vec<u64> = self.tabs.iter().filter(|t| t.ws != PRIVATE_WS).map(|t| t.id).collect();
+        let kept: Vec<u64> = self.tabs.iter().filter(|t| t.ws != PRIVATE_WS && Some(t.id) != self.glance).map(|t| t.id).collect();
         let index = |id: u64| kept.iter().position(|&k| k == id).map(|i| i as u64);
         let layout_of = |w: usize| -> Option<(Node, usize)> {
             if w == PRIVATE_WS {
@@ -1349,7 +1443,7 @@ impl App {
             tabs: self
                 .tabs
                 .iter()
-                .filter(|t| t.ws != PRIVATE_WS)
+                .filter(|t| t.ws != PRIVATE_WS && Some(t.id) != self.glance)
                 .map(|t| {
                     let url = t
                         .view
@@ -1362,7 +1456,7 @@ impl App {
                 .collect(),
             active: index(self.focus).unwrap_or(0) as usize,
             layout: None,
-            ws: self.tabs.iter().filter(|t| t.ws != PRIVATE_WS).map(|t| t.ws).collect(),
+            ws: self.tabs.iter().filter(|t| t.ws != PRIVATE_WS && Some(t.id) != self.glance).map(|t| t.ws).collect(),
             layouts: (0..WORKSPACES).map(layout_of).collect(),
             cur_ws: if self.ws == PRIVATE_WS { 0 } else { self.ws },
         };
@@ -1420,7 +1514,7 @@ impl App {
         if !self.visible {
             d = d.min(self.show_at);
         }
-        if self.cfg.stats && !self.stats_pending {
+        if (self.cfg.stats || self.cfg.memcap > 0) && !self.stats_pending {
             d = d.min(self.stats_at);
         }
         if !self.locked && self.has_private() {
@@ -1583,6 +1677,20 @@ impl App {
                 _ => return,
             },
             "bars" => self.cfg.bars = v.as_bool().unwrap_or(false),
+            "memcap" => {
+                let mb = v.as_u64().unwrap_or(0).min(MEMCAP_MAX);
+                // Anything below half a gigabyte would just keep every hidden tab asleep.
+                self.cfg.memcap = if mb == 0 { 0 } else { mb.max(512) as u32 };
+                self.stats_at = Instant::now();
+            }
+            "declutter" => {
+                self.cfg.declutter = v.as_bool().unwrap_or(true);
+                let js = declutter_js(self.cfg.declutter);
+                for view in self.all_views() {
+                    macos::add_doc_script(view, &js);
+                    let _ = view.evaluate_script(&js);
+                }
+            }
             "bgdim" => self.cfg.bgdim = v.as_u64().unwrap_or(45).min(90) as u8,
             "swirlcolor" => match v.as_str() {
                 Some(c) if is_hex_color(c) => self.cfg.swirlcolor = c.to_ascii_lowercase(),
@@ -1612,6 +1720,15 @@ impl App {
 
     fn has_private(&self) -> bool {
         self.tabs.iter().any(|t| t.ws == PRIVATE_WS)
+    }
+
+    /// What a page script reports back when reader view or picture-in-picture can't help.
+    fn page_notice(&self, msg: &str) {
+        self.toast(&match msg {
+            "pip:none" => "no video on this page".to_string(),
+            "pip:fail" => format!("this page wouldn't pop its video out · click the page, then press {PIP_KEYS}"),
+            _ => "no article found on this page".to_string(),
+        });
     }
 
     fn toast(&self, msg: &str) {
@@ -1862,11 +1979,220 @@ impl App {
         if text.is_empty() {
             return;
         }
-        if let Some(v) = &self.tabs[self.cur()].view {
+        if let Some(v) = self.page() {
             let proxy = self.proxy.clone();
             macos::find(v, text, backwards, move |found| {
                 let _ = proxy.send_event(UserEvent::Found(found));
             });
+        }
+    }
+
+    /// Workspace `ws`'s own login profile, if it keeps one.
+    fn profile_of(&self, ws: usize) -> Option<usize> {
+        (ws != PRIVATE_WS && self.cfg.isolated.contains(&ws)).then_some(ws)
+    }
+
+    /// Give workspace `w` its own cookies and sign-ins, or share the default ones again.
+    /// Its open pages are rebuilt in the right profile (addresses are kept).
+    fn toggle_isolate(&mut self, w: usize) {
+        if w >= PRIVATE_WS {
+            self.toast("the private workspace is already sealed off");
+            return;
+        }
+        if !macos::separate_stores() {
+            self.toast("separate logins need macOS 14 Sonoma or newer");
+            return;
+        }
+        let on = match self.cfg.isolated.iter().position(|&x| x == w) {
+            Some(p) => {
+                self.cfg.isolated.remove(p);
+                false
+            }
+            None => {
+                self.cfg.isolated.push(w);
+                self.cfg.isolated.sort_unstable();
+                true
+            }
+        };
+        self.save_settings();
+        for i in 0..self.tabs.len() {
+            if self.tabs[i].ws == w && self.tabs[i].view.is_some() {
+                self.sleep(i);
+            }
+        }
+        self.apply_layout(false);
+        self.focus_active();
+        self.toast(&if on {
+            format!("workspace {} now keeps its own logins · sign in there separately", w + 1)
+        } else {
+            format!("workspace {} shares logins with the others again", w + 1)
+        });
+    }
+
+    fn over_memcap(&self) -> bool {
+        self.cfg.memcap > 0 && self.total_mb > self.cfg.memcap as f64
+    }
+
+    /// Memory cap: while ULTRA is over it, put the least recently used hidden tab to sleep
+    /// (one per sample, so memory has time to drop). Visible pages, the glance and tabs
+    /// playing sound are never touched; spare webviews go last.
+    fn enforce_memcap(&mut self) {
+        if !self.over_memcap() {
+            return;
+        }
+        let victim = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| Some(t.id) != self.glance && !self.shown.iter().any(|(id, _)| *id == t.id))
+            .filter(|(_, t)| t.view.as_ref().is_some_and(|v| !playing_audio(v)))
+            .min_by_key(|(_, t)| t.last)
+            .map(|(i, _)| i);
+        match victim {
+            Some(i) => self.sleep(i),
+            None => {
+                self.spares.pop();
+            }
+        }
+        self.sync();
+    }
+
+    /// Where a glance floats: most of the layout area, centred, under its title strip.
+    fn glance_rect(&self) -> R {
+        let a = self.area();
+        let w = (a.w * 0.84).max(320.0).min(a.w);
+        let h = (a.h * 0.86 - GLANCE_HDR).max(160.0).min(a.h - GLANCE_HDR).max(1.0);
+        R { x: a.x + (a.w - w) / 2.0, y: a.y + GLANCE_HDR + (a.h - GLANCE_HDR - h) / 2.0, w, h }
+    }
+
+    /// Preview a link in a floating pane over the layout (a glance inside a glance replaces it).
+    fn open_glance(&mut self, url: &str, ws: usize) {
+        let ok = (url.starts_with("https://") || url.starts_with("http://")) && url.len() <= 4096;
+        if !ok || self.overlay || self.tour || self.gate() {
+            return;
+        }
+        match self.glance.and_then(|g| self.idx(g)) {
+            Some(i) if self.tabs[i].ws == ws => {
+                let t = &mut self.tabs[i];
+                t.url = url.to_string();
+                t.title.clear();
+                if let Some(v) = &t.view {
+                    let _ = v.load_url(url);
+                    t.loading = true;
+                }
+            }
+            _ => {
+                self.drop_glance(None);
+                let id = self.push_tab(self.tabs.len(), url.to_string(), String::new());
+                if let Some(i) = self.idx(id) {
+                    self.tabs[i].ws = ws;
+                }
+                self.glance = Some(id);
+            }
+        }
+        self.apply_layout(false);
+        self.focus_active();
+    }
+
+    /// Close the glance (its tab goes too) unless it is `keep`, which then becomes a normal tab.
+    fn drop_glance(&mut self, keep: Option<u64>) {
+        let Some(g) = self.glance.take() else { return };
+        match self.idx(g) {
+            Some(i) if Some(g) != keep => {
+                self.tabs.remove(i);
+            }
+            Some(i) => {
+                if let Some(v) = &self.tabs[i].view {
+                    let _ = v.evaluate_script("window.__ultraGlance = false;");
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// The glance's buttons and keys: "split" tiles it next to the focused pane, "tab" keeps it
+    /// as a background tab, anything else closes it.
+    fn glance_cmd(&mut self, how: &str) {
+        let Some(g) = self.glance else { return };
+        match how {
+            "split" => {
+                self.drop_glance(Some(g));
+                self.zoom = None;
+                let r = self.pane_of(self.focus).unwrap_or(self.area());
+                match pick_split(r, r.x + r.w * 0.95, r.y + r.h * 0.5) {
+                    Some((v, first)) => {
+                        self.root.split(self.focus, g, v, first);
+                    }
+                    None => {
+                        self.root.replace(self.focus, g);
+                    }
+                }
+                self.set_focus(g);
+                self.apply_layout(true);
+            }
+            "tab" => {
+                self.drop_glance(Some(g));
+                self.toast("kept as a tab");
+                self.apply_layout(false);
+            }
+            _ => {
+                self.drop_glance(None);
+                self.apply_layout(false);
+            }
+        }
+        self.focus_active();
+    }
+
+    fn save_zaps(&self) {
+        if let Ok(j) = serde_json::to_string_pretty(&self.zaps) {
+            let _ = fs::write(self.data_dir.join("zaps.json"), j);
+        }
+    }
+
+    /// Re-hide this site's zapped elements in tab `i` (after each page load).
+    fn apply_zaps(&self, i: usize) {
+        let t = &self.tabs[i];
+        let Some(v) = &t.view else { return };
+        if let Some(list) = library::host(&t.url).and_then(|h| self.zaps.get(&h)) {
+            let _ = v.evaluate_script(&format!("window.__ultraZapApply && window.__ultraZapApply({})", json!(list)));
+        }
+    }
+
+    /// The zap picker hid an element: remember it for this site (never for private tabs).
+    fn add_zap(&mut self, i: usize, sel: &str) {
+        if !valid_zap(sel) {
+            return;
+        }
+        let t = &self.tabs[i];
+        let Some(host) = library::host(&t.url) else { return };
+        if t.ws == PRIVATE_WS {
+            self.toast("hidden on this page only (private pages are never remembered)");
+            return;
+        }
+        let list = self.zaps.entry(host.clone()).or_default();
+        if !list.iter().any(|x| x == sel) {
+            if list.len() >= MAX_ZAPS {
+                list.remove(0);
+            }
+            list.push(sel.to_string());
+        }
+        self.save_zaps();
+        self.toast(&format!("hidden on {host} for good · \"unzap\" in the palette brings it back"));
+    }
+
+    /// Accent colour of the current theme.
+    fn accent(&self) -> String {
+        if self.cfg.theme == "custom" {
+            return self.cfg.accent.clone();
+        }
+        THEME_ACCENTS.iter().find(|(n, _)| *n == self.cfg.theme).map_or("#9fe3d0", |(_, c)| c).to_string()
+    }
+
+    /// The page in the focused pane, or in the glance while one is open.
+    fn page(&self) -> Option<&WebView> {
+        match self.glance.and_then(|g| self.idx(g)) {
+            Some(i) => self.tabs[i].view.as_ref(),
+            None => self.tabs.get(self.cur()).and_then(|t| t.view.as_ref()),
         }
     }
 
@@ -2192,11 +2518,60 @@ impl App {
             "min" => self.window.set_minimized(true),
             "max" => self.window.set_maximized(!self.window.is_maximized()),
             "coffee" => {
-                // "buy us a coffee" is a placeholder for now: every answer just closes the strip.
                 if self.coffee {
                     self.coffee = false;
                     self.apply_layout(true);
                     self.focus_active();
+                }
+                // "buy us a coffee" opens the tip page once SUPPORT_URL is filled in.
+                if arg.as_str() == Some("yes") && !SUPPORT_URL.is_empty() {
+                    let ws = if self.ws == PRIVATE_WS { 0 } else { self.ws };
+                    self.open_in(ws, SUPPORT_URL.to_string());
+                }
+            }
+            "glance" => {
+                let how = arg.as_str().unwrap_or("close").to_string();
+                self.glance_cmd(&how);
+            }
+            "isolate" => {
+                let w = arg.as_u64().map(|w| w as usize).unwrap_or(self.ws);
+                self.toggle_isolate(w);
+            }
+            "reader" => {
+                let js = format!("({READER_JS})({})", json!(self.accent()));
+                match self.page() {
+                    Some(v) => {
+                        let _ = v.evaluate_script(&js);
+                        let _ = v.focus();
+                    }
+                    None => self.toast("nothing to read here"),
+                }
+            }
+            "pip" => match self.page() {
+                Some(v) => {
+                    let _ = v.evaluate_script("window.__ultraPip && window.__ultraPip()");
+                }
+                None => self.toast("no video here"),
+            },
+            "zap" => match self.page() {
+                Some(v) => {
+                    let _ = v.focus();
+                    let _ = v.evaluate_script("window.__ultraZapPick && window.__ultraZapPick()");
+                }
+                None => self.toast("nothing to hide here"),
+            },
+            "unzap" => {
+                let i = self.glance.and_then(|g| self.idx(g)).unwrap_or(cur);
+                if let Some(host) = self.tabs.get(i).and_then(|t| library::host(&t.url)) {
+                    if self.zaps.remove(&host).is_some() {
+                        self.save_zaps();
+                        if let Some(v) = &self.tabs[i].view {
+                            let _ = v.evaluate_script("window.__ultraZapApply && window.__ultraZapApply([])");
+                        }
+                        self.toast(&format!("everything hidden on {host} is back"));
+                    } else {
+                        self.toast(&format!("nothing hidden on {host}"));
+                    }
                 }
             }
             "ready" => {
@@ -2247,11 +2622,50 @@ impl App {
                     }
                     return;
                 }
+                let (i, id) = if self.glance == Some(id) {
+                    // Inside the glance: esc / ctrl+w close it, ctrl/cmd+enter keeps it as a split, a
+                    // glance-click replaces it; any other ULTRA shortcut closes it and acts on the layout.
+                    match msg.as_str() {
+                        "esc" | "close" => return self.glance_cmd("close"),
+                        "keep" => return self.glance_cmd("split"),
+                        "reader" | "pip" | "zap" => return self.command(&msg, &Value::Null),
+                        "pip:none" | "pip:fail" | "reader:none" => return self.page_notice(&msg),
+                        m if m == "focus" || m.starts_with("type:") => return,
+                        _ => {}
+                    }
+                    if let Some(u) = msg.strip_prefix("glance:") {
+                        let ws = self.tabs[i].ws;
+                        return self.open_glance(u, ws);
+                    }
+                    if let Some(sel) = msg.strip_prefix("zap:") {
+                        return self.add_zap(i, sel);
+                    }
+                    self.glance_cmd("close");
+                    match self.idx(self.focus) {
+                        Some(f) => (f, self.focus),
+                        None => return,
+                    }
+                } else {
+                    (i, id)
+                };
                 if !self.shown.iter().any(|(x, _)| *x == id) {
                     return;
                 }
                 if id != self.focus {
                     self.set_focus(id);
+                }
+                if let Some(u) = msg.strip_prefix("glance:") {
+                    let ws = self.tabs[i].ws;
+                    self.open_glance(u, ws);
+                    return;
+                }
+                if let Some(sel) = msg.strip_prefix("zap:") {
+                    self.add_zap(i, sel);
+                    return;
+                }
+                if msg == "pip:none" || msg == "pip:fail" || msg == "reader:none" {
+                    self.page_notice(&msg);
+                    return;
                 }
                 let digit = |p: &str| msg.strip_prefix(p).and_then(|k| k.parse::<u64>().ok()).filter(|k| (1..=9).contains(k));
                 if let Some(k) = digit("tab:") {
@@ -2295,7 +2709,7 @@ impl App {
                 }
                 match msg.as_str() {
                     "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
-                    | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" => self.command(&msg, &Value::Null),
+                    | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" => self.command(&msg, &Value::Null),
                     _ => {}
                 }
             }
@@ -2316,6 +2730,11 @@ impl App {
             UserEvent::Load(slot, started) => {
                 if let Some(i) = self.idx_slot(slot) {
                     self.tabs[i].loading = started;
+                    if self.glance == Some(self.tabs[i].id) {
+                        if let Some(v) = &self.tabs[i].view {
+                            let _ = v.evaluate_script("window.__ultraGlance = true;");
+                        }
+                    }
                     if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
                         if !u.is_empty() && u != "about:blank" {
                             self.tabs[i].url = u;
@@ -2323,6 +2742,7 @@ impl App {
                     }
                     if !started {
                         self.remember(i);
+                        self.apply_zaps(i);
                     }
                     self.sync();
                 }
@@ -2417,7 +2837,7 @@ impl App {
         } else if matches!(
             msg,
             "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat"
-                | "zoom" | "lock" | "bookmark"
+                | "zoom" | "lock" | "bookmark" | "reader"
         ) {
             self.command(msg, &Value::Null);
         }
@@ -2434,15 +2854,15 @@ fn bench(app: &mut App) {
     for _ in 0..6 {
         let slot = app.new_slot();
         let t = Instant::now();
-        views.push(app.build_view(slot, Some("about:blank"), rect, false));
+        views.push(app.build_view(slot, Some("about:blank"), rect, false, None));
         ms.push(t.elapsed().as_secs_f64() * 1000.0);
     }
     out += &format!("build: {ms:.1?} ms\n");
     let slot = app.new_slot();
-    let spare = app.build_view(slot, None, rect, false).expect("spare");
+    let spare = app.build_view(slot, None, rect, false, None).expect("spare");
     let (p1, p2) = (app.new_slot(), app.new_slot());
-    let pv = app.build_view(p1, Some("about:blank"), rect, true);
-    let pv2 = app.build_view(p2, Some("about:blank"), rect, true);
+    let pv = app.build_view(p1, Some("about:blank"), rect, true, None);
+    let pv2 = app.build_view(p2, Some("about:blank"), rect, true, None);
     let store = |v: &Option<WebView>| v.as_ref().map(|v| unsafe { v.webview().configuration().websiteDataStore() });
     let (s1, s2) = (store(&pv), store(&pv2));
     out += &format!(
@@ -2627,6 +3047,8 @@ fn main() {
         dirty: Cell::new(false),
         coffee_at: None,
         coffee: false,
+        glance: None,
+        zaps: BTreeMap::new(),
         visible: false,
         show_at: now + Duration::from_millis(900),
         next_tick: now + TICK,
@@ -2656,6 +3078,10 @@ fn main() {
     app.lib = library::Library::load(&app.data_dir);
     app.booting = app.cfg.boot && !app.cfg.ultraspeed;
     app.boot_until = Instant::now() + Duration::from_secs(4);
+    app.zaps = fs::read_to_string(app.data_dir.join("zaps.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
     app.layouts = fs::read_to_string(app.data_dir.join("layouts.json"))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -2752,7 +3178,7 @@ fn main() {
                     app.lock_check_at = now + Duration::from_secs(5);
                     app.check_idle_lock();
                 }
-                if app.cfg.stats && app.visible && !app.stats_pending && now >= app.stats_at {
+                if (app.cfg.stats || app.cfg.memcap > 0) && app.visible && !app.stats_pending && now >= app.stats_at {
                     app.stats_at = now + STATS_EVERY;
                     app.sample_stats();
                 }
@@ -2789,6 +3215,9 @@ mod tests {
         assert_eq!(shortcut(0x27, true, false, true).as_deref(), Some("dir:r"));
         assert_eq!(shortcut(0x09, true, true, false).as_deref(), Some("prev"));
         assert_eq!(shortcut(0xBC, true, false, false).as_deref(), Some("settings"));
+        assert_eq!(shortcut(0x78, false, false, false).as_deref(), Some("reader"));
+        // ctrl+alt+p is left to the page script (it needs the key press as a user gesture).
+        assert_eq!(shortcut(k('P'), true, false, true), None);
         // Not ours: plain keys, ctrl+c, ctrl+f (page find) pass through.
         assert_eq!(shortcut(k('T'), false, false, false), None);
         assert_eq!(shortcut(k('C'), true, false, false), None);

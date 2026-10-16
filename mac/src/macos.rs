@@ -86,6 +86,7 @@ fn vk(e: &NSEvent) -> Option<u32> {
         0x45 => Some(0x6B), // keypad +
         0x4E => Some(0x6D), // keypad -
         0x60 => Some(VK_F5),
+        0x65 => Some(0x78), // F9
         0x6F => Some(VK_F12),
         _ => None,
     };
@@ -134,6 +135,7 @@ pub fn mac_shortcut(vk: u32, cmd: bool, ctrl: bool, shift: bool, opt: bool) -> O
             (VK_F12, _) => "devtools",
             (_, Some('I')) if cmd && opt => "devtools",
             (_, Some('R')) if plain => "reload",
+            (_, Some('R')) if cmd && shift && !opt => "reader", // Safari's reader key
             (_, Some('F')) if plain => "find",
             (_, Some('G')) if cmd && !opt => if shift { "findprev" } else { "findnext" },
             (_, Some('P')) if plain => "print",
@@ -303,6 +305,22 @@ pub fn find(v: &WebView, text: &str, backwards: bool, done: impl Fn(bool) + 'sta
     }
     let block = RcBlock::new(move |r: NonNull<objc2_web_kit::WKFindResult>| done(unsafe { r.as_ref().matchFound() }));
     unsafe { w.findString_withConfiguration_completionHandler(&NSString::from_str(text), Some(&cfg), &block) };
+}
+
+/// Separate persistent data stores per workspace need macOS 14 (`WKWebsiteDataStore(forIdentifier:)`).
+pub fn separate_stores() -> bool {
+    objc2_foundation::NSProcessInfo::processInfo().operatingSystemVersion().majorVersion >= 14
+}
+
+/// A stable data-store id for workspace `w` (a version-4-shaped UUID derived from its number).
+pub fn store_id(w: usize) -> [u8; 16] {
+    use sha2::{Digest, Sha256};
+    let h = Sha256::digest(format!("ultra workspace {}", w + 1).as_bytes());
+    let mut id = [0u8; 16];
+    id.copy_from_slice(&h[..16]);
+    id[6] = (id[6] & 0x0f) | 0x40;
+    id[8] = (id[8] & 0x3f) | 0x80;
+    id
 }
 
 /// Dock icon when running outside an .app bundle (`cargo run`); a bundle uses ultra.icns.

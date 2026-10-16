@@ -95,6 +95,9 @@ The help text inside the app (tutorial, settings, tooltips) uses the Mac names.
 | Print / developer tools | ctrl+p / F12 | ⌘P / ⌘⌥I or F12 |
 | Copy, paste, undo, select all | ctrl+c/v/z/a | ⌘C/V/Z/A |
 | Quit | the ✕ button | ⌘Q, the red window button, or Quit from the Dock |
+| Glance (preview a link) | ctrl+shift+click | ⌘⇧click; esc closes, ⌘enter tiles it |
+| Reader view | F9 | F9 or ⌘⇧R (as in Safari) |
+| Picture-in-picture | ctrl+alt+p | ⌘⌥P |
 
 Holding **ctrl** instead of ⌘ also works for any shortcut that includes shift or option. A
 plain ctrl+letter is left alone, because every Mac text field uses those for editing
@@ -127,14 +130,30 @@ video players, ad iframes, PDFs, and sites that swallow keys. On Windows that is
 | Downloads | Saved to Downloads, numbered instead of overwriting; download bubble | Saved to ~/Downloads, numbered the same way; ULTRA shows a notice when each starts and finishes |
 | Slideshow folder picker | Windows folder dialog | Native folder picker as a sheet on the window |
 | Phishing protection | SmartScreen | WebKit's fraudulent-website warnings (Safe Browsing) |
+| Separate logins per workspace | A separate WebView2 profile per workspace | A separate persistent WebKit data store per workspace (`WKWebsiteDataStore(forIdentifier:)`, **macOS 14+**; on older systems the setting says so and stays off) |
+| Glance, reader view, cookie-banner hiding, zap, memory cap | Same code on both (the page scripts `content.js` / `reader.js` are shared) | Same |
+| Picture-in-picture | Chromium's `requestPictureInPicture` | WebKit's `requestPictureInPicture`, with Safari's `webkitSetPresentationMode` as fallback |
 | App icon | `.ico` embedded by `build.rs` | `.icns` in the app bundle; set at runtime for `cargo run` |
+
+## Features beyond browsing (same as Windows)
+
+- **Glance**: ⌘⇧click a link to preview it floating over the layout; esc closes, ⌘enter or
+  "⧉ split" tiles it, "keep as tab" keeps it in the background.
+- **Reader view**: F9 / ⌘⇧R / `reader` in the palette.
+- **Picture-in-picture**: ⌘⌥P with the page focused, or `pip` in the palette.
+- **Hide distractions**: cookie banners from common consent tools hidden automatically (settings);
+  `zap` in the palette hides any element on a site for good, `unzap` undoes it (`zaps.json`).
+- **Memory cap**: settings → performance (1/2/4/8 GB); least-recently-used hidden tabs sleep past it.
+- **Separate logins per workspace**: settings → privacy or `isolate` in the palette (macOS 14+).
+- Notices show in the top bar, never under a page.
 
 ## Support prompt
 
 On the fifth launch only, a slim "buy us a coffee" strip appears under the top bar a few
-seconds after startup (never over a page, the tutorial or an open panel). Its button is a
-placeholder for now; every choice just closes it. The launch count is `launches` in
-`settings.json`. Same as on Windows.
+seconds after startup (never over a page, the tutorial or an open panel). The launch count is
+`launches` in `settings.json`. Put your tip page in `SUPPORT_URL` near the top of `src/main.rs`
+to make the button open it; while it's empty, every choice just closes the strip. Same as on
+Windows.
 
 ## Permissions you may see
 
@@ -194,6 +213,7 @@ build and report anything that is off:
 | `src/slideshow.rs` | Folder picker sheet; loading images for the slideshow background. |
 | `src/layout.rs`, `src/library.rs` | Tiling tree; history, bookmarks, daily digest (shared with Windows). |
 | `src/ui.html`, `src/content.js` | The chrome UI and the script injected into pages (Mac labels, find box). |
+| `src/reader.js` | Reader view (shared with Windows). |
 | `bundle/Info.plist`, `tools/bundle.sh` | App bundle metadata and the script that builds `ULTRA.app`. |
 
 ## Checking the build from Linux

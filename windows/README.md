@@ -14,6 +14,19 @@ WebView2 (via [wry](https://github.com/tauri-apps/wry) and [tao](https://github.
 - **Ad & tracker blocking**, address-bar spoofing protection, SmartScreen on.
 - **Looks**: animated ASCII swirl, solid colour or your own image as background; 12 themes
   plus a custom colour picker; optional scanlines. **ULTRASPEED** turns every effect off.
+- **Glance**: `ctrl+shift+click` a link to preview it floating over your layout. `esc` closes it,
+  `ctrl+enter` (or "⧉ split") tiles it next to the focused pane, "keep as tab" keeps it in the background.
+- **Reader view** (`F9`, or `reader` in the palette): just the article, in ULTRA's colours. `F9` again or `esc` to leave.
+- **Picture-in-picture** (`ctrl+alt+p` with the page focused, or `pip` in the palette): pops the video out.
+- **Hide distractions**: cookie banners from the common consent tools are hidden automatically
+  (settings → "hide cookie banners"). `zap` in the palette lets you click any element to hide it on
+  that site for good; `unzap` brings everything back. Kept in `zaps.json`.
+- **Memory cap** (settings → performance): past 1/2/4/8 GB, the tabs you used least long ago are put to
+  sleep one at a time. Pages on screen, a glance and tabs playing sound are never touched.
+- **Separate logins per workspace** (settings → privacy, or `isolate` in the palette): a lit workspace
+  gets its own cookies and sign-ins (a separate WebView2 profile), e.g. work accounts in 1, personal in 2.
+  Its button in the top bar gets an underline.
+- Notices ("bookmarked", "downloaded"...) appear in the top bar, so a page can never cover them.
 - Built-in tutorial (can be re-run from settings, `ctrl+,`).
 
 ## Build
@@ -29,7 +42,13 @@ The exe lands in `target/release/ultra.exe`. Requires the Microsoft Edge WebView
 
 `tools/make_icon.py` regenerates `assets/ultra.ico` (needs Pillow); `build.rs` embeds it.
 
+## Support prompt
+
 On the fifth launch only, a slim "buy us a coffee" strip appears under the top bar a few
-seconds after startup (never over a page, the tutorial or an open panel). Its button is a
-placeholder for now; every choice just closes it. The launch count is `launches` in
-`settings.json`.
+seconds after startup (never over a page, the tutorial or an open panel). The launch count is
+`launches` in `settings.json`.
+
+To make the button take payments, put your tip page in `SUPPORT_URL` near the top of
+`src/main.rs` (a PayPal.Me link, a Venmo business profile, a Ko-fi or Buy Me a Coffee page) and
+rebuild. "buy us a coffee" then opens that page in a new tab. While it's empty, every choice just
+closes the strip.
