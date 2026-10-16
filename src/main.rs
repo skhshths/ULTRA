@@ -15,6 +15,7 @@
 
 mod blocker;
 mod layout;
+mod library;
 mod privacy;
 mod stats;
 
@@ -94,7 +95,7 @@ const BROWSER_ARGS: &str = "--enable-features=msSmartScreenProtection";
 const THEMES: &[&str] = &[
     "mint", "amber", "red", "mono", "ice", "matrix", "violet", "pink", "orange", "cyan", "gold", "lime", "custom",
 ];
-const BG_MODES: &[&str] = &["swirl", "solid", "image"];
+const BG_MODES: &[&str] = &["swirl", "matrix", "stars", "gradient", "solid", "image"];
 /// Largest background image accepted (as a base64 data URL).
 const BG_MAX: usize = 16 * 1024 * 1024;
 
@@ -192,6 +193,8 @@ struct Settings {
     swirlbright: u16,
     /// Private-workspace password as `salt$hash` (never the password; never sent to the UI).
     privpass: String,
+    /// Logo boot animation on launch.
+    boot: bool,
 }
 
 impl Default for Settings {
@@ -217,6 +220,7 @@ impl Default for Settings {
             swirlcolor: String::new(),
             swirlbright: 100,
             privpass: String::new(),
+            boot: true,
         }
     }
 }
@@ -289,6 +293,11 @@ struct App {
     unlock_fails: u32,
     lock_check_at: Instant,
     layouts: BTreeMap<String, SavedLayout>,
+    /// History, bookmarks and palette history.
+    lib: library::Library,
+    /// Boot animation playing: pages stay hidden until the UI says it's done.
+    booting: bool,
+    boot_until: Instant,
     dirty: Cell<bool>,
     visible: bool,
     show_at: Instant,
@@ -473,6 +482,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, false, None, Some('W')) => "close".into(),
         (false, false, None, Some('L')) => "focusurl".into(),
         (false, false, None, Some('K')) => "overview".into(),
+        (false, false, None, Some('D')) => "bookmark".into(),
         (false, false, Some(d), _) => format!("tab:{d}"),
         (false, _, None, None) if vk == 0x09 => if shift { "prev".into() } else { "next".into() },
         (false, false, None, None) if vk == 0xBC => "settings".into(),
@@ -773,7 +783,7 @@ impl App {
         let now = Instant::now();
         // Keep private pages out of screenshots and screen sharing while that workspace is shown.
         privacy::exclude_from_capture(self.window.hwnd() as isize, self.ws == PRIVATE_WS);
-        let hidden = self.overlay || self.tour || self.gate();
+        let hidden = self.overlay || self.tour || self.gate() || self.booting;
         let animate = animate && !hidden && !self.cfg.ultraspeed;
         let slide = self.slide.take();
         if animate {
@@ -1303,6 +1313,8 @@ impl App {
             "locked": self.locked,
             "gate": self.gate(),
             "layouts": self.layouts.keys().collect::<Vec<_>>(),
+            "bm": self.tabs.get(self.cur()).is_some_and(|t| t.ws != PRIVATE_WS && self.lib.is_bookmarked(&t.url)),
+            "palhist": self.lib.commands,
             "tour": self.tour,
             "max": self.window.is_maximized(),
         });
@@ -1354,6 +1366,7 @@ impl App {
         if let Ok(j) = serde_json::to_string(&s) {
             let _ = fs::write(self.data_dir.join("session.json"), j);
         }
+        self.lib.save(&self.data_dir);
     }
 
     fn save_settings(&self) {
@@ -1412,6 +1425,9 @@ impl App {
         }
         if !self.locked && self.has_private() {
             d = d.min(self.lock_check_at);
+        }
+        if self.booting {
+            d = d.min(self.boot_until);
         }
         d
     }
@@ -1569,6 +1585,15 @@ impl App {
         }
         self.shown.retain(|(id, _)| self.tabs.iter().any(|t| t.id == *id));
         self.apply_layout(false);
+    }
+
+    /// Record a finished page load in history (never for private tabs).
+    fn remember(&mut self, i: usize) {
+        let t = &self.tabs[i];
+        if t.ws != PRIVATE_WS {
+            let (u, ti) = (t.url.clone(), t.title.clone());
+            self.lib.visit(&u, &ti);
+        }
     }
 
     fn save_layouts(&self) {
@@ -1823,7 +1848,7 @@ impl App {
                 let _ = self.ui.focus();
                 let _ = self.ui.evaluate_script("ultra.focusUrl()");
             }
-            "overview" | "settings" | "palette" => {
+            "overview" | "settings" | "palette" | "urlpanel" => {
                 // These panels cover the content area, so pages are hidden while open.
                 let on = arg.as_bool().unwrap_or(!self.overlay);
                 self.overlay = on;
@@ -1915,6 +1940,47 @@ impl App {
                 let (op, name) = (arg[0].as_str().unwrap_or("").to_string(), arg[1].as_str().unwrap_or("").to_string());
                 self.layout_cmd(&op, &name);
             }
+            "suggest" => {
+                let q = arg.as_str().unwrap_or("").to_string();
+                let items: Vec<Value> =
+                    self.lib.suggest(&q, 8).into_iter().map(|(u, t, b)| json!({ "u": u, "t": t, "b": b })).collect();
+                let _ = self.ui.evaluate_script(&format!("ultra.suggestions({})", json!({ "q": q, "items": items })));
+            }
+            "bookmark" => {
+                let Some(t) = self.tabs.get(self.cur()) else { return };
+                if t.ws == PRIVATE_WS {
+                    self.toast("bookmarks are off in the private workspace");
+                } else if t.url == HOME || !(t.url.starts_with("http://") || t.url.starts_with("https://")) {
+                    self.toast("nothing to bookmark here");
+                } else {
+                    let (u, ti) = (t.url.clone(), t.title.clone());
+                    let on = self.lib.toggle_bookmark(&u, &ti);
+                    self.lib.save(&self.data_dir);
+                    self.toast(if on { "★ bookmarked" } else { "bookmark removed" });
+                    self.sync();
+                }
+            }
+            "palhist" => {
+                // Commands typed in the private workspace are not remembered.
+                if self.ws != PRIVATE_WS {
+                    if let Some(c) = arg.as_str() {
+                        self.lib.push_command(c);
+                        self.sync();
+                    }
+                }
+            }
+            "clearhistory" => {
+                self.lib.clear_history();
+                self.lib.save(&self.data_dir);
+                self.toast("history cleared");
+            }
+            "booted" => {
+                if self.booting {
+                    self.booting = false;
+                    self.apply_layout(false);
+                    self.focus_active();
+                }
+            }
             "content" => self.focus_active(),
             "drag" => {
                 let _ = self.window.drag_window();
@@ -1970,6 +2036,7 @@ impl App {
                     if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
                         if !u.is_empty() && u != self.tabs[i].url {
                             self.tabs[i].url = u;
+                            self.remember(i);
                             self.sync();
                         }
                     }
@@ -2023,12 +2090,15 @@ impl App {
                 }
                 match msg.as_str() {
                     "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
-                    | "palette" | "mvnew" | "closeat" | "zoom" | "lock" => self.command(&msg, &Value::Null),
+                    | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" => self.command(&msg, &Value::Null),
                     _ => {}
                 }
             }
             UserEvent::Title(slot, title) => {
                 if let Some(i) = self.idx_slot(slot) {
+                    if self.tabs[i].ws != PRIVATE_WS {
+                        self.lib.retitle(&self.tabs[i].url, &title);
+                    }
                     self.tabs[i].title = title;
                     if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
                         if !u.is_empty() {
@@ -2045,6 +2115,9 @@ impl App {
                         if !u.is_empty() && u != "about:blank" {
                             self.tabs[i].url = u;
                         }
+                    }
+                    if !started {
+                        self.remember(i);
                     }
                     self.sync();
                 }
@@ -2209,6 +2282,9 @@ fn main() {
         unlock_fails: 0,
         lock_check_at: now,
         layouts: BTreeMap::new(),
+        lib: library::Library::default(),
+        booting: false,
+        boot_until: now,
         dirty: Cell::new(false),
         visible: false,
         show_at: now + Duration::from_millis(900),
@@ -2233,6 +2309,9 @@ fn main() {
     }
     app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
+    app.lib = library::Library::load(&app.data_dir);
+    app.booting = app.cfg.boot && !app.cfg.ultraspeed;
+    app.boot_until = Instant::now() + Duration::from_secs(4);
     app.layouts = fs::read_to_string(app.data_dir.join("layouts.json"))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -2296,6 +2375,9 @@ fn main() {
                 if app.spare_at.is_some_and(|t| now >= t) {
                     app.spare_at = None;
                     app.refill_spare();
+                }
+                if app.booting && now >= app.boot_until {
+                    app.command("booted", &Value::Null);
                 }
                 if now >= app.lock_check_at {
                     app.lock_check_at = now + Duration::from_secs(5);

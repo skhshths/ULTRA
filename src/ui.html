@@ -308,6 +308,23 @@ body.private .tab.on .n { color: var(--priv); }
   transition: opacity var(--med) var(--ease), transform var(--med) var(--ease); }
 #toast.on { opacity: 1; transform: translate(-50%, 0); }
 
+/* address-bar suggestions + bookmark star */
+#star { color: var(--dim); cursor: default; transition: color var(--fast); }
+#star:hover { color: var(--acc); }
+#star.on { color: var(--acc); }
+#sugg { position: fixed; z-index: 7; display: none; background: #161616; border: 1px solid #2c2c2c; border-top: 0;
+  max-height: 60vh; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+#sugg.on { display: block; }
+.sg { display: flex; gap: 10px; align-items: baseline; padding: 7px 10px; color: var(--mid); white-space: nowrap; overflow: hidden; }
+.sg .ic { color: var(--dim); width: 12px; flex: 0 0 auto; }
+.sg .ic.b { color: var(--acc); }
+.sg .st { color: var(--fg); overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.sg .su { color: #555; font-size: 11px; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
+.sg.sel { background: var(--acc-bg); }
+.sg.sel .st { color: var(--acc); }
+#bgmode { flex-wrap: wrap; justify-content: flex-end; max-width: 300px; }
+#boot { position: fixed; inset: 0; z-index: 20; pointer-events: auto; }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation: none !important; } }
 </style>
 </head>
@@ -317,13 +334,13 @@ body.private .tab.on .n { color: var(--priv); }
   <span class="logo">ULTRA</span><span class="spd">SPEED</span><span class="privtag">PRIVATE</span><span class="sep">│</span>
   <div id="wsbar"></div><span class="sep">│</span>
   <div id="tabs"></div><div id="plus" title="new tab (ctrl+t)">+</div>
-  <div id="urlwrap"><span class="p">›</span><input id="url" spellcheck="false" autocomplete="off"></div>
+  <div id="urlwrap"><span class="p">›</span><input id="url" spellcheck="false" autocomplete="off"><span id="star" title="bookmark (ctrl+d)">☆</span></div>
   <span id="zoomchip" class="chip" title="unzoom (ctrl+shift+f)">⛶ zoom</span>
   <span id="stats"></span><span id="trim" class="chip" title="put every hidden tab to sleep">trim</span>
   <span id="clock"></span><span id="cfgbtn" title="settings (ctrl+,)">cfg</span>
   <div class="wc"><div id="wmin">─</div><div id="wmax">□</div><div id="wq" class="q">✕</div></div>
 </div>
-<div id="panes"></div><div id="toast"></div>
+<div id="panes"></div><div id="toast"></div><div id="sugg"></div>
 <div id="cfg" class="ovl" tabindex="-1"><div class="card">
   <div class="hd"><span>SETTINGS</span><span class="k">ctrl+,</span></div>
   <div class="sec">PERFORMANCE</div>
@@ -340,10 +357,12 @@ body.private .tab.on .n { color: var(--priv); }
   <div class="row"><div><div class="name" style="color:var(--priv)">private workspace</div>
     <div class="desc">ctrl+alt+0. inprivate tabs: no history, cookies, cache or session ever saved.<br>hidden from screen capture, locks after 5 min idle, 5 wrong passwords wipe it.</div></div>
     <div class="ctl"><button class="run" id="priv-pass">set password</button><button class="run" id="priv-lock">lock</button><button class="run" id="priv-wipe">wipe</button></div></div>
+  <div class="row"><div><div class="name">history</div><div class="desc">pages you visit are remembered on this pc to power address-bar suggestions.<br>never in the private workspace. ctrl+d bookmarks a page.</div></div>
+    <div class="ctl"><button class="run" id="hist-clear">clear history</button></div></div>
   <div class="sec">LOOK</div>
   <div class="row"><div><div class="name">theme</div><div class="desc" id="themename">mint</div></div><div class="swatches" id="swatches"></div></div>
-  <div class="row" style="border-bottom:0;padding-bottom:6px"><div><div class="name">colour picker</div><div class="desc">drag to pick. accent recolours the whole ui, background tints everything behind it,<br>swirl colours the ascii swirl (auto follows the accent).</div></div>
-    <div class="seg" id="pk-target"><button data-p="accent" class="on">accent</button><button data-p="bgcolor">background</button><button data-p="swirlcolor">swirl</button></div></div>
+  <div class="row" style="border-bottom:0;padding-bottom:6px"><div><div class="name">colour picker</div><div class="desc">drag to pick. accent recolours the whole ui, background tints everything behind it,<br>pattern colours the animated background (default follows the accent).</div></div>
+    <div class="seg" id="pk-target"><button data-p="accent" class="on">accent</button><button data-p="bgcolor">background</button><button data-p="swirlcolor">pattern</button></div></div>
   <div class="picker">
     <div class="top">
       <div><div class="pk-sv" id="pk-sv"><canvas width="220" height="120"></canvas><div class="pk-dot" id="pk-dot"></div></div>
@@ -352,14 +371,15 @@ body.private .tab.on .n { color: var(--priv); }
         <button class="pk-reset" id="pk-reset">↺ default</button></div>
     </div>
   </div>
-  <div class="row"><div><div class="name">background</div><div class="desc">animated swirl, a plain colour, or your own image (png, jpg, webp).</div></div>
-    <div class="seg" id="bgmode"><button data-m="swirl">swirl</button><button data-m="solid">solid</button><button data-m="image">image</button></div></div>
-  <div class="row" id="r-swirl"><div><div class="name">swirl visibility</div><div class="desc">how bright the swirl's glyphs are.</div></div>
+  <div class="row"><div><div class="name">background</div><div class="desc">ascii swirl, matrix rain, starfield, drifting gradient, a plain colour, or your own image.</div></div>
+    <div class="seg" id="bgmode"><button data-m="swirl">swirl</button><button data-m="matrix">matrix</button><button data-m="stars">stars</button><button data-m="gradient">gradient</button><button data-m="solid">solid</button><button data-m="image">image</button></div></div>
+  <div class="row" id="r-swirl"><div><div class="name">pattern brightness</div><div class="desc">how bright the animated background is.</div></div>
     <div class="bgctl"><input type="range" id="sw-bright" min="30" max="300" step="5"><span id="sw-brightv" style="width:40px;color:var(--mid)"></span></div></div>
   <div class="row" id="r-bgimg"><div><div class="name">background image</div><div class="desc" id="bgimgdesc">no image chosen.</div></div>
     <div class="bgctl"><button class="run" id="bg-pick">choose…</button><button class="run" id="bg-clear">remove</button><input type="file" id="bg-file" accept="image/png,image/jpeg,image/webp" hidden></div></div>
   <div class="row" id="r-bgdim"><div><div class="name">dim image</div><div class="desc">darkens the picture so text stays readable.</div></div>
     <div class="bgctl"><input type="range" id="bg-dim" min="0" max="90" step="1"><span id="bg-dimv" style="width:34px;color:var(--mid)"></span></div></div>
+  <div class="row" id="r-boot"><div><div class="name">boot animation</div><div class="desc">the logo assembles out of glyphs on launch. any key skips it. off in ULTRASPEED.</div></div><div class="sw" id="sw-boot"></div></div>
   <div class="row" id="r-scan"><div><div class="name">scanlines</div><div class="desc">retro crt lines over the chrome. off in ULTRASPEED.</div></div><div class="sw" id="sw-scan"></div></div>
   <div class="sec">INPUT</div>
   <div class="row" id="r-type"><div><div class="name">type to search</div>
@@ -381,7 +401,7 @@ body.private .tab.on .n { color: var(--priv); }
 <div id="pal" class="ovl" tabindex="-1"><div class="pbox">
   <div class="pin"><span>❯</span><input id="palq" placeholder="type a command, or an address…" spellcheck="false" autocomplete="off"></div>
   <div id="pallist"></div>
-  <div class="pft">↑↓ choose · tab complete · enter run · esc close</div>
+  <div class="pft">↑ on empty = history · ↑↓ choose · tab complete · ; chains commands · enter run · esc close</div>
 </div></div>
 <div id="lock" class="ovl" tabindex="-1"><div class="lbox">
 <pre>┌──────┐
@@ -408,7 +428,7 @@ body.private .tab.on .n { color: var(--priv); }
 <script>
 (() => {
 const $ = (s) => document.querySelector(s);
-const send = (cmd, arg) => window.ipc.postMessage(JSON.stringify({ cmd, arg }));
+const send = (cmd, arg) => { try { window.ipc.postMessage(JSON.stringify({ cmd, arg })); } catch (_) {} };
 const CFG0 = window.__ultraCfg || {};
 let S = { tabs: [], a: 0, panes: [], splits: [], live: 0, ws: 0, wss: [0], ps: {}, cfg: CFG0 };
 let ovOn = false, cfgOn = false, palOn = false, ovSel = 0, ovList = [], splitSig = '', pendingFocus = null, lastWs = 0;
@@ -480,6 +500,8 @@ window.ultra = {
     const insecure = cur.s !== 'home' && /^http:/i.test(cur.u) && !/^http:\/\/(localhost|127\.)/i.test(cur.u);
     $('#urlwrap').classList.toggle('insecure', insecure);
     setText($('#urlwrap .p'), insecure ? '⚠' : '›');
+    $('#star').classList.toggle('on', !!s.bm); setText($('#star'), s.bm ? '★' : '☆');
+    $('#star').style.display = cur.s === 'home' || cur.p ? 'none' : '';
     $('#urlwrap').title = insecure ? 'not secure: this page is not encrypted. do not enter passwords here.' : '';
     const sleeping = s.tabs.filter((t) => t.s === 'sleep').length;
     let stats = `<b>${s.live}</b> live · <b>${sleeping}</b> asleep`;
@@ -539,6 +561,7 @@ function applyCfg(c) {
   $('#sw-stats').classList.toggle('on', !!c.stats);
   $('#sw-block').classList.toggle('on', c.block ?? true);
   $('#sw-scan').classList.toggle('on', !!c.scanlines);
+  $('#sw-boot').classList.toggle('on', c.boot ?? true);
   $('#sw-type').classList.toggle('on', c.typeahead ?? true);
   $('#sw-tour').classList.toggle('on', c.tour ?? true);
   $('#t-opt').classList.toggle('on', c.tour ?? true);
@@ -560,6 +583,8 @@ $('#r-speed').onclick = () => send('set', ['ultraspeed', !SPEED]);
 $('#r-stats').onclick = () => toggle('stats', false);
 $('#r-block').onclick = () => toggle('block', true);
 $('#r-scan').onclick = () => toggle('scanlines', false);
+$('#r-boot').onclick = () => toggle('boot', true);
+$('#hist-clear').onclick = () => send('clearhistory');
 $('#r-type').onclick = () => toggle('typeahead', true);
 $('#sw-tour').onclick = (e) => { e.stopPropagation(); toggle('tour', true); };
 $('.step').onclick = (e) => { const d = +e.target.dataset.d; if (d) send('set', ['warm', Math.max(0, Math.min(12, (cfg().warm ?? 3) + d))]); };
@@ -572,11 +597,13 @@ function applyBg(c) {
   const mode = c.bgmode || 'swirl';
   document.body.classList.toggle('bgimage', mode === 'image' && !!bgImg);
   document.body.classList.toggle('bgsolid', mode === 'solid' || (mode === 'image' && !bgImg));
-  bg.setEnabled(!SPEED && mode === 'swirl');
+  const canvasMode = ['swirl', 'matrix', 'stars', 'gradient'].includes(mode);
+  if (canvasMode) bg.setMode(mode);
+  bg.setEnabled(!SPEED && canvasMode);
   document.documentElement.style.setProperty('--bgdim', ((c.bgdim ?? 45) / 100).toFixed(2));
   $('#bgmode').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === mode));
   $('#r-bgimg').style.display = mode === 'image' ? '' : 'none';
-  $('#r-swirl').style.display = mode === 'swirl' ? '' : 'none';
+  $('#r-swirl').style.display = canvasMode ? '' : 'none';
   if (document.activeElement !== $('#sw-bright')) $('#sw-bright').value = c.swirlbright ?? 100;
   setText($('#sw-brightv'), (c.swirlbright ?? 100) + '%');
   $('#r-bgdim').style.display = mode === 'image' ? '' : 'none';
@@ -708,6 +735,8 @@ const CMDS = [
   { k: 'ws', a: '<1-9>', d: 'switch workspace', opts: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], run: (x) => num(x) && send('ws', num(x) - 1) },
   { k: 'move', a: '<1-9>', d: 'send the focused tab to a workspace', opts: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], run: (x) => num(x) && send('tows', num(x) - 1) },
   { k: 'sleep all', d: 'put every hidden tab to sleep now', run: () => send('trim') },
+  { k: 'bookmark', d: 'bookmark / unbookmark this page (ctrl+d)', run: () => send('bookmark') },
+  { k: 'clear history', d: 'forget every page visited', run: () => send('clearhistory') },
   { k: 'layout save', a: '<name>', d: "save this workspace's layout and tabs", run: (x) => x && send('layout', ['save', x]) },
   { k: 'layout load', a: '<name>', d: 'open a saved layout in a free workspace', opts: () => S.layouts || [], run: (x) => x && send('layout', ['load', x]) },
   { k: 'layout delete', a: '<name>', d: 'forget a saved layout', opts: () => S.layouts || [], run: (x) => x && send('layout', ['delete', x]) },
@@ -718,7 +747,7 @@ const CMDS = [
   { k: 'reopen', d: 'reopen the last closed tab', run: () => send('reopen') },
   { k: 'devtools', d: 'developer tools for the focused page', run: () => send('devtools') },
   { k: 'theme', a: '<name>', d: Object.keys(THEMES).join(' · '), opts: Object.keys(THEMES), run: (x) => THEMES[x] && send('set', ['theme', x]) },
-  { k: 'bg', a: '<swirl|solid|image>', d: 'background style', opts: ['swirl', 'solid', 'image'], run: (x) => ['swirl', 'solid', 'image'].includes(x) && send('set', ['bgmode', x]) },
+  { k: 'bg', a: '<style>', d: 'swirl · matrix · stars · gradient · solid · image', opts: ['swirl', 'matrix', 'stars', 'gradient', 'solid', 'image'], run: (x) => ['swirl', 'matrix', 'stars', 'gradient', 'solid', 'image'].includes(x) && send('set', ['bgmode', x]) },
   { k: 'accent', a: '<#rrggbb>', d: 'custom accent colour', run: (x) => /^#?[0-9a-f]{6}$/i.test(x) && send('set', ['accent', (x[0] === '#' ? x : '#' + x).toLowerCase()]) },
   { k: 'swirl', a: '<#rrggbb|auto>', d: 'swirl glyph colour', opts: ['auto'], run: (x) => (x === 'auto' || /^#?[0-9a-f]{6}$/i.test(x)) && send('set', ['swirlcolor', x === 'auto' ? 'auto' : (x[0] === '#' ? x : '#' + x).toLowerCase()]) },
   { k: 'speed', a: '[on|off]', d: 'ULTRASPEED: 100% speed, 0% looks', opts: ['on', 'off'], run: (x) => send('set', ['ultraspeed', onoff(x, SPEED)]) },
@@ -765,11 +794,30 @@ function runPal(it) {
   if (!it) return;
   const needsArg = (it.cmd.a || '').startsWith('<') && it.arg == null;
   if (needsArg) { $('#palq').value = it.cmd.k + ' '; drawPal(); return; }
+  send('palhist', (it.k + (it.arg && !it.k.endsWith(it.arg) ? ' ' + it.arg : '')).trim());
   closePal();
   it.cmd.run((it.arg || '').trim());
 }
-$('#palq').addEventListener('input', () => { palSel = 0; drawPal(); });
+// `split right github.com; theme amber; ws 2` runs each part in order.
+function runChain(text) {
+  send('palhist', text);
+  closePal();
+  for (const part of text.split(';').map((x) => x.trim()).filter(Boolean)) {
+    const hit = parsePal(part);
+    if (hit) hit[0].run(hit[1]); else send('go', part);
+  }
+}
+let palHist = -1;
+$('#palq').addEventListener('input', () => { palSel = 0; palHist = -1; drawPal(); });
 $('#palq').addEventListener('keydown', (e) => {
+  const hist = S.palhist || [], q = $('#palq');
+  // ↑ on an empty line (or while already browsing) walks back through past commands.
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && (palHist >= 0 || (!q.value && e.key === 'ArrowUp')) && hist.length) {
+    palHist = e.key === 'ArrowUp' ? Math.min(hist.length - 1, palHist + 1) : palHist - 1;
+    q.value = palHist >= 0 ? hist[hist.length - 1 - palHist] : '';
+    palSel = 0; drawPal(); e.preventDefault(); return;
+  }
+  if (e.key === 'Enter' && q.value.includes(';')) { runChain(q.value.trim()); e.preventDefault(); return; }
   if (e.key === 'ArrowDown') { palSel = Math.min(palItems.length - 1, palSel + 1); drawPal(); e.preventDefault(); }
   else if (e.key === 'ArrowUp') { palSel = Math.max(0, palSel - 1); drawPal(); e.preventDefault(); }
   else if (e.key === 'Tab') { const it = palItems[palSel]; if (it) { $('#palq').value = it.k + (it.cmd.a && it.arg == null ? ' ' : ''); drawPal(); } e.preventDefault(); }
@@ -933,6 +981,8 @@ $('#t-back').onclick = () => go(-1);
 $('#t-skip').onclick = closeTour;
 $('#t-opt').onclick = () => toggle('tour', true);
 $('#run-tour').onclick = () => { closeCfg(); send('tour', true); };
+
+
 
 // ── private workspace: lock screen (create / unlock / change password) and toasts ──
 let lockMode = null;
@@ -1149,7 +1199,8 @@ panesEl.addEventListener('pointerdown', (e) => {
 });
 panesEl.addEventListener('keydown', (e) => {
   const q = e.target.closest('.hp input'); if (!q) return;
-  if (e.key === 'Enter' && q.value.trim()) send('go', [+q.dataset.id, q.value]);
+  if (sgKey(e)) return;
+  if (e.key === 'Enter' && q.value.trim()) { const v = sgPick(q); sgHide(); send('go', [+q.dataset.id, v]); }
 });
 
 // ── overview (ctrl+k): every tab in every workspace ──
@@ -1201,10 +1252,62 @@ $('#plus').onclick = () => send('new');
 // ── address bar ──
 const url = $('#url');
 url.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { send('go', url.value); url.blur(); }
-  else if (e.key === 'Escape') { url.blur(); ultra.render(S); send('content'); }
+  if (sgKey(e)) return;
+  if (e.key === 'Enter') { const v = sgPick(url); sgHide(); send('go', v); url.blur(); }
+  else if (e.key === 'Escape') { sgHide(); url.blur(); ultra.render(S); send('content'); }
 });
 url.addEventListener('focus', () => url.select());
+
+// ── address-bar suggestions: history + bookmarks, ranked by Rust ──
+const sugg = $('#sugg');
+let sgItems = [], sgSel = -1, sgInput = null, sgTimer = 0, urlPanel = false;
+function sgHide() {
+  sugg.classList.remove('on'); sgItems = []; sgSel = -1;
+  if (urlPanel) { urlPanel = false; send('urlpanel', false); }
+}
+function sgAsk(input) {
+  sgInput = input;
+  clearTimeout(sgTimer);
+  const q = input.value.trim();
+  if (!q) { sgHide(); return; }
+  sgTimer = setTimeout(() => send('suggest', q), 40);
+}
+ultra.urlpanel = () => {};
+ultra.suggestions = (r) => {
+  if (!sgInput || document.activeElement !== sgInput || r.q !== sgInput.value.trim()) return;
+  sgItems = r.items; sgSel = -1;
+  if (!sgItems.length) { sgHide(); return; }
+  // The address bar sits above the pages, so pages are hidden while its list is open.
+  if (sgInput === url && !urlPanel) { urlPanel = true; send('urlpanel', true); }
+  const b = (sgInput === url ? $('#urlwrap') : sgInput).getBoundingClientRect();
+  Object.assign(sugg.style, { left: b.left + 'px', top: b.bottom + 'px', width: Math.max(b.width, 360) + 'px' });
+  sgDraw(); sugg.classList.add('on');
+};
+function sgDraw() {
+  sugg.innerHTML = sgItems.map((it, i) => `<div class="sg${i === sgSel ? ' sel' : ''}" data-i="${i}"><span class="ic${it.b ? ' b' : ''}">${it.b ? '★' : '↺'}</span>` +
+    `<span class="st">${esc(it.t || host(it.u))}</span><span class="su">${esc(it.u.replace(/^https?:\/\/(www\.)?/, ''))}</span></div>`).join('');
+}
+// Shared keys for any input with suggestions; returns the value to navigate to on Enter.
+function sgKey(e) {
+  if (!sugg.classList.contains('on')) return false;
+  if (e.key === 'ArrowDown') { sgSel = Math.min(sgItems.length - 1, sgSel + 1); sgDraw(); e.preventDefault(); return true; }
+  if (e.key === 'ArrowUp') { sgSel = Math.max(-1, sgSel - 1); sgDraw(); e.preventDefault(); return true; }
+  if (e.key === 'Tab') { const it = sgItems[Math.max(0, sgSel)]; if (it) { e.target.value = it.u; sgAsk(e.target); } e.preventDefault(); return true; }
+  if (e.key === 'Escape') { sgHide(); return false; }
+  return false;
+}
+const sgPick = (input) => (sgSel >= 0 && sgItems[sgSel] ? sgItems[sgSel].u : input.value);
+sugg.addEventListener('pointerdown', (e) => {
+  const it = e.target.closest('.sg'); if (!it || !sgInput) return;
+  e.preventDefault();
+  const u = sgItems[+it.dataset.i].u, inp = sgInput;
+  sgHide();
+  if (inp === url) { send('go', u); url.blur(); } else send('go', [+inp.dataset.id, u]);
+});
+url.addEventListener('input', () => sgAsk(url));
+url.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== url) sgHide(); }, 0));
+panesEl.addEventListener('input', (e) => { const q = e.target.closest('.hp input'); if (q) sgAsk(q); });
+$('#star').onclick = () => send('bookmark');
 
 // ── window chrome ──
 $('#bar').addEventListener('mousedown', (e) => {
@@ -1238,6 +1341,7 @@ document.addEventListener('keydown', (e) => {
   else if (c && code === 'KeyW') m = 'close';
   else if (c && code === 'KeyL') { ultra.focusUrl(); e.preventDefault(); return; }
   else if (c && code === 'KeyK') { if (ovOn) closeOv(null); else send('overview', true); e.preventDefault(); return; }
+  else if (c && !e.shiftKey && !e.altKey && code === 'KeyD') { send('bookmark'); e.preventDefault(); return; }
   else if (c && code === 'Comma') { if (cfgOn) closeCfg(); else send('settings', true); e.preventDefault(); return; }
   else if (k === 'escape' && cfgOn) { closeCfg(); e.preventDefault(); return; }
   else if (tourOn && !c && !e.altKey && (k === 'escape' || k === 'arrowright' || k === 'arrowleft' || k === 'enter')) {
@@ -1260,16 +1364,19 @@ document.addEventListener('keydown', (e) => {
 const tickClock = () => setText($('#clock'), new Date().toTimeString().slice(0, 5));
 tickClock(); setInterval(tickClock, 15000);
 
-// ── swirling ascii background ──
-// Contour bands of a domain-warped value-noise field. The expensive noise is
-// computed once per resize; animating only shifts the band phase, so a frame
-// is a cheap loop over the few cells that can ever be lit.
+// ── animated backgrounds: swirl, matrix rain, starfield, drifting gradient ──
+// Each is drawn on one canvas, only animates while a home pane or panel is visible,
+// and otherwise holds a single static frame. Glyphs come from a pre-rendered atlas.
 const bg = (() => {
   const cv = $('#bg'), cx = cv.getContext('2d', { alpha: false });
   const GL = 'abcdef0123456789ghijklmnopqrstuvwxyz0123456789';
-  const CW = 7, LH = 14, LV = 7, BAND = 0.32, FREQ = 3.4, FPS_MS = 90;
-  let W = 0, H = 0, dpr = 1, phase = 0, frame = 0, running = false, last = 0, enabled = !SPEED && (CFG0.bgmode || 'swirl') === 'swirl';
+  const CW = 7, LH = 14, LV = 7, BAND = 0.32, FREQ = 3.4;
+  const FPS = { swirl: 90, matrix: 70, stars: 33, gradient: 110 };
+  const CANVAS = ['swirl', 'matrix', 'stars', 'gradient'];
+  let mode = CANVAS.includes(CFG0.bgmode) ? CFG0.bgmode : 'swirl';
+  let W = 0, H = 0, dpr = 1, phase = 0, frame = 0, running = false, last = 0, enabled = !SPEED && CANVAS.includes(CFG0.bgmode || 'swirl');
   let cells = null, F = null, M = null, G = null, atlas = null, tint = '190,190,190', fill = '#141414', bright = 1;
+  let drops = null, speeds = null, stars = null, gt = 0;
   const hash = (x, y) => { let h = (x * 374761393 + y * 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
   const sm = (v) => v * v * (3 - 2 * v);
   function vn(x, y) {
@@ -1277,7 +1384,8 @@ const bg = (() => {
     const a = hash(xi, yi), b = hash(xi + 1, yi), c = hash(xi, yi + 1), d = hash(xi + 1, yi + 1);
     return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
   }
-  function compute() {
+  const fillRGB = () => { const h = fill.replace('#', ''); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)).join(','); };
+  function computeSwirl() {
     const cols = Math.ceil(W / CW), rows = Math.ceil(H / LH);
     const idx = [], fs = [], ms = [], gs = [];
     for (let r = 0; r < rows; r++) {
@@ -1302,33 +1410,105 @@ const bg = (() => {
     const a = atlas.getContext('2d');
     a.setTransform(dpr, 0, 0, dpr, 0, 0);
     a.font = '10px Consolas, "Cascadia Mono", monospace'; a.textBaseline = 'top';
+    const boost = mode === 'matrix' ? 3 : 1;
     for (let l = 0; l < LV; l++) {
-      a.fillStyle = `rgba(${tint},${Math.min(1, (0.045 + l * 0.038) * bright).toFixed(3)})`;
+      a.fillStyle = `rgba(${tint},${Math.min(1, (0.045 + l * 0.038) * bright * boost).toFixed(3)})`;
       for (let g = 0; g < GL.length; g++) a.fillText(GL[g], g * CW, l * LH);
     }
   }
-  function draw() {
+  const glyph = (gi, l, x, y) => { const sw = CW * dpr, sh = LH * dpr; cx.drawImage(atlas, gi * sw, l * sh, sw, sh, Math.round(x * dpr), Math.round(y * dpr), sw, sh); };
+  function initMode() {
+    if (mode === 'swirl') computeSwirl();
+    if (mode === 'matrix') {
+      const cols = Math.ceil(W / CW);
+      drops = Float32Array.from({ length: cols }, () => -Math.random() * (H / LH));
+      speeds = Float32Array.from({ length: cols }, () => .25 + Math.random() * .7);
+      cx.setTransform(1, 0, 0, 1, 0, 0); cx.fillStyle = fill; cx.fillRect(0, 0, cv.width, cv.height);
+      for (let i = 0; i < 90; i++) stepMatrix(); // warm up so a static frame already has rain
+    }
+    if (mode === 'stars') {
+      const n = Math.round(W * H / 5000);
+      stars = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) { stars[i * 3] = Math.random() * 2 - 1; stars[i * 3 + 1] = Math.random() * 2 - 1; stars[i * 3 + 2] = Math.random(); }
+    }
+  }
+  function stepMatrix() {
+    cx.setTransform(1, 0, 0, 1, 0, 0);
+    cx.fillStyle = `rgba(${fillRGB()},.16)`; cx.fillRect(0, 0, cv.width, cv.height);
+    const rows = H / LH;
+    for (let c = 0; c < drops.length; c++) {
+      const y = drops[c];
+      if (y >= 0) {
+        glyph((Math.random() * GL.length) | 0, LV - 1, c * CW, Math.floor(y) * LH);
+        if (y >= 1) glyph((c * 7 + frame) % GL.length, 3, c * CW, (Math.floor(y) - 1) * LH);
+      }
+      drops[c] += speeds[c];
+      if (drops[c] > rows && Math.random() > .97) drops[c] = -Math.random() * 20;
+    }
+  }
+  function drawSwirl() {
     cx.setTransform(1, 0, 0, 1, 0, 0);
     cx.fillStyle = fill; cx.fillRect(0, 0, cv.width, cv.height);
-    const sw = CW * dpr, sh = LH * dpr, n = GL.length;
     for (let k = 0, len = F.length; k < len; k++) {
       const g = (F[k] + phase) % 1;
       if (g > BAND) continue;
       const iv = Math.sin((g / BAND) * Math.PI) * M[k];
       if (iv < 0.12) continue;
-      const seed = G[k], gi = (seed + ((frame + seed) / 40 | 0)) % n, l = Math.min(LV - 1, (iv * LV) | 0);
-      cx.drawImage(atlas, gi * sw, l * sh, sw, sh, Math.round(cells[2 * k] * sw), Math.round(cells[2 * k + 1] * sh), sw, sh);
+      const seed = G[k];
+      glyph((seed + ((frame + seed) / 40 | 0)) % GL.length, Math.min(LV - 1, (iv * LV) | 0), cells[2 * k] * CW, cells[2 * k + 1] * LH);
     }
+  }
+  function drawStars() {
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx.fillStyle = fill; cx.fillRect(0, 0, W, H);
+    const cxp = W / 2, cyp = H / 2, n = stars.length / 3;
+    for (let i = 0; i < n; i++) {
+      const z = stars[i * 3 + 2], x = cxp + stars[i * 3] / z * cxp * .6, y = cyp + stars[i * 3 + 1] / z * cyp * .6;
+      if (x < 0 || x > W || y < 0 || y > H) continue;
+      const a = Math.min(1, (1 - z) * .9 * bright), s = (1 - z) * 2 + .4;
+      cx.fillStyle = `rgba(${tint},${a.toFixed(3)})`; cx.fillRect(x, y, s, s);
+    }
+  }
+  function stepStars() {
+    const n = stars.length / 3;
+    for (let i = 0; i < n; i++) {
+      stars[i * 3 + 2] -= .0035;
+      if (stars[i * 3 + 2] <= .02) { stars[i * 3] = Math.random() * 2 - 1; stars[i * 3 + 1] = Math.random() * 2 - 1; stars[i * 3 + 2] = 1; }
+    }
+  }
+  function drawGradient() {
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx.fillStyle = fill; cx.fillRect(0, 0, W, H);
+    const blob = (px, py, r, a) => {
+      const g = cx.createRadialGradient(px, py, 0, px, py, r);
+      g.addColorStop(0, `rgba(${tint},${Math.min(1, a * bright).toFixed(3)})`); g.addColorStop(1, `rgba(${tint},0)`);
+      cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+    };
+    const R = Math.max(W, H) * .6;
+    blob(W * (.5 + .35 * Math.cos(gt)), H * (.5 + .35 * Math.sin(gt * .8)), R, .16);
+    blob(W * (.5 + .35 * Math.cos(gt * .7 + 2)), H * (.5 + .35 * Math.sin(gt + 1)), R * .8, .1);
+  }
+  function draw() {
+    if (mode === 'swirl') drawSwirl();
+    else if (mode === 'matrix') stepMatrix();
+    else if (mode === 'stars') drawStars();
+    else drawGradient();
   }
   function loop(ts) {
     if (!running) return;
-    if (ts - last >= FPS_MS) { last = ts; phase += 0.006; frame++; draw(); }
+    if (ts - last >= FPS[mode]) {
+      last = ts; frame++;
+      if (mode === 'swirl') phase += 0.006;
+      if (mode === 'stars') stepStars();
+      if (mode === 'gradient') gt += 0.012;
+      draw();
+    }
     requestAnimationFrame(loop);
   }
   function resize() {
     dpr = window.devicePixelRatio || 1; W = innerWidth; H = innerHeight;
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-    buildAtlas(); compute(); draw();
+    buildAtlas(); initMode(); draw();
   }
   let rzT = 0;
   addEventListener('resize', () => { if (!enabled) return; clearTimeout(rzT); rzT = setTimeout(resize, 120); });
@@ -1338,22 +1518,70 @@ const bg = (() => {
       if (on && enabled && !running) { running = true; requestAnimationFrame(loop); }
       else if (!on) running = false;
     },
-    // ULTRASPEED: drop the canvas backing store and every precomputed array.
+    // ULTRASPEED / non-canvas styles: drop the canvas backing store and all state.
     setEnabled(on) {
       if (on === enabled) return;
       enabled = on;
       if (on) { resize(); return; }
-      running = false; cells = F = M = G = atlas = null; cv.width = cv.height = 0;
+      running = false; cells = F = M = G = atlas = drops = speeds = stars = null; cv.width = cv.height = 0;
     },
-    setTint(rgb, bgHex, b) { tint = rgb; fill = bgHex || fill; bright = b || 1; if (enabled && F) { buildAtlas(); draw(); } },
-    bench() { const t = performance.now(); for (let i = 0; i < 20; i++) draw(); const d = (performance.now() - t) / 20;
-      const t2 = performance.now(); compute(); return { drawMs: +d.toFixed(2), computeMs: +(performance.now() - t2).toFixed(1), cells: F.length }; },
+    setMode(m) { if (m === mode || !CANVAS.includes(m)) return; mode = m; if (enabled) resize(); },
+    setTint(rgb, bgHex, b) { tint = rgb; fill = bgHex || fill; bright = b || 1; if (enabled && atlas) { buildAtlas(); if (mode === 'matrix') initMode(); draw(); } },
   };
 })();
 window.__ultraBg = bg;
 THEME = null; applyTheme(cfg());
 
 send('ready');
+
+// ── boot animation: the ULTRA logo assembles out of drifting glyphs ──
+// Pages stay hidden (Rust holds them) until this reports `booted`. Any key or click skips it.
+(() => {
+  if (CFG0.boot === false || SPEED) { send('booted'); return; }
+  const cv = document.createElement('canvas'); cv.id = 'boot'; document.body.appendChild(cv);
+  const g = cv.getContext('2d');
+  const dpr = window.devicePixelRatio || 1, W = innerWidth, H = innerHeight;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const lines = $('#logo').content.textContent.split('\n').filter((l) => l.trim());
+  const CW = 9, LH = 14, GL = 'abcdef0123456789#$%&*+=<>/\\|';
+  const ox = (W - Math.max(...lines.map((l) => l.length)) * CW) / 2, oy = (H - lines.length * LH) / 2;
+  const parts = [];
+  lines.forEach((l, r) => [...l].forEach((ch, c) => {
+    if (ch === ' ') return;
+    const a = Math.random() * Math.PI * 2, d = Math.max(W, H) * (.35 + Math.random() * .4);
+    parts.push({ ch, tx: ox + c * CW, ty: oy + r * LH, sx: W / 2 + Math.cos(a) * d, sy: H / 2 + Math.sin(a) * d, delay: Math.random() * .25 });
+  }));
+  const css = getComputedStyle(document.documentElement);
+  const acc = css.getPropertyValue('--acc').trim() || '#9fe3d0', bgc = css.getPropertyValue('--bg').trim() || '#141414';
+  const ASSEMBLE = 850, HOLD = 220, FADE = 280, t0 = performance.now();
+  let done = false;
+  const finish = () => {
+    if (done) return; done = true;
+    cv.style.transition = `opacity ${FADE}ms`; cv.style.opacity = '0';
+    send('booted');
+    setTimeout(() => cv.remove(), FADE + 20);
+    removeEventListener('keydown', finish, true); removeEventListener('pointerdown', finish, true);
+  };
+  addEventListener('keydown', finish, true); addEventListener('pointerdown', finish, true);
+  g.font = '13px Consolas, "Cascadia Mono", monospace'; g.textBaseline = 'top';
+  (function frame(now) {
+    if (done) return;
+    const t = (now - t0) / ASSEMBLE;
+    g.fillStyle = bgc; g.fillRect(0, 0, W, H);
+    for (const p of parts) {
+      const k = Math.min(1, Math.max(0, (t - p.delay) / (1 - .25)));
+      const e = 1 - Math.pow(1 - k, 3);
+      g.globalAlpha = .15 + .85 * e;
+      g.fillStyle = k >= 1 ? '#e6e6e6' : acc;
+      const ch = k > .8 ? p.ch : GL[(Math.random() * GL.length) | 0];
+      g.fillText(ch, p.sx + (p.tx - p.sx) * e, p.sy + (p.ty - p.sy) * e);
+    }
+    g.globalAlpha = 1;
+    if (now - t0 > ASSEMBLE + HOLD) { finish(); return; }
+    requestAnimationFrame(frame);
+  })(t0);
+})();
 })();
 </script>
 </body>
