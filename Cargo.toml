@@ -1,0 +1,21 @@
+[package]
+name = "ultra"
+version = "0.2.0"
+edition = "2021"
+description = "ULTRA — a minimalist, tiling, memory-frugal browser"
+
+[dependencies]
+wry = { version = "0.57.0", features = ["devtools"] }
+tao = "0.37.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+webview2-com = "0.39"
+windows-core = "0.62"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
