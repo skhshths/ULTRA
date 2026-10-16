@@ -65,6 +65,9 @@ body.barsfx canvas#barsfx { display: block; }
 #urlwrap .p { color: var(--acc); transition: color var(--fast); }
 #urlwrap.insecure { border-color: #5a2a2a; }
 #urlwrap.insecure .p { color: var(--bad); }
+#urlwrap.find .p { color: var(--acc); }
+#urlwrap.find.miss { border-color: #5a2a2a; }
+#urlwrap.find.miss .p { color: var(--bad); }
 #url { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--fg); font: inherit; }
 input::selection { background: var(--acc-sel); }
 .chip { color: var(--dim); font-size: 11px; white-space: nowrap; transition: color var(--fast); }
@@ -390,6 +393,12 @@ body.bmbar #bmbar { display: flex; }
 .pf.on { box-shadow: 0 0 calc(var(--pulse) * 18px) color-mix(in srgb, var(--acc) calc(var(--pulse) * 55%), transparent); }
 .logo { text-shadow: 0 0 calc(var(--pulse) * 12px) var(--acc); }
 
+/* settings: keyboard shortcuts reference */
+.keylist { padding: 2px 16px 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 22px; }
+.kg h4 { color: var(--mid); font-size: 10px; font-weight: 400; letter-spacing: .25em; margin: 10px 0 4px; }
+.kr { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-size: 11px; color: #6a6a6a; border-bottom: 1px solid #1b1b1b; }
+.kr kbd { flex: 0 0 auto; }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation: none !important; } }
 </style>
 </head>
@@ -473,6 +482,8 @@ body.bmbar #bmbar { display: flex; }
   <div class="sec">IMPORT</div>
   <div class="row"><div><div class="name">import from chrome</div><div class="desc" id="imp-desc">copies your Google Chrome bookmarks into ULTRA (they show up in the bookmarks bar).<br>chrome can stay open; nothing is changed in chrome.</div></div>
     <div class="ctl"><button class="run" id="imp-chrome">import bookmarks</button></div></div>
+  <div class="sec" id="keys-sec">KEYBOARD SHORTCUTS</div>
+  <div class="keylist" id="keylist"></div>
   <div class="sec">HELP</div>
   <div class="row"><div><div class="name">tutorial</div><div class="desc">show the tour every time ULTRA starts.</div></div>
     <div class="ctl"><button class="run" id="run-tour">run now</button><div class="sw" id="sw-tour"></div></div></div>
@@ -518,6 +529,7 @@ const $ = (s) => document.querySelector(s);
 const send = (cmd, arg) => { try { window.ipc.postMessage(JSON.stringify({ cmd, arg })); } catch (_) {} };
 const CFG0 = window.__ultraCfg || {};
 let S = { tabs: [], a: 0, panes: [], splits: [], live: 0, ws: 0, wss: [0], ps: {}, cfg: CFG0 };
+let findOn = false, findT = 0; // find-in-page mode of the address bar (see below)
 let ovOn = false, cfgOn = false, palOn = false, ovSel = 0, ovList = [], splitSig = '', pendingFocus = null, lastWs = 0;
 let SPEED = !!CFG0.ultraspeed;
 document.body.classList.toggle('speed', SPEED);
@@ -595,10 +607,10 @@ window.ultra = {
     if (s.gate) setLock(cfg().haspass ? 'unlock' : 'create'); else if (lockMode && lockMode !== 'change') setLock(null);
     setText($('#priv-pass'), cfg().haspass ? 'change password' : 'set password');
     const cur = s.tabs[s.a] || { s: 'home', u: '' };
-    const url = $('#url'); if (document.activeElement !== url) url.value = cur.s === 'home' ? '' : cur.u;
+    const url = $('#url'); if (document.activeElement !== url && !findOn) url.value = cur.s === 'home' ? '' : cur.u;
     const insecure = cur.s !== 'home' && /^http:/i.test(cur.u) && !/^http:\/\/(localhost|127\.)/i.test(cur.u);
     $('#urlwrap').classList.toggle('insecure', insecure);
-    setText($('#urlwrap .p'), insecure ? '⚠' : '›');
+    if (!findOn) setText($('#urlwrap .p'), insecure ? '⚠' : '›');
     $('#nback').classList.toggle('off', !(s.nav || [])[0]);
     $('#nfwd').classList.toggle('off', !(s.nav || [])[1]);
     $('#star').classList.toggle('on', !!s.bm); setText($('#star'), s.bm ? '★' : '☆');
@@ -715,6 +727,25 @@ $('#r-bmbar').onclick = () => toggle('bmbar', true);
 $('#r-bars').onclick = () => toggle('bars', false);
 $('#hist-clear').onclick = () => send('clearhistory');
 $('#imp-chrome').onclick = () => send('importchrome');
+// ── settings: every keyboard shortcut, in this platform's key names ──
+(() => {
+  const MAC = !!window.__ultraMac, M = MAC ? 'cmd' : 'ctrl', A = MAC ? 'opt' : 'alt';
+  const groups = [
+    ['TABS', [[`${M}+t`, 'new tab'], [`${M}+w`, 'close tab'], [`${M}+shift+t`, 'reopen closed tab'], [`${M}+1‥8`, 'jump to tab'],
+      [`${M}+9`, 'last tab'], [`${M}+tab`, 'next tab'], [`${M}+shift+tab`, 'previous tab'], ['middle-click', 'close a tab'], ['right-click', 'put a tab to sleep']]],
+    ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], [`${M}+shift+1‥9`, 'pull a tab to cursor'], [`${M}+shift+w`, 'close pane at cursor'],
+      [`${M}+shift+r`, 'blank tab at cursor'], [`${M}+shift+f`, 'zoom pane at cursor'], [`${M}+${A}+arrows`, 'move focus between panes'],
+      ['click', 'focus a pane'], ['drag a gap', 'resize panes']]],
+    ['WORKSPACES', [[`${M}+${A}+1‥9`, 'switch workspace'], [`${M}+${A}+shift+1‥9`, 'send tab to workspace'],
+      [`${M}+${A}+0`, 'private workspace'], [`${M}+${A}+l`, 'lock private workspace']]],
+    ['PAGES', [[`${M}+l`, 'address bar'], ['just type', 'search from anywhere'], [MAC ? 'cmd+[ / cmd+]' : 'alt+← / alt+→', 'back / forward'],
+      [`${M}+f`, 'find in page'], [`${M}+d`, 'bookmark page'], [`${M}+r`, 'reload']]],
+    ['PANELS', [[`${M}+k`, 'all tabs overview'], [`${M}+shift+p`, 'command palette'], [`${M}+,`, 'settings']]],
+  ];
+  $('#keylist').innerHTML = groups.map(([g, rows]) => `<div class="kg"><h4>${g}</h4>` +
+    rows.map(([k, d]) => `<div class="kr"><span>${esc(d)}</span><kbd>${esc(k)}</kbd></div>`).join('') + '</div>').join('');
+})();
+
 ultra.imported = (msg) => {
   setText($('#imp-desc'), msg);
   const b = document.querySelector('#t-import'); if (b) { b.textContent = '✓ done'; b.disabled = true; }
@@ -886,6 +917,7 @@ const CMDS = [
   { k: 'bookmark', d: 'bookmark / unbookmark this page (ctrl+d)', run: () => send('bookmark') },
   { k: 'clear history', d: 'forget every page visited', run: () => send('clearhistory') },
   { k: 'import chrome', d: 'copy your Google Chrome bookmarks into ULTRA', run: () => send('importchrome') },
+  { k: 'shortcuts', d: 'every keyboard shortcut (in settings)', run: () => { send('settings', true); setTimeout(() => $('#keys-sec').scrollIntoView({ block: 'start' }), 60); } },
   { k: 'layout save', a: '<name>', d: "save this workspace's layout and tabs", run: (x) => x && send('layout', ['save', x]) },
   { k: 'layout load', a: '<name>', d: 'open a saved layout in a free workspace', opts: () => S.layouts || [], run: (x) => x && send('layout', ['load', x]) },
   { k: 'layout delete', a: '<name>', d: 'forget a saved layout', opts: () => S.layouts || [], run: (x) => x && send('layout', ['delete', x]) },
@@ -1420,7 +1452,26 @@ $('#plus').onclick = () => send('new');
 
 // ── address bar ──
 const url = $('#url');
+// Find in page (ctrl+f) borrows the address bar: type to search, enter / shift+enter step, esc ends.
+ultra.find = (last) => {
+  findOn = true; sgHide();
+  $('#urlwrap').classList.add('find'); $('#urlwrap').classList.remove('miss', 'insecure');
+  setText($('#urlwrap .p'), '⌕'); url.placeholder = 'find in page';
+  url.value = last || ''; url.focus(); url.select();
+};
+ultra.found = (f) => { if (findOn) $('#urlwrap').classList.toggle('miss', !f && !!url.value); };
+function endFind() {
+  if (!findOn) return;
+  findOn = false; clearTimeout(findT);
+  $('#urlwrap').classList.remove('find', 'miss'); url.placeholder = '';
+  ultra.render(S);
+}
 url.addEventListener('keydown', (e) => {
+  if (findOn) {
+    if (e.key === 'Enter') { e.preventDefault(); send('findtext', [url.value, e.shiftKey]); }
+    else if (e.key === 'Escape') { e.preventDefault(); url.blur(); send('findclose'); }
+    return;
+  }
   if (sgKey(e)) return;
   if (e.key === 'Enter') { const v = sgPick(url); sgHide(); send('go', v); url.blur(); }
   else if (e.key === 'Escape') { sgHide(); url.blur(); ultra.render(S); send('content'); }
@@ -1474,10 +1525,13 @@ sugg.addEventListener('pointerdown', (e) => {
   sgHide();
   if (inp === url) { send('go', u); url.blur(); } else send('go', [+inp.dataset.id, u]);
 });
-url.addEventListener('input', () => { sgTyped = true; sgAsk(url); });
+url.addEventListener('input', () => {
+  if (findOn) { clearTimeout(findT); findT = setTimeout(() => send('findtext', [url.value, false]), 120); return; }
+  sgTyped = true; sgAsk(url);
+});
 // Moving focus to another box closes any list and waits for fresh typing.
 document.addEventListener('focusin', (e) => { if (e.target !== sgInput) { sgHide(); sgTyped = false; sgInput = null; } });
-url.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== url) sgHide(); }, 0));
+url.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== url) { sgHide(); endFind(); } }, 0));
 panesEl.addEventListener('input', (e) => { const q = e.target.closest('.hp input'); if (q) { sgTyped = true; sgAsk(q); } });
 $('#star').onclick = () => send('bookmark');
 $('#nback').onclick = () => send('back');
@@ -1540,6 +1594,8 @@ document.addEventListener('keydown', (e) => {
   else if (c && code === 'KeyW') m = 'close';
   else if (c && code === 'KeyL') { ultra.focusUrl(); e.preventDefault(); return; }
   else if (c && code === 'KeyK') { if (ovOn) closeOv(null); else send('overview', true); e.preventDefault(); return; }
+  else if (c && !e.shiftKey && !e.altKey && code === 'KeyF') { send('find'); e.preventDefault(); return; }
+  else if (c && e.shiftKey && !e.altKey && code === 'KeyR') { send('blankat'); e.preventDefault(); return; }
   else if (c && !e.shiftKey && !e.altKey && code === 'KeyD') { send('bookmark'); e.preventDefault(); return; }
   else if (c && code === 'Comma') { if (cfgOn) closeCfg(); else send('settings', true); e.preventDefault(); return; }
   else if (k === 'escape' && cfgOn) { closeCfg(); e.preventDefault(); return; }

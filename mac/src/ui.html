@@ -397,6 +397,12 @@ body.bmbar #bmbar { display: flex; }
 .pf.on { box-shadow: 0 0 calc(var(--pulse) * 18px) color-mix(in srgb, var(--acc) calc(var(--pulse) * 55%), transparent); }
 .logo { text-shadow: 0 0 calc(var(--pulse) * 12px) var(--acc); }
 
+/* settings: keyboard shortcuts reference */
+.keylist { padding: 2px 16px 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 22px; }
+.kg h4 { color: var(--mid); font-size: 10px; font-weight: 400; letter-spacing: .25em; margin: 10px 0 4px; }
+.kr { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-size: 11px; color: #6a6a6a; border-bottom: 1px solid #1b1b1b; }
+.kr kbd { flex: 0 0 auto; }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation: none !important; } }
 </style>
 </head>
@@ -480,6 +486,8 @@ body.bmbar #bmbar { display: flex; }
   <div class="sec">IMPORT</div>
   <div class="row"><div><div class="name">import from chrome</div><div class="desc" id="imp-desc">copies your Google Chrome bookmarks into ULTRA (they show up in the bookmarks bar).<br>chrome can stay open; nothing is changed in chrome.</div></div>
     <div class="ctl"><button class="run" id="imp-chrome">import bookmarks</button></div></div>
+  <div class="sec" id="keys-sec">KEYBOARD SHORTCUTS</div>
+  <div class="keylist" id="keylist"></div>
   <div class="sec">HELP</div>
   <div class="row"><div><div class="name">tutorial</div><div class="desc">show the tour every time ULTRA starts.</div></div>
     <div class="ctl"><button class="run" id="run-tour">run now</button><div class="sw" id="sw-tour"></div></div></div>
@@ -725,6 +733,25 @@ $('#r-bmbar').onclick = () => toggle('bmbar', true);
 $('#r-bars').onclick = () => toggle('bars', false);
 $('#hist-clear').onclick = () => send('clearhistory');
 $('#imp-chrome').onclick = () => send('importchrome');
+// ── settings: every keyboard shortcut, in this platform's key names ──
+(() => {
+  const MAC = !!window.__ultraMac, M = MAC ? 'cmd' : 'ctrl', A = MAC ? 'opt' : 'alt';
+  const groups = [
+    ['TABS', [[`${M}+t`, 'new tab'], [`${M}+w`, 'close tab'], [`${M}+shift+t`, 'reopen closed tab'], [`${M}+1‥8`, 'jump to tab'],
+      [`${M}+9`, 'last tab'], [`${M}+tab`, 'next tab'], [`${M}+shift+tab`, 'previous tab'], ['middle-click', 'close a tab'], ['right-click', 'put a tab to sleep']]],
+    ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], [`${M}+shift+1‥9`, 'pull a tab to cursor'], [`${M}+shift+w`, 'close pane at cursor'],
+      [`${M}+shift+r`, 'blank tab at cursor'], [`${M}+shift+f`, 'zoom pane at cursor'], [`${M}+${A}+arrows`, 'move focus between panes'],
+      ['click', 'focus a pane'], ['drag a gap', 'resize panes']]],
+    ['WORKSPACES', [[`${M}+${A}+1‥9`, 'switch workspace'], [`${M}+${A}+shift+1‥9`, 'send tab to workspace'],
+      [`${M}+${A}+0`, 'private workspace'], [`${M}+${A}+l`, 'lock private workspace']]],
+    ['PAGES', [[`${M}+l`, 'address bar'], ['just type', 'search from anywhere'], [MAC ? 'cmd+[ / cmd+]' : 'alt+← / alt+→', 'back / forward'],
+      [`${M}+f`, 'find in page'], [`${M}+d`, 'bookmark page'], [`${M}+r`, 'reload']]],
+    ['PANELS', [[`${M}+k`, 'all tabs overview'], [`${M}+shift+p`, 'command palette'], [`${M}+,`, 'settings']]],
+  ];
+  $('#keylist').innerHTML = groups.map(([g, rows]) => `<div class="kg"><h4>${g}</h4>` +
+    rows.map(([k, d]) => `<div class="kr"><span>${esc(d)}</span><kbd>${esc(k)}</kbd></div>`).join('') + '</div>').join('');
+})();
+
 ultra.imported = (msg) => {
   setText($('#imp-desc'), msg);
   const b = document.querySelector('#t-import'); if (b) { b.textContent = '✓ done'; b.disabled = true; }
@@ -896,6 +923,7 @@ const CMDS = [
   { k: 'bookmark', d: 'bookmark / unbookmark this page (cmd+d)', run: () => send('bookmark') },
   { k: 'clear history', d: 'forget every page visited', run: () => send('clearhistory') },
   { k: 'import chrome', d: 'copy your Google Chrome bookmarks into ULTRA', run: () => send('importchrome') },
+  { k: 'shortcuts', d: 'every keyboard shortcut (in settings)', run: () => { send('settings', true); setTimeout(() => $('#keys-sec').scrollIntoView({ block: 'start' }), 60); } },
   { k: 'layout save', a: '<name>', d: "save this workspace's layout and tabs", run: (x) => x && send('layout', ['save', x]) },
   { k: 'layout load', a: '<name>', d: 'open a saved layout in a free workspace', opts: () => S.layouts || [], run: (x) => x && send('layout', ['load', x]) },
   { k: 'layout delete', a: '<name>', d: 'forget a saved layout', opts: () => S.layouts || [], run: (x) => x && send('layout', ['delete', x]) },
@@ -1578,6 +1606,7 @@ document.addEventListener('keydown', (e) => {
   else if (c && code === 'KeyK') { if (ovOn) closeOv(null); else send('overview', true); e.preventDefault(); return; }
   else if (c && !e.shiftKey && !e.altKey && code === 'KeyD') { send('bookmark'); e.preventDefault(); return; }
   else if (c && !e.shiftKey && !e.altKey && code === 'KeyF') { send('find'); e.preventDefault(); return; }
+  else if (c && e.shiftKey && !e.altKey && code === 'KeyR') { send('blankat'); e.preventDefault(); return; }
   else if (c && code === 'Comma') { if (cfgOn) closeCfg(); else send('settings', true); e.preventDefault(); return; }
   else if (k === 'escape' && cfgOn) { closeCfg(); e.preventDefault(); return; }
   else if (tourOn && !c && !e.altKey && (k === 'escape' || k === 'arrowright' || k === 'arrowleft' || k === 'enter')) {

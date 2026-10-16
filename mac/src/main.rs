@@ -538,6 +538,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('E')) => "mvnew".into(),
         (false, true, None, Some('W')) => "closeat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
+        (false, true, None, Some('R')) => "blankat".into(),
         (false, false, None, Some('T')) => "new".into(),
         (false, false, None, Some('W')) => "close".into(),
         (false, false, None, Some('L')) => "focusurl".into(),
@@ -2457,6 +2458,14 @@ impl App {
                     self.lib.suggest(&q, 8).into_iter().map(|(u, t, b)| json!({ "u": u, "t": t, "b": b })).collect();
                 let _ = self.ui.evaluate_script(&format!("ultra.suggestions({})", json!({ "q": q, "items": items })));
             }
+            "blankat" => {
+                // cmd+shift+r: the pane under the cursor goes back to a blank tab.
+                let id = self.pane_under_cursor().unwrap_or(self.focus);
+                if let Some(i) = self.idx(id) {
+                    self.set_focus(id);
+                    self.navigate(i, HOME);
+                }
+            }
             "importchrome" => {
                 // Onboarding from Chrome: bookmarks land in the bookmarks bar right away.
                 let msg = match self.lib.import_chrome() {
@@ -2727,7 +2736,9 @@ impl App {
                 }
                 match msg.as_str() {
                     "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
-                    | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" => self.command(&msg, &Value::Null),
+                    | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" => {
+                        self.command(&msg, &Value::Null)
+                    }
                     _ => {}
                 }
             }
@@ -2855,7 +2866,7 @@ impl App {
         } else if matches!(
             msg,
             "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat"
-                | "zoom" | "lock" | "bookmark" | "reader"
+                | "zoom" | "lock" | "bookmark" | "reader" | "blankat"
         ) {
             self.command(msg, &Value::Null);
         }

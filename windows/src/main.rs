@@ -139,6 +139,8 @@ enum UserEvent {
     Heap(u64, String),
     /// Next slideshow image, loaded off-thread: (data url, file name).
     Slide(String, String),
+    /// Find-in-page result from the focused page.
+    Found(bool),
     /// A WebView2 process died: (slot, 0 = the chrome UI; failure kind).
     Failed(u64, i32),
 }
@@ -361,6 +363,8 @@ struct App {
     last_blocked: u64,
     /// After the window is activated (alt+tab), check where keyboard focus landed.
     refocus_at: Option<Instant>,
+    /// Last text searched with ctrl+f.
+    find_text: String,
     /// Audio-reactive visuals: mixer meters for the WebView2 process tree.
     meter: audio::Meter,
     engine_pids: HashSet<u32>,
@@ -541,6 +545,35 @@ fn watch_failures(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
     }
 }
 
+/// Virtual-key code for the keys ULTRA's shortcuts use (letters, digits, arrows, tab, comma).
+fn window_vk(k: tao::keyboard::KeyCode) -> Option<u32> {
+    use tao::keyboard::KeyCode as K;
+    let letters = [
+        K::KeyA, K::KeyB, K::KeyC, K::KeyD, K::KeyE, K::KeyF, K::KeyG, K::KeyH, K::KeyI, K::KeyJ, K::KeyK, K::KeyL, K::KeyM,
+        K::KeyN, K::KeyO, K::KeyP, K::KeyQ, K::KeyR, K::KeyS, K::KeyT, K::KeyU, K::KeyV, K::KeyW, K::KeyX, K::KeyY, K::KeyZ,
+    ];
+    let digits = [K::Digit0, K::Digit1, K::Digit2, K::Digit3, K::Digit4, K::Digit5, K::Digit6, K::Digit7, K::Digit8, K::Digit9];
+    let pad = [K::Numpad0, K::Numpad1, K::Numpad2, K::Numpad3, K::Numpad4, K::Numpad5, K::Numpad6, K::Numpad7, K::Numpad8, K::Numpad9];
+    if let Some(i) = letters.iter().position(|x| *x == k) {
+        return Some(0x41 + i as u32);
+    }
+    if let Some(i) = digits.iter().position(|x| *x == k) {
+        return Some(0x30 + i as u32);
+    }
+    if let Some(i) = pad.iter().position(|x| *x == k) {
+        return Some(0x60 + i as u32);
+    }
+    Some(match k {
+        K::ArrowLeft => 0x25,
+        K::ArrowUp => 0x26,
+        K::ArrowRight => 0x27,
+        K::ArrowDown => 0x28,
+        K::Tab => 0x09,
+        K::Comma => 0xBC,
+        _ => return None,
+    })
+}
+
 /// Map a Ctrl/Alt key combo to an ULTRA command (the same messages pages used to send).
 fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
     if vk == 0x78 && !ctrl && !shift && !alt {
@@ -575,6 +608,8 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('E')) => "mvnew".into(),
         (false, true, None, Some('W')) => "closeat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
+        (false, true, None, Some('R')) => "blankat".into(),
+        (false, false, None, Some('F')) => "find".into(),
         (false, false, None, Some('T')) => "new".into(),
         (false, false, None, Some('W')) => "close".into(),
         (false, false, None, Some('L')) => "focusurl".into(),
@@ -1993,6 +2028,58 @@ impl App {
         }
     }
 
+    /// One ULTRA shortcut, whether it came from a page (native accelerator keys) or from the
+    /// bare window when no webview had keyboard focus.
+    fn shortcut_msg(&mut self, msg: &str) {
+            let digit = |p: &str| msg.strip_prefix(p).and_then(|k| k.parse::<u64>().ok()).filter(|k| (1..=9).contains(k));
+            if let Some(k) = digit("tab:") {
+                if k == 9 {
+                    self.command("last", &Value::Null);
+                } else {
+                    self.command("slot", &json!(k - 1));
+                }
+                return;
+            }
+            if let Some(k) = digit("mv:") {
+                self.command("mv", &json!(k - 1));
+                return;
+            }
+            if msg == "ws:0" {
+                self.command("ws", &json!(PRIVATE_WS));
+                return;
+            }
+            if let Some(k) = digit("ws:") {
+                self.command("ws", &json!(k - 1));
+                return;
+            }
+            if let Some(k) = digit("tows:") {
+                self.command("tows", &json!(k - 1));
+                return;
+            }
+            if let Some(c) = msg.strip_prefix("type:") {
+                let mut it = c.chars();
+                if let (Some(ch), None) = (it.next(), it.next()) {
+                    if self.cfg.typeahead && ch.is_alphanumeric() {
+                        self.command("type", &json!(c));
+                    }
+                }
+                return;
+            }
+            if let Some(d) = msg.strip_prefix("dir:") {
+                if matches!(d, "l" | "r" | "u" | "d") {
+                    self.focus_dir(d);
+                }
+                return;
+            }
+            match msg {
+                "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
+                | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "find" => {
+                    self.command(msg, &Value::Null)
+                }
+                _ => {}
+            }
+    }
+
     /// Self-healing when a WebView2 process dies.
     fn on_failed(&mut self, slot: u64, kind: COREWEBVIEW2_PROCESS_FAILED_KIND) {
         if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED {
@@ -2484,6 +2571,40 @@ impl App {
                     self.lib.suggest(&q, 8).into_iter().map(|(u, t, b)| json!({ "u": u, "t": t, "b": b })).collect();
                 let _ = self.ui.evaluate_script(&format!("ultra.suggestions({})", json!({ "q": q, "items": items })));
             }
+            "blankat" => {
+                // ctrl+shift+r: the pane under the cursor goes back to a blank tab.
+                let id = self.pane_under_cursor().unwrap_or(self.focus);
+                if let Some(i) = self.idx(id) {
+                    self.set_focus(id);
+                    self.navigate(i, HOME);
+                }
+            }
+            "find" => {
+                // ULTRA's find (no WebView2 popup): the address bar becomes a find box.
+                if self.tabs.get(self.cur()).is_some_and(|t| t.view.is_some()) {
+                    let _ = self.ui.focus();
+                    let _ = self.ui.evaluate_script(&format!("ultra.find({})", json!(self.find_text)));
+                } else {
+                    self.toast("nothing to find in here");
+                }
+            }
+            "findtext" => {
+                let (text, back) = (arg[0].as_str().unwrap_or("").to_string(), arg[1].as_bool().unwrap_or(false));
+                self.find_text = text.clone();
+                if let (false, Some(v)) = (text.is_empty(), self.tabs.get(self.cur()).and_then(|t| t.view.as_ref())) {
+                    let proxy = self.proxy.clone();
+                    let js = format!("window.find({}, false, {back}, true)", json!(text));
+                    let _ = v.evaluate_script_with_callback(&js, move |r| {
+                        let _ = proxy.send_event(UserEvent::Found(r.trim() == "true"));
+                    });
+                }
+            }
+            "findclose" => {
+                self.with_active(|v| {
+                    let _ = v.evaluate_script("getSelection().removeAllRanges()");
+                });
+                self.focus_active();
+            }
             "importchrome" => {
                 // Onboarding from Chrome: bookmarks land in the bookmarks bar right away.
                 let msg = match self.lib.import_chrome() {
@@ -2724,51 +2845,7 @@ impl App {
                     self.page_notice(&msg);
                     return;
                 }
-                let digit = |p: &str| msg.strip_prefix(p).and_then(|k| k.parse::<u64>().ok()).filter(|k| (1..=9).contains(k));
-                if let Some(k) = digit("tab:") {
-                    if k == 9 {
-                        self.command("last", &Value::Null);
-                    } else {
-                        self.command("slot", &json!(k - 1));
-                    }
-                    return;
-                }
-                if let Some(k) = digit("mv:") {
-                    self.command("mv", &json!(k - 1));
-                    return;
-                }
-                if msg == "ws:0" {
-                    self.command("ws", &json!(PRIVATE_WS));
-                    return;
-                }
-                if let Some(k) = digit("ws:") {
-                    self.command("ws", &json!(k - 1));
-                    return;
-                }
-                if let Some(k) = digit("tows:") {
-                    self.command("tows", &json!(k - 1));
-                    return;
-                }
-                if let Some(c) = msg.strip_prefix("type:") {
-                    let mut it = c.chars();
-                    if let (Some(ch), None) = (it.next(), it.next()) {
-                        if self.cfg.typeahead && ch.is_alphanumeric() {
-                            self.command("type", &json!(c));
-                        }
-                    }
-                    return;
-                }
-                if let Some(d) = msg.strip_prefix("dir:") {
-                    if matches!(d, "l" | "r" | "u" | "d") {
-                        self.focus_dir(d);
-                    }
-                    return;
-                }
-                match msg.as_str() {
-                    "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
-                    | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" => self.command(&msg, &Value::Null),
-                    _ => {}
-                }
+                self.shortcut_msg(&msg);
             }
             UserEvent::Title(slot, title) => {
                 if let Some(i) = self.idx_slot(slot) {
@@ -2800,6 +2877,11 @@ impl App {
                     if !started {
                         self.remember(i);
                         self.apply_zaps(i);
+                        // A navigation started from the address bar can leave keyboard focus on
+                        // the bare window; once the page is in, make sure keys reach it.
+                        if self.tabs[i].id == self.focus && self.win_focused {
+                            self.restore_focus();
+                        }
                     }
                     self.sync();
                 }
@@ -2810,6 +2892,9 @@ impl App {
                 self.open_in(ws, url);
             }
             UserEvent::Procs(p) => self.on_procs(p),
+            UserEvent::Found(f) => {
+                let _ = self.ui.evaluate_script(&format!("ultra.found({f})"));
+            }
             UserEvent::Slide(data, name) => {
                 self.slide_loading = false;
                 if !data.is_empty() && self.slideshow_on() {
@@ -2999,6 +3084,7 @@ fn main() {
         timing: None,
         last_blocked: 0,
         refocus_at: None,
+        find_text: String::new(),
         meter: audio::Meter::default(),
         engine_pids: HashSet::new(),
         pids_dirty: false,
@@ -3091,6 +3177,19 @@ fn main() {
                     app.save_session();
                     *flow = ControlFlow::Exit;
                 }
+                WindowEvent::KeyboardInput { event, .. } if event.state == tao::event::ElementState::Pressed => {
+                    // Keys reach the bare window only when no webview holds focus (e.g. right
+                    // after an address-bar search): still honour ULTRA's shortcuts, then hand
+                    // focus back to the pane.
+                    if let Some(vk) = window_vk(event.physical_key) {
+                        use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+                        let down = |k: i32| unsafe { GetAsyncKeyState(k) } < 0;
+                        if let Some(msg) = shortcut(vk, down(0x11), down(0x10), down(0x12)) {
+                            app.shortcut_msg(&msg);
+                        }
+                    }
+                    app.restore_focus();
+                }
                 WindowEvent::Focused(f) => {
                     app.win_focused = f;
                     app.track();
@@ -3180,9 +3279,11 @@ mod tests {
         assert_eq!(shortcut(0x78, false, false, false).as_deref(), Some("reader"));
         // ctrl+alt+p is left to the page script (it needs the key press as a user gesture).
         assert_eq!(shortcut(k('P'), true, false, true), None);
-        // Not ours: plain keys, ctrl+c, ctrl+f (page find) pass through.
+        assert_eq!(shortcut(k('R'), true, true, false).as_deref(), Some("blankat"));
+        assert_eq!(shortcut(k('F'), true, false, false).as_deref(), Some("find"));
+        // Not ours: plain keys, ctrl+c, ctrl+r (reload) pass through.
         assert_eq!(shortcut(k('T'), false, false, false), None);
         assert_eq!(shortcut(k('C'), true, false, false), None);
-        assert_eq!(shortcut(k('F'), true, false, false), None);
+        assert_eq!(shortcut(k('R'), true, false, false), None);
     }
 }
