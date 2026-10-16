@@ -1,7 +1,7 @@
 //! Local history, bookmarks and command-palette history. Private-workspace pages
 //! never reach this module. Everything lives in %LOCALAPPDATA%\Ultra as JSON.
 
-use std::{cell::Cell, fs, path::Path};
+use std::{cell::Cell, collections::HashMap, fs, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -24,12 +24,46 @@ pub struct Bookmark {
     pub added: u64,
 }
 
+/// Today's browsing at a glance (local data only, reset each calendar day).
+#[derive(Serialize, Deserialize, Default, Clone)]
+pub struct Digest {
+    pub day: String,
+    /// Active seconds per site.
+    pub secs: HashMap<String, u64>,
+    pub pages: u32,
+    pub blocked: u64,
+}
+
+/// What the home screen shows.
+#[derive(Serialize)]
+pub struct DigestView {
+    pub secs: u64,
+    pub pages: u32,
+    pub blocked: u64,
+    pub top: Vec<(String, u64)>,
+}
+
 #[derive(Default)]
 pub struct Library {
     pub history: Vec<Visit>,
     pub bookmarks: Vec<Bookmark>,
     pub commands: Vec<String>,
+    pub digest: Digest,
     dirty: Cell<bool>,
+}
+
+/// Local calendar date, e.g. "2026-10-16".
+pub fn today() -> String {
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    format!("{:04}-{:02}-{:02}", t.wYear, t.wMonth, t.wDay)
+}
+
+/// "https://www.github.com/x" -> "github.com"
+pub fn host(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?.1;
+    let h = rest.split(['/', '?', '#']).next()?.split('@').last()?.split(':').next()?;
+    let h = h.strip_prefix("www.").unwrap_or(h).to_lowercase();
+    (!h.is_empty()).then_some(h)
 }
 
 fn now() -> u64 {
@@ -51,6 +85,7 @@ impl Library {
             history: read(&dir.join("history.json")),
             bookmarks: read(&dir.join("bookmarks.json")),
             commands: read(&dir.join("commands.json")),
+            digest: read(&dir.join("digest.json")),
             dirty: Cell::new(false),
         }
     }
@@ -68,12 +103,15 @@ impl Library {
         write("history.json", &self.history);
         write("bookmarks.json", &self.bookmarks);
         write("commands.json", &self.commands);
+        write("digest.json", &self.digest);
     }
 
     pub fn visit(&mut self, url: &str, title: &str) {
         if !rememberable(url) {
             return;
         }
+        self.roll_day();
+        self.digest.pages += 1;
         let t = now();
         match self.history.iter_mut().find(|v| v.url == url) {
             Some(v) => {
@@ -121,8 +159,47 @@ impl Library {
         }
     }
 
+    /// Start a fresh digest when the calendar day changes.
+    fn roll_day(&mut self) {
+        let d = today();
+        if self.digest.day != d {
+            self.digest = Digest { day: d, ..Default::default() };
+            self.dirty.set(true);
+        }
+    }
+
+    /// Credit active time on a page to its site.
+    pub fn add_time(&mut self, url: &str, secs: u64) {
+        let Some(h) = host(url).filter(|_| rememberable(url) && secs > 0) else { return };
+        self.roll_day();
+        *self.digest.secs.entry(h).or_default() += secs;
+        self.dirty.set(true);
+    }
+
+    pub fn add_blocked(&mut self, n: u64) {
+        if n > 0 {
+            self.roll_day();
+            self.digest.blocked += n;
+            self.dirty.set(true);
+        }
+    }
+
+    pub fn digest_view(&self) -> DigestView {
+        let fresh = self.digest.day == today();
+        let mut top: Vec<(String, u64)> = if fresh { self.digest.secs.iter().map(|(h, s)| (h.clone(), *s)).collect() } else { Vec::new() };
+        top.sort_by(|a, b| b.1.cmp(&a.1));
+        top.truncate(5);
+        DigestView {
+            secs: if fresh { self.digest.secs.values().sum() } else { 0 },
+            pages: if fresh { self.digest.pages } else { 0 },
+            blocked: if fresh { self.digest.blocked } else { 0 },
+            top,
+        }
+    }
+
     pub fn clear_history(&mut self) {
         self.history.clear();
+        self.digest = Digest { day: today(), ..Default::default() };
         self.dirty.set(true);
     }
 
@@ -218,5 +295,19 @@ mod tests {
         assert!(l.toggle_bookmark("https://news.ycombinator.com/", "HN"));
         assert!(l.suggest("news", 8)[0].2);
         assert!(!l.toggle_bookmark("https://news.ycombinator.com/", "HN"));
+    }
+
+    #[test]
+    fn digest_counts_today() {
+        let mut l = Library::default();
+        assert_eq!(host("https://www.GitHub.com:443/a?b").as_deref(), Some("github.com"));
+        l.visit("https://github.com/", "GitHub");
+        l.add_time("https://github.com/x", 90);
+        l.add_time("https://docs.rs/", 30);
+        l.add_time("ultra:home", 500);
+        l.add_blocked(7);
+        let d = l.digest_view();
+        assert_eq!((d.secs, d.pages, d.blocked), (120, 1, 7));
+        assert_eq!(d.top[0], ("github.com".to_string(), 90));
     }
 }

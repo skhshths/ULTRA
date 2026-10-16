@@ -101,6 +101,19 @@ input::selection { background: var(--acc-sel); }
   font: 13px Consolas, monospace; padding: 0 12px; outline: 0; transition: border-color var(--fast); }
 .hp input:focus { border-color: var(--acc-dim); }
 .keys { color: #4a4a4a; font-size: 11px; line-height: 1.9; text-align: center; max-width: 94%; }
+/* home screen: today's digest */
+.digest { width: min(460px, 90%); font-size: 11px; color: #5c5c5c; }
+.dg-h { display: flex; align-items: center; gap: 10px; color: var(--mid); letter-spacing: .3em; font-size: 10px; margin-bottom: 9px; }
+.dg-h::after { content: ''; flex: 1; height: 1px; background: #262626; }
+.dg-h.priv { color: var(--priv); }
+.dg-sum { color: var(--mid); margin-bottom: 10px; }
+.dg-sum b { color: var(--fg); font-weight: 400; }
+.dg-row { display: grid; grid-template-columns: 140px 1fr 56px; gap: 10px; align-items: center; margin: 5px 0; }
+.dg-row .h { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dg-bar { height: 5px; background: #1d1d1d; }
+.dg-bar i { display: block; height: 100%; background: var(--acc-deep); }
+.dg-row:first-of-type .dg-bar i { background: var(--acc); }
+.dg-row .t { text-align: right; color: var(--mid); }
 .keys b { color: var(--mid); font-weight: 400; }
 .sp { position: fixed; z-index: 4; transition: background-color var(--fast); }
 .sp.v { cursor: col-resize; } .sp.h { cursor: row-resize; }
@@ -480,10 +493,18 @@ function applyTheme(c, force) {
 applyTheme(CFG0);
 document.body.classList.toggle('scan', !!CFG0.scanlines && !SPEED);
 
-const KEYS = `<div class="keys">
-  <b>ctrl+t</b> new · <b>ctrl+w</b> close · <b>ctrl+l</b> address · <b>ctrl+k</b> overview · <b>ctrl+shift+p</b> commands<br>
-  <b>ctrl+shift+1‥9</b> tile tab at cursor · <b>ctrl+shift+e</b> new pane at cursor · <b>ctrl+shift+w</b> close pane at cursor<br>
-  <b>ctrl+shift+f</b> zoom pane at cursor · <b>ctrl+alt+1‥9</b> workspace · <b>ctrl+alt+0</b> private · <b>ctrl+alt+l</b> lock</div>`;
+// ── home screen digest: today's browsing, from local data only ──
+const dur = (s) => s < 60 ? '<1m' : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
+const kfmt = (n) => n > 999 ? (n / 1000).toFixed(1) + 'k' : String(n);
+function digestHTML(priv) {
+  if (priv) return `<div class="dg-h priv">PRIVATE</div><div class="dg-sum">nothing in this workspace is remembered: no history, no time, no digest.</div>`;
+  const d = S.digest || { secs: 0, pages: 0, blocked: 0, top: [] };
+  const head = '<div class="dg-h">TODAY</div>';
+  if (!d.secs && !d.pages) return head + `<div class="dg-sum">nothing yet today${d.blocked ? ` · <b>${kfmt(d.blocked)}</b> trackers blocked` : ''}. go explore.</div>`;
+  const max = Math.max(1, ...d.top.map((x) => x[1]));
+  return head + `<div class="dg-sum"><b>${dur(d.secs)}</b> browsing · <b>${d.pages}</b> page${d.pages === 1 ? '' : 's'} · <b>${kfmt(d.blocked)}</b> trackers blocked</div>` +
+    d.top.map(([h, t]) => `<div class="dg-row"><span class="h">${esc(h)}</span><span class="dg-bar"><i style="width:${Math.max(2, t / max * 100).toFixed(1)}%"></i></span><span class="t">${dur(t)}</span></div>`).join('');
+}
 
 // ── state pushed from rust (coalesced: at most once per event-loop turn) ──
 window.ultra = {
@@ -1101,7 +1122,7 @@ function homeContent(e, id, big, tall) {
   const keep = e.hp.querySelector('input');
   const val = keep ? keep.value : '';
   e.hp.innerHTML = `${big ? $('#logo').innerHTML : '<div class="mini">ULTRA</div>'}` +
-    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big && tall ? KEYS : ''}`;
+    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big && tall ? '<div class="digest"></div>' : ''}`;
   const q = e.hp.querySelector('input'); q.value = val;
   e.big = big + ':' + tall;
 }
@@ -1147,6 +1168,8 @@ function renderPanes() {
       place(e.hp, r);
       const big = r.w >= 560 && r.h >= 300, tall = r.h >= 420;
       if (e.big !== big + ':' + tall) homeContent(e, p.id, big, tall);
+      const dg = e.hp.querySelector('.digest');
+      if (dg) setHTML(dg, digestHTML(t.w === 9));
     } else if (e.hp) {
       e.hp.remove(); e.hp = null; e.big = null;
     }

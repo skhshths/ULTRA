@@ -297,6 +297,10 @@ struct App {
     lib: library::Library,
     /// Boot animation playing: pages stay hidden until the UI says it's done.
     booting: bool,
+    /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
+    win_focused: bool,
+    timing: Option<(String, Instant)>,
+    last_blocked: u64,
     boot_until: Instant,
     dirty: Cell<bool>,
     visible: bool,
@@ -1315,6 +1319,7 @@ impl App {
             "layouts": self.layouts.keys().collect::<Vec<_>>(),
             "bm": self.tabs.get(self.cur()).is_some_and(|t| t.ws != PRIVATE_WS && self.lib.is_bookmarked(&t.url)),
             "palhist": self.lib.commands,
+            "digest": self.lib.digest_view(),
             "tour": self.tour,
             "max": self.window.is_maximized(),
         });
@@ -1377,7 +1382,6 @@ impl App {
 
     fn tick(&mut self) {
         let now = Instant::now();
-        let mut changed = false;
         for i in 0..self.tabs.len() {
             let t = &self.tabs[i];
             let (Some(v), Some(h)) = (&t.view, t.hidden_at) else { continue };
@@ -1386,15 +1390,13 @@ impl App {
             }
             if now - h > IDLE_SLEEP && now - t.last > IDLE_SLEEP {
                 self.sleep(i);
-                changed = true;
             } else if !t.suspended && now - h > SUSPEND_AFTER {
                 try_suspend(v);
                 self.tabs[i].suspended = true;
             }
         }
-        if changed {
-            self.sync();
-        }
+        // Refresh every tick so the home screen's digest stays current.
+        self.sync();
         self.save_session();
     }
 
@@ -1585,6 +1587,33 @@ impl App {
         }
         self.shown.retain(|(id, _)| self.tabs.iter().any(|t| t.id == *id));
         self.apply_layout(false);
+    }
+
+    /// Daily digest bookkeeping: credit time to the page being looked at (focused window,
+    /// recent input, a real page, not private) and add newly blocked trackers.
+    fn track(&mut self) {
+        let now = Instant::now();
+        let b = self.blocked.get();
+        if b > self.last_blocked {
+            self.lib.add_blocked(b - self.last_blocked);
+            self.last_blocked = b;
+        }
+        let watching = self.win_focused && !self.overlay && !self.tour && !self.gate() && privacy::idle_secs() < 120;
+        let cur = if watching {
+            self.tabs.get(self.cur()).filter(|t| t.ws != PRIVATE_WS && t.view.is_some()).map(|t| t.url.clone())
+        } else {
+            None
+        };
+        // Same page, recent start: keep accumulating (segments are capped so idle time can't pile up).
+        if let (Some((u, since)), Some(c)) = (&self.timing, &cur) {
+            if u == c && now - *since < Duration::from_secs(15) {
+                return;
+            }
+        }
+        if let Some((u, since)) = self.timing.take() {
+            self.lib.add_time(&u, (now - since).as_secs_f64().round() as u64);
+        }
+        self.timing = cur.map(|c| (c, now));
     }
 
     /// Record a finished page load in history (never for private tabs).
@@ -2284,6 +2313,9 @@ fn main() {
         layouts: BTreeMap::new(),
         lib: library::Library::default(),
         booting: false,
+        win_focused: true,
+        timing: None,
+        last_blocked: 0,
         boot_until: now,
         dirty: Cell::new(false),
         visible: false,
@@ -2357,6 +2389,10 @@ fn main() {
                     app.save_session();
                     *flow = ControlFlow::Exit;
                 }
+                WindowEvent::Focused(f) => {
+                    app.win_focused = f;
+                    app.track();
+                }
                 WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
                     app.note_activity();
                     app.layout();
@@ -2376,6 +2412,7 @@ fn main() {
                     app.spare_at = None;
                     app.refill_spare();
                 }
+                app.track();
                 if app.booting && now >= app.boot_until {
                     app.command("booted", &Value::Null);
                 }
