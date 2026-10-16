@@ -280,13 +280,41 @@ input[type=range] { accent-color: var(--acc); width: 140px; }
 .bgctl { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
 .swatch.custom { background: conic-gradient(#f66, #fd6, #6f6, #6ff, #66f, #f6f, #f66) content-box; }
 
+/* private workspace */
+:root { --priv: #ff4d6d; }
+.wsb.priv { color: var(--priv); border-color: color-mix(in srgb, var(--priv) 35%, transparent); }
+.wsb.priv.on { color: var(--bg); background: var(--priv); border-color: var(--priv); }
+.privtag { display: none; color: var(--bg); background: var(--priv); font-size: 9px; font-weight: 700; padding: 2px 4px; letter-spacing: .12em; }
+body.private .privtag { display: inline; }
+body.private #bar { box-shadow: inset 0 -1px 0 var(--priv); }
+body.private .pf.on { border-color: var(--priv); }
+body.private .tab.on { border-bottom-color: var(--priv); }
+body.private .tab.on .n { color: var(--priv); }
+#lock { display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 92%, transparent); z-index: 6; }
+.lbox { width: min(420px, 92%); border: 1px solid color-mix(in srgb, var(--priv) 45%, #2c2c2c); background: #161616; padding: 22px;
+  display: flex; flex-direction: column; gap: 12px; }
+.lbox pre { color: var(--priv); font: 11px/1.15 Consolas, monospace; text-align: center; }
+.lbox h2 { font: 700 13px Consolas, monospace; letter-spacing: .25em; color: var(--fg); text-align: center; }
+.lbox .ld { color: #6a6a6a; font-size: 11px; line-height: 1.6; text-align: center; }
+.lbox input { height: 32px; background: #101010; border: 1px solid #2c2c2c; color: var(--fg); font: 13px Consolas, monospace; padding: 0 10px; outline: 0; }
+.lbox input:focus { border-color: color-mix(in srgb, var(--priv) 60%, transparent); }
+.lbox .lerr { color: var(--priv); font-size: 11px; min-height: 14px; text-align: center; }
+.lbox .lbtns { display: flex; gap: 8px; justify-content: center; }
+.lbox button { background: none; border: 1px solid #2c2c2c; color: var(--mid); font: inherit; padding: 6px 14px; cursor: default; }
+.lbox button:hover { color: var(--fg); background: #1e1e1e; }
+.lbox button.pri { color: var(--bg); background: var(--priv); border-color: var(--priv); }
+#toast { position: fixed; top: calc(var(--bar) + 10px); left: 50%; transform: translate(-50%, -6px); z-index: 9; opacity: 0; pointer-events: none;
+  background: #1a1a1a; border: 1px solid #333; color: var(--fg); padding: 7px 12px; font-size: 11px; white-space: nowrap;
+  transition: opacity var(--med) var(--ease), transform var(--med) var(--ease); }
+#toast.on { opacity: 1; transform: translate(-50%, 0); }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation: none !important; } }
 </style>
 </head>
 <body>
 <div id="bgimg"></div><canvas id="bg"></canvas>
 <div id="bar">
-  <span class="logo">ULTRA</span><span class="spd">SPEED</span><span class="sep">│</span>
+  <span class="logo">ULTRA</span><span class="spd">SPEED</span><span class="privtag">PRIVATE</span><span class="sep">│</span>
   <div id="wsbar"></div><span class="sep">│</span>
   <div id="tabs"></div><div id="plus" title="new tab (ctrl+t)">+</div>
   <div id="urlwrap"><span class="p">›</span><input id="url" spellcheck="false" autocomplete="off"></div>
@@ -295,7 +323,7 @@ input[type=range] { accent-color: var(--acc); width: 140px; }
   <span id="clock"></span><span id="cfgbtn" title="settings (ctrl+,)">cfg</span>
   <div class="wc"><div id="wmin">─</div><div id="wmax">□</div><div id="wq" class="q">✕</div></div>
 </div>
-<div id="panes"></div>
+<div id="panes"></div><div id="toast"></div>
 <div id="cfg" class="ovl" tabindex="-1"><div class="card">
   <div class="hd"><span>SETTINGS</span><span class="k">ctrl+,</span></div>
   <div class="sec">PERFORMANCE</div>
@@ -309,6 +337,9 @@ input[type=range] { accent-color: var(--acc); width: 140px; }
   <div class="sec">PRIVACY</div>
   <div class="row" id="r-block"><div><div class="name">block ads &amp; trackers</div>
     <div class="desc">ad networks and tracking beacons are refused at the network level.<br>sign-in providers are never blocked.</div></div><div class="sw" id="sw-block"></div></div>
+  <div class="row"><div><div class="name" style="color:var(--priv)">private workspace</div>
+    <div class="desc">ctrl+alt+0. inprivate tabs: no history, cookies, cache or session ever saved.<br>hidden from screen capture, locks after 5 min idle, 5 wrong passwords wipe it.</div></div>
+    <div class="ctl"><button class="run" id="priv-pass">set password</button><button class="run" id="priv-lock">lock</button><button class="run" id="priv-wipe">wipe</button></div></div>
   <div class="sec">LOOK</div>
   <div class="row"><div><div class="name">theme</div><div class="desc" id="themename">mint</div></div><div class="swatches" id="swatches"></div></div>
   <div class="row" style="border-bottom:0;padding-bottom:6px"><div><div class="name">colour picker</div><div class="desc">drag to pick. accent recolours the whole ui, background tints everything behind it,<br>swirl colours the ascii swirl (auto follows the accent).</div></div>
@@ -351,6 +382,18 @@ input[type=range] { accent-color: var(--acc); width: 140px; }
   <div class="pin"><span>❯</span><input id="palq" placeholder="type a command, or an address…" spellcheck="false" autocomplete="off"></div>
   <div id="pallist"></div>
   <div class="pft">↑↓ choose · tab complete · enter run · esc close</div>
+</div></div>
+<div id="lock" class="ovl" tabindex="-1"><div class="lbox">
+<pre>┌──────┐
+│ ▄▄▄▄ │
+│ █  █ │
+└──────┘</pre>
+  <h2 id="l-h">PRIVATE</h2><div class="ld" id="l-d"></div>
+  <input type="password" id="l-old" placeholder="current password" autocomplete="off">
+  <input type="password" id="l-p1" placeholder="password" autocomplete="off">
+  <input type="password" id="l-p2" placeholder="confirm password" autocomplete="off">
+  <div class="lerr" id="l-err"></div>
+  <div class="lbtns"><button id="l-cancel">cancel</button><button id="l-ok" class="pri">unlock</button></div>
 </div></div>
 <div id="ov" class="ovl"><input id="ovq" placeholder="filter tabs…" spellcheck="false" autocomplete="off"><div id="ovgrid"></div></div>
 <div class="rz n" data-d="n"></div><div class="rz s" data-d="s"></div><div class="rz e" data-d="e"></div><div class="rz w" data-d="w"></div>
@@ -420,7 +463,7 @@ document.body.classList.toggle('scan', !!CFG0.scanlines && !SPEED);
 const KEYS = `<div class="keys">
   <b>ctrl+t</b> new · <b>ctrl+w</b> close · <b>ctrl+l</b> address · <b>ctrl+k</b> overview · <b>ctrl+shift+p</b> commands<br>
   <b>ctrl+shift+1‥9</b> tile tab at cursor · <b>ctrl+shift+e</b> new pane at cursor · <b>ctrl+shift+w</b> close pane at cursor<br>
-  <b>ctrl+shift+f</b> zoom pane at cursor · <b>ctrl+alt+1‥9</b> workspace · <b>ctrl+alt+shift+1‥9</b> send tab there</div>`;
+  <b>ctrl+shift+f</b> zoom pane at cursor · <b>ctrl+alt+1‥9</b> workspace · <b>ctrl+alt+0</b> private · <b>ctrl+alt+l</b> lock</div>`;
 
 // ── state pushed from rust (coalesced: at most once per event-loop turn) ──
 window.ultra = {
@@ -429,6 +472,9 @@ window.ultra = {
     applyCfg(cfg());
     renderWs();
     renderTabs();
+    document.body.classList.toggle('private', s.ws === 9);
+    if (s.gate) setLock(cfg().haspass ? 'unlock' : 'create'); else if (lockMode && lockMode !== 'change') setLock(null);
+    setText($('#priv-pass'), cfg().haspass ? 'change password' : 'set password');
     const cur = s.tabs[s.a] || { s: 'home', u: '' };
     const url = $('#url'); if (document.activeElement !== url) url.value = cur.s === 'home' ? '' : cur.u;
     const insecure = cur.s !== 'home' && /^http:/i.test(cur.u) && !/^http:\/\/(localhost|127\.)/i.test(cur.u);
@@ -471,7 +517,7 @@ window.ultra = {
     q.focus(); q.value = ch; q.setSelectionRange(1, 1);
   },
 };
-const anyOverlay = () => ovOn || cfgOn || palOn || tourOn;
+const anyOverlay = () => ovOn || cfgOn || palOn || tourOn || !!lockMode;
 
 // ── settings ──
 const swatches = $('#swatches');
@@ -662,6 +708,12 @@ const CMDS = [
   { k: 'ws', a: '<1-9>', d: 'switch workspace', opts: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], run: (x) => num(x) && send('ws', num(x) - 1) },
   { k: 'move', a: '<1-9>', d: 'send the focused tab to a workspace', opts: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], run: (x) => num(x) && send('tows', num(x) - 1) },
   { k: 'sleep all', d: 'put every hidden tab to sleep now', run: () => send('trim') },
+  { k: 'layout save', a: '<name>', d: "save this workspace's layout and tabs", run: (x) => x && send('layout', ['save', x]) },
+  { k: 'layout load', a: '<name>', d: 'open a saved layout in a free workspace', opts: () => S.layouts || [], run: (x) => x && send('layout', ['load', x]) },
+  { k: 'layout delete', a: '<name>', d: 'forget a saved layout', opts: () => S.layouts || [], run: (x) => x && send('layout', ['delete', x]) },
+  { k: 'private', d: 'open the private workspace (ctrl+alt+0)', run: () => send('ws', 9) },
+  { k: 'lock', d: 'lock the private workspace now (ctrl+alt+l)', run: () => send('lock') },
+  { k: 'wipe private', d: 'close every private tab', run: () => send('wipe') },
   { k: 'reload', d: 'reload the focused page', run: () => send('reload') },
   { k: 'reopen', d: 'reopen the last closed tab', run: () => send('reopen') },
   { k: 'devtools', d: 'developer tools for the focused page', run: () => send('devtools') },
@@ -696,10 +748,11 @@ function parsePal(q) {
 }
 function drawPal() {
   const q = $('#palq').value.trim(), lq = q.toLowerCase(), hit = parsePal(q);
-  if (hit && hit[0].opts) {
+  const optsOf = (c) => typeof c.opts === 'function' ? c.opts() : c.opts;
+  if (hit && optsOf(hit[0])) {
     // Completing an argument: offer the matching options.
     const [c, arg] = hit;
-    palItems = c.opts.filter((o) => o.startsWith(arg.toLowerCase())).map((o) => ({ k: c.k + ' ' + o, d: c.d, cmd: c, arg: o }));
+    palItems = optsOf(c).filter((o) => o.startsWith(arg.toLowerCase())).map((o) => ({ k: c.k + ' ' + o, d: c.d, cmd: c, arg: o }));
   } else if (hit) palItems = [{ k: hit[0].k, a: hit[0].a, d: hit[0].d, cmd: hit[0], arg: hit[1] }];
   else palItems = CMDS.filter((c) => !lq || c.k.startsWith(lq) || c.k.includes(lq)).map((c) => ({ k: c.k, a: c.a, d: c.d, cmd: c }));
   if (q && !palItems.length) palItems = [{ k: 'open', a: q, d: 'go to this address / search', cmd: CMDS.find((c) => c.k === 'open'), arg: q }];
@@ -763,7 +816,7 @@ const TOUR = [
     check: (a, b) => b.panes.length < a.panes.length },
   { t: 'workspaces', map: true, try: 'press ctrl+alt+2, then ctrl+alt+1 to come back.',
     b: `<kbd>ctrl+alt+1‥9</kbd> flips between workspaces, each a whole layout of its own (the numbers next to the logo).<br>
-      <kbd>ctrl+alt+shift+1‥9</kbd> sends the focused tab to one. only the workspace on screen keeps pages running.`,
+      <kbd>ctrl+alt+shift+1‥9</kbd> sends the focused tab to one. <kbd>ctrl+alt+0</kbd> opens the private workspace: nothing saved, password-locked when idle.`,
     check: (a, b) => a.ws !== b.ws },
   { t: 'get anywhere fast', art: `<pre> › <b>gith</b>_\n\n type anywhere:\n letters &amp; numbers\n jump to the bar.\n\n ctrl+k  ▦ ▦ ▦\n         ▦ ▦ ▦</pre>`,
     b: `<kbd>ctrl+l</kbd> focuses the address bar, or just start typing: any letter or number jumps there when you aren't in a text field.<br>
@@ -881,10 +934,60 @@ $('#t-skip').onclick = closeTour;
 $('#t-opt').onclick = () => toggle('tour', true);
 $('#run-tour').onclick = () => { closeCfg(); send('tour', true); };
 
+// ── private workspace: lock screen (create / unlock / change password) and toasts ──
+let lockMode = null;
+function setLock(mode) {
+  if (mode === lockMode) return;
+  lockMode = mode;
+  $('#lock').classList.toggle('on', !!mode);
+  if (!mode) { renderPanes(); return; }
+  const txt = {
+    create: ['PRIVATE', 'set a password for the private workspace. it is never stored, only a salted hash.<br>nothing you do in here is ever saved.', 'set password'],
+    unlock: ['LOCKED', 'the private workspace locked after 5 minutes idle.<br>enter your password to continue.', 'unlock'],
+    change: ['PASSWORD', 'change the private workspace password.', 'change'],
+  }[mode];
+  setText($('#l-h'), txt[0]); $('#l-d').innerHTML = txt[1]; setText($('#l-ok'), txt[2]);
+  $('#l-old').style.display = mode === 'change' && cfg().haspass ? '' : 'none';
+  $('#l-p2').style.display = mode === 'unlock' ? 'none' : '';
+  $('#l-p1').placeholder = mode === 'unlock' ? 'password' : 'new password';
+  $('#l-cancel').style.display = mode === 'change' ? '' : 'none';
+  for (const id of ['#l-old', '#l-p1', '#l-p2']) $(id).value = '';
+  setText($('#l-err'), '');
+  setTimeout(() => (mode === 'change' && cfg().haspass ? $('#l-old') : $('#l-p1')).focus(), 0);
+  renderPanes();
+}
+function submitLock() {
+  const p1 = $('#l-p1').value, p2 = $('#l-p2').value;
+  if (lockMode === 'unlock') { if (p1) send('unlock', p1); $('#l-p1').value = ''; return; }
+  if (p1.length < 4) { setText($('#l-err'), 'use at least 4 characters'); return; }
+  if (p1 !== p2) { setText($('#l-err'), "passwords don't match"); return; }
+  send('setpass', [$('#l-old').value, p1]);
+}
+$('#l-ok').onclick = submitLock;
+$('#l-cancel').onclick = () => setLock(null);
+$('#lock').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { submitLock(); e.preventDefault(); }
+  else if (e.key === 'Escape' && lockMode === 'change') { setLock(null); e.preventDefault(); }
+});
+ultra.lockError = (msg) => { setText($('#l-err'), msg); $('#l-p1').focus(); };
+ultra.passSet = () => { if (lockMode === 'change' || lockMode === 'create') setLock(null); };
+let toastT = 0;
+ultra.toast = (msg) => {
+  const t = $('#toast'); setText(t, msg); t.classList.add('on');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 2600);
+};
+$('#priv-pass').onclick = () => { closeCfg(); setLock('change'); };
+$('#priv-lock').onclick = () => { closeCfg(); send('lock'); };
+$('#priv-wipe').onclick = () => send('wipe');
+
+
 // ── workspaces ──
 const wsbar = $('#wsbar');
 function renderWs() {
-  setHTML(wsbar, (S.wss || [0]).map((w) => `<div class="wsb${w === S.ws ? ' on' : ''}" data-w="${w}" title="workspace ${w + 1} (ctrl+alt+${w + 1})">${w + 1}</div>`).join(''));
+  const list = [...new Set([...(S.wss || [0]).filter((w) => w !== 9), 9])];
+  setHTML(wsbar, list.map((w) => w === 9
+    ? `<div class="wsb priv${S.ws === 9 ? ' on' : ''}" data-w="9" title="private workspace (ctrl+alt+0)${S.locked ? ' · locked' : ''}">${S.locked ? '■' : 'P'}</div>`
+    : `<div class="wsb${w === S.ws ? ' on' : ''}" data-w="${w}" title="workspace ${w + 1} (ctrl+alt+${w + 1})">${w + 1}</div>`).join(''));
 }
 wsbar.onclick = (e) => { const w = e.target.dataset.w; if (w != null) send('ws', +w); };
 
@@ -1063,7 +1166,7 @@ function drawOv() {
   if (!ovList.some(([, i]) => i === ovSel)) ovSel = ovList.length ? ovList[0][1] : -1;
   $('#ovgrid').innerHTML = ovList.map(([t, i]) =>
     `<div class="tile${i === ovSel ? ' sel' : ''}${i === S.a ? ' cur' : ''}" data-i="${i}">` +
-    `<div class="h"><span>${t.w + 1}:${sl.get(t.id)}${t.v ? ' ▪' : ''}</span><span>${t.s === 'home' ? 'home' : t.s === 'sleep' ? '◌ asleep' : t.s === 'load' ? '◍ loading' : '● live'}</span></div>` +
+    `<div class="h"><span>${t.w === 9 ? 'P' : t.w + 1}:${sl.get(t.id)}${t.v ? ' ▪' : ''}</span><span>${t.s === 'home' ? 'home' : t.s === 'sleep' ? '◌ asleep' : t.s === 'load' ? '◍ loading' : '● live'}</span></div>` +
     `<div class="tt">${esc(label(t))}</div><div class="uu">${esc(t.s === 'home' ? 'ultra:home' : t.u)}</div></div>`).join('');
 }
 function closeOv(pick) { setOv(false); if (pick != null && pick >= 0) send('tab', pick); else send('overview', false); }
@@ -1123,6 +1226,8 @@ document.addEventListener('keydown', (e) => {
   let m = null, a;
   if (c && e.altKey && e.shiftKey && digit) { m = 'tows'; a = +digit[2] - 1; }
   else if (c && e.altKey && digit) { m = 'ws'; a = +digit[2] - 1; }
+  else if (c && e.altKey && !e.shiftKey && (code === 'Digit0' || code === 'Numpad0')) { m = 'ws'; a = 9; }
+  else if (c && e.altKey && code === 'KeyL') m = 'lock';
   else if (c && e.shiftKey && digit) { m = 'mv'; a = +digit[2] - 1; }
   else if (c && e.shiftKey && code === 'KeyE') m = 'mvnew';
   else if (c && e.shiftKey && code === 'KeyW') m = 'closeat';

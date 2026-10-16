@@ -63,6 +63,17 @@ impl Node {
         }
     }
 
+    /// Leaf ids, left/top first.
+    pub fn leaves(&self, out: &mut Vec<u64>) {
+        match self {
+            Node::Leaf(x) => out.push(*x),
+            Node::Split { a, b, .. } => {
+                a.leaves(out);
+                b.leaves(out);
+            }
+        }
+    }
+
     pub fn first_leaf(&self) -> u64 {
         match self {
             Node::Leaf(x) => *x,

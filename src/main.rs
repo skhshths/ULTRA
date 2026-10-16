@@ -15,11 +15,12 @@
 
 mod blocker;
 mod layout;
+mod privacy;
 mod stats;
 
 use std::{
     cell::Cell,
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs,
     path::PathBuf,
     rc::Rc,
@@ -33,13 +34,13 @@ use tao::{
     dpi::{LogicalPosition, LogicalSize},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
-    platform::windows::IconExtWindows,
+    platform::windows::{IconExtWindows, WindowExtWindows},
     window::{Icon, ResizeDirection, Window, WindowBuilder},
 };
 use webview2_com::{
     AddScriptToExecuteOnDocumentCreatedCompletedHandler,
     Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2_3, ICoreWebView2_8, COREWEBVIEW2_PROCESS_FAILED_KIND,
+        ICoreWebView2_13, ICoreWebView2_3, ICoreWebView2_8, COREWEBVIEW2_PROCESS_FAILED_KIND,
         COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
         COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED,
         COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
@@ -60,7 +61,13 @@ const HDR: f64 = 18.0;
 /// Smallest pane a split may produce; below this the tab replaces the pane instead.
 const MIN_W: f64 = 260.0;
 const MIN_H: f64 = 160.0;
-const WORKSPACES: usize = 9;
+const WORKSPACES: usize = 10;
+/// The last workspace is private: InPrivate tabs, never saved, locked when idle.
+const PRIVATE_WS: usize = 9;
+/// Seconds without keyboard/mouse input before the private workspace locks.
+const LOCK_AFTER: u64 = 300;
+/// Wrong unlock attempts before the private workspace is wiped.
+const MAX_UNLOCK_FAILS: u32 = 5;
 const HOME: &str = "ultra:home";
 const LEGACY_HOME: &str = "zenith:home";
 const UI_HTML: &str = include_str!("ui.html");
@@ -94,7 +101,8 @@ enum UserEvent {
     Content(u64, String),
     Title(u64, String),
     Load(u64, bool),
-    NewTab(String),
+    /// A page asked for a new tab: (source slot, url).
+    NewTab(u64, String),
     Procs(Vec<u32>),
     /// JS heap (MB) reported by a page.
     Heap(u64, String),
@@ -141,6 +149,14 @@ struct Session {
     cur_ws: usize,
 }
 
+/// A named layout: its tabs and tree (leaves are indices into `tabs`).
+#[derive(Serialize, Deserialize, Clone)]
+struct SavedLayout {
+    tabs: Vec<(String, String)>,
+    tree: Node,
+    focus: usize,
+}
+
 /// User settings, persisted to settings.json.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
@@ -172,6 +188,8 @@ struct Settings {
     swirlcolor: String,
     /// Swirl visibility, 30-300 (%).
     swirlbright: u16,
+    /// Private-workspace password as `salt$hash` (never the password; never sent to the UI).
+    privpass: String,
 }
 
 impl Default for Settings {
@@ -196,6 +214,7 @@ impl Default for Settings {
             bgdim: 45,
             swirlcolor: String::new(),
             swirlbright: 100,
+            privpass: String::new(),
         }
     }
 }
@@ -263,6 +282,11 @@ struct App {
     total_cpu: f64,
     stats_at: Instant,
     stats_pending: bool,
+    /// Private workspace locked (password needed to see it again).
+    locked: bool,
+    unlock_fails: u32,
+    lock_check_at: Instant,
+    layouts: BTreeMap<String, SavedLayout>,
     dirty: Cell<bool>,
     visible: bool,
     show_at: Instant,
@@ -425,6 +449,16 @@ fn relaunch() {
     std::process::exit(0);
 }
 
+/// Settings as the chrome UI may see them: the password hash never leaves Rust.
+fn ui_cfg(cfg: &Settings) -> Value {
+    let mut v = serde_json::to_value(cfg).unwrap_or(Value::Null);
+    if let Some(o) = v.as_object_mut() {
+        o.remove("privpass");
+        o.insert("haspass".into(), json!(!cfg.privpass.is_empty()));
+    }
+    v
+}
+
 /// The exe's embedded icon (see build.rs), so the window and taskbar match it at every size.
 fn make_icon() -> Option<Icon> {
     Icon::from_resource(1, None).ok()
@@ -506,7 +540,7 @@ impl App {
         self.dirty.set(true);
     }
 
-    fn build_view(&mut self, slot: u64, url: Option<&str>, bounds: Rect) -> Option<WebView> {
+    fn build_view(&mut self, slot: u64, url: Option<&str>, bounds: Rect, private: bool) -> Option<WebView> {
         let (p1, p2, p3, p4) = (
             self.proxy.clone(),
             self.proxy.clone(),
@@ -526,6 +560,8 @@ impl App {
             .with_visible(false)
             .with_background_color((20, 20, 20, 255))
             .with_devtools(true)
+            // Private tabs use WebView2's InPrivate profile: nothing reaches disk.
+            .with_incognito(private)
             .with_additional_browser_args(BROWSER_ARGS)
             .with_initialization_script_for_main_only(typeahead_js(self.cfg.typeahead), true)
             .with_initialization_script_for_main_only(CONTENT_JS, true)
@@ -545,7 +581,7 @@ impl App {
                 if f.size.is_some() {
                     return NewWindowResponse::Allow;
                 }
-                let _ = p4.send_event(UserEvent::NewTab(u));
+                let _ = p4.send_event(UserEvent::NewTab(slot, u));
                 NewWindowResponse::Deny
             })
             .build_as_child(&self.window);
@@ -576,7 +612,10 @@ impl App {
             return;
         }
         let url = self.tabs[i].url.clone();
-        let got = match self.spares.pop() {
+        let private = self.tabs[i].ws == PRIVATE_WS;
+        // Spares are normal-profile webviews, so private tabs always get a fresh InPrivate one.
+        let spare = if private { None } else { self.spares.pop() };
+        let got = match spare {
             Some((slot, v)) => {
                 let _ = v.set_bounds(bounds);
                 let _ = v.load_url(&url);
@@ -584,7 +623,7 @@ impl App {
             }
             None => {
                 let slot = self.new_slot();
-                self.build_view(slot, Some(&url), bounds).map(|v| (slot, v))
+                self.build_view(slot, Some(&url), bounds, private).map(|v| (slot, v))
             }
         };
         self.spare_at = Some(Instant::now() + SPARE_IDLE);
@@ -608,7 +647,7 @@ impl App {
         }
         let slot = self.new_slot();
         let a = self.area();
-        if let Some(v) = self.build_view(slot, None, inset(a, 0.0)) {
+        if let Some(v) = self.build_view(slot, None, inset(a, 0.0), false) {
             self.spares.push((slot, v));
         }
         if self.spares.len() < SPARES {
@@ -655,7 +694,9 @@ impl App {
             }
         }
         let now = Instant::now();
-        let hidden = self.overlay || self.tour;
+        // Keep private pages out of screenshots and screen sharing while that workspace is shown.
+        privacy::exclude_from_capture(self.window.hwnd() as isize, self.ws == PRIVATE_WS);
+        let hidden = self.overlay || self.tour || self.gate();
         let animate = animate && !hidden && !self.cfg.ultraspeed;
         let slide = self.slide.take();
         if animate {
@@ -746,7 +787,7 @@ impl App {
     }
 
     fn focus_active(&self) {
-        if self.tour {
+        if self.tour || self.gate() {
             let _ = self.ui.focus();
             return;
         }
@@ -838,7 +879,8 @@ impl App {
 
     /// Ctrl+Alt+Shift+N: send the focused tab to workspace `n` (tiled into its layout).
     fn send_to_ws(&mut self, n: usize) {
-        if n == self.ws || n >= WORKSPACES {
+        // Tabs never cross the private boundary: their webviews belong to one profile.
+        if n == self.ws || n >= WORKSPACES || n == PRIVATE_WS || self.ws == PRIVATE_WS {
             return;
         }
         let id = self.focus;
@@ -931,7 +973,7 @@ impl App {
         }
         let i = self.idx(id).unwrap_or(i);
         let t = self.tabs.remove(i);
-        if t.url != HOME {
+        if t.url != HOME && t.ws != PRIVATE_WS {
             self.closed.push((t.url, t.title));
             if self.closed.len() > 32 {
                 self.closed.remove(0);
@@ -1147,7 +1189,10 @@ impl App {
                 } else {
                     "sleep"
                 };
-                json!({ "id": t.id, "t": t.title, "u": t.url, "s": s, "w": t.ws, "v": self.root.contains(t.id) })
+                let private = t.ws == PRIVATE_WS;
+                // While locked, private tabs show no title or address anywhere.
+                let (title, url) = if private && self.locked { ("locked", "") } else { (t.title.as_str(), t.url.as_str()) };
+                json!({ "id": t.id, "t": title, "u": url, "s": s, "w": t.ws, "p": private, "v": self.root.contains(t.id) })
             })
             .collect();
         let panes: Vec<Value> = self
@@ -1177,7 +1222,10 @@ impl App {
             "mem": self.total_mb,
             "cpu": self.total_cpu,
             "blocked": self.blocked.get(),
-            "cfg": self.cfg,
+            "cfg": ui_cfg(&self.cfg),
+            "locked": self.locked,
+            "gate": self.gate(),
+            "layouts": self.layouts.keys().collect::<Vec<_>>(),
             "tour": self.tour,
             "max": self.window.is_maximized(),
         });
@@ -1190,20 +1238,26 @@ impl App {
     }
 
     fn save_session(&self) {
-        let index = |id: u64| self.idx(id).map(|i| i as u64);
+        // Private tabs are never written anywhere: positions are among normal tabs only.
+        let kept: Vec<u64> = self.tabs.iter().filter(|t| t.ws != PRIVATE_WS).map(|t| t.id).collect();
+        let index = |id: u64| kept.iter().position(|&k| k == id).map(|i| i as u64);
         let layout_of = |w: usize| -> Option<(Node, usize)> {
+            if w == PRIVATE_WS {
+                return None;
+            }
             let (root, focus) = if w == self.ws {
                 (&self.root, self.focus)
             } else {
                 let (r, f) = self.stash[w].as_ref()?;
                 (r, *f)
             };
-            Some((root.map(&index)?, self.idx(focus).unwrap_or(0)))
+            Some((root.map(&index)?, index(focus).unwrap_or(0) as usize))
         };
         let s = Session {
             tabs: self
                 .tabs
                 .iter()
+                .filter(|t| t.ws != PRIVATE_WS)
                 .map(|t| {
                     let url = t
                         .view
@@ -1214,11 +1268,11 @@ impl App {
                     (url, t.title.clone())
                 })
                 .collect(),
-            active: self.cur(),
+            active: index(self.focus).unwrap_or(0) as usize,
             layout: None,
-            ws: self.tabs.iter().map(|t| t.ws).collect(),
+            ws: self.tabs.iter().filter(|t| t.ws != PRIVATE_WS).map(|t| t.ws).collect(),
             layouts: (0..WORKSPACES).map(layout_of).collect(),
-            cur_ws: self.ws,
+            cur_ws: if self.ws == PRIVATE_WS { 0 } else { self.ws },
         };
         if let Ok(j) = serde_json::to_string(&s) {
             let _ = fs::write(self.data_dir.join("session.json"), j);
@@ -1278,6 +1332,9 @@ impl App {
         }
         if self.cfg.stats && !self.stats_pending {
             d = d.min(self.stats_at);
+        }
+        if !self.locked && self.has_private() {
+            d = d.min(self.lock_check_at);
         }
         d
     }
@@ -1354,6 +1411,161 @@ impl App {
             if valid_bg_image(&d) {
                 let _ = self.ui.evaluate_script(&format!("ultra.setBgImage({})", json!(d)));
             }
+        }
+    }
+
+    /// The private workspace is on screen but must not show (locked, or no password yet).
+    fn gate(&self) -> bool {
+        self.ws == PRIVATE_WS && (self.locked || self.cfg.privpass.is_empty())
+    }
+
+    fn has_private(&self) -> bool {
+        self.tabs.iter().any(|t| t.ws == PRIVATE_WS)
+    }
+
+    fn toast(&self, msg: &str) {
+        let _ = self.ui.evaluate_script(&format!("ultra.toast({})", json!(msg)));
+    }
+
+    /// Open a url as a new tab in workspace `ws` (in the background if that isn't the current one).
+    fn open_in(&mut self, ws: usize, url: String) {
+        if ws == self.ws {
+            self.new_tab(url, String::new(), true);
+        } else if !(ws == PRIVATE_WS && self.locked) {
+            let id = self.push_tab(self.tabs.len(), url, String::new());
+            if let Some(i) = self.idx(id) {
+                self.tabs[i].ws = ws;
+            }
+            self.sync();
+        }
+    }
+
+    fn check_idle_lock(&mut self) {
+        if !self.locked && self.has_private() && !self.cfg.privpass.is_empty() && privacy::idle_secs() >= LOCK_AFTER {
+            self.lock_private();
+        }
+    }
+
+    fn lock_private(&mut self) {
+        if self.cfg.privpass.is_empty() || self.locked {
+            return;
+        }
+        self.locked = true;
+        self.apply_layout(false);
+        self.focus_active();
+    }
+
+    fn unlock_private(&mut self, password: &str) {
+        if !self.locked {
+            return;
+        }
+        if privacy::verify_password(&self.cfg.privpass, password) {
+            self.locked = false;
+            self.unlock_fails = 0;
+            self.apply_layout(false);
+            self.focus_active();
+            return;
+        }
+        self.unlock_fails += 1;
+        if self.unlock_fails >= MAX_UNLOCK_FAILS {
+            self.wipe_private();
+            self.locked = false;
+            self.unlock_fails = 0;
+            self.apply_layout(false);
+            self.toast("too many wrong passwords: private workspace wiped");
+        } else {
+            let left = MAX_UNLOCK_FAILS - self.unlock_fails;
+            let msg = format!("wrong password · {left} {} left before the private workspace is wiped", if left == 1 { "try" } else { "tries" });
+            let _ = self.ui.evaluate_script(&format!("ultra.lockError({})", json!(msg)));
+        }
+    }
+
+    /// Close every private tab; their InPrivate data dies with the webviews.
+    fn wipe_private(&mut self) {
+        self.tabs.retain(|t| t.ws != PRIVATE_WS);
+        self.stash[PRIVATE_WS] = None;
+        if self.ws == PRIVATE_WS {
+            self.zoom = None;
+            let id = self.push_tab(self.tabs.len(), HOME.into(), String::new());
+            self.root = Node::Leaf(id);
+            self.focus = id;
+        }
+        self.shown.retain(|(id, _)| self.tabs.iter().any(|t| t.id == *id));
+        self.apply_layout(false);
+    }
+
+    fn save_layouts(&self) {
+        if let Ok(j) = serde_json::to_string_pretty(&self.layouts) {
+            let _ = fs::write(self.data_dir.join("layouts.json"), j);
+        }
+    }
+
+    /// `layout save|load|delete <name>` from the command palette.
+    fn layout_cmd(&mut self, op: &str, name: &str) {
+        let name: String = name.trim().chars().take(40).collect();
+        match op {
+            "save" => {
+                if self.ws == PRIVATE_WS {
+                    self.toast("private layouts are never saved");
+                    return;
+                }
+                if name.is_empty() {
+                    self.toast("give the layout a name: layout save <name>");
+                    return;
+                }
+                let mut ids = Vec::new();
+                self.root.leaves(&mut ids);
+                let tabs = ids
+                    .iter()
+                    .filter_map(|&id| self.idx(id))
+                    .map(|i| {
+                        let t = &self.tabs[i];
+                        let url = t.view.as_ref().and_then(|v| v.url().ok()).filter(|u| !u.is_empty() && u != "about:blank");
+                        (url.unwrap_or_else(|| t.url.clone()), t.title.clone())
+                    })
+                    .collect();
+                let Some(tree) = self.root.map(&|id| ids.iter().position(|&x| x == id).map(|p| p as u64)) else { return };
+                let focus = ids.iter().position(|&x| x == self.focus).unwrap_or(0);
+                self.layouts.insert(name.clone(), SavedLayout { tabs, tree, focus });
+                self.save_layouts();
+                self.toast(&format!("saved layout \"{name}\""));
+                self.sync();
+            }
+            "load" => {
+                let Some(l) = self.layouts.get(&name).cloned() else {
+                    self.toast(&format!("no layout called \"{name}\""));
+                    return;
+                };
+                // Loads into the first empty workspace, so nothing open is replaced.
+                let Some(w) = (0..PRIVATE_WS).find(|&w| w != self.ws && self.stash[w].is_none() && !self.tabs.iter().any(|t| t.ws == w)) else {
+                    self.toast("every workspace is in use: close one first");
+                    return;
+                };
+                let ids: Vec<u64> = l
+                    .tabs
+                    .iter()
+                    .map(|(u, t)| {
+                        let id = self.push_tab(self.tabs.len(), u.clone(), t.clone());
+                        if let Some(i) = self.idx(id) {
+                            self.tabs[i].ws = w;
+                        }
+                        id
+                    })
+                    .collect();
+                let Some(tree) = l.tree.map(&|i| ids.get(i as usize).copied()) else { return };
+                let focus = ids.get(l.focus).copied().unwrap_or_else(|| tree.first_leaf());
+                self.stash[w] = Some((tree, focus));
+                self.switch_ws(w);
+                self.toast(&format!("loaded \"{name}\" into workspace {}", w + 1));
+            }
+            "delete" => {
+                if self.layouts.remove(&name).is_some() {
+                    self.save_layouts();
+                    self.toast(&format!("deleted layout \"{name}\""));
+                    self.sync();
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1588,6 +1800,44 @@ impl App {
                 let _ = self.ui.evaluate_script("ultra.setBgImage(null)");
                 self.sync();
             }
+            "lock" => {
+                if self.cfg.privpass.is_empty() {
+                    self.toast("set a private password in settings first");
+                } else {
+                    self.lock_private();
+                }
+            }
+            "unlock" => {
+                let pw = arg.as_str().unwrap_or("").to_string();
+                self.unlock_private(&pw);
+            }
+            "setpass" => {
+                let (old, new) = (arg[0].as_str().unwrap_or(""), arg[1].as_str().unwrap_or(""));
+                if !self.cfg.privpass.is_empty() && !privacy::verify_password(&self.cfg.privpass, old) {
+                    let _ = self.ui.evaluate_script(&format!("ultra.lockError({})", json!("current password is wrong")));
+                    return;
+                }
+                if new.chars().count() < 4 {
+                    let _ = self.ui.evaluate_script(&format!("ultra.lockError({})", json!("use at least 4 characters")));
+                    return;
+                }
+                self.cfg.privpass = privacy::hash_password(new);
+                self.locked = false;
+                self.unlock_fails = 0;
+                self.save_settings();
+                self.apply_layout(false);
+                self.focus_active();
+                let _ = self.ui.evaluate_script("ultra.passSet()");
+                self.toast("private password set");
+            }
+            "wipe" => {
+                self.wipe_private();
+                self.toast("private workspace wiped");
+            }
+            "layout" => {
+                let (op, name) = (arg[0].as_str().unwrap_or("").to_string(), arg[1].as_str().unwrap_or("").to_string());
+                self.layout_cmd(&op, &name);
+            }
             "content" => self.focus_active(),
             "drag" => {
                 let _ = self.window.drag_window();
@@ -1667,6 +1917,10 @@ impl App {
                     self.command("mv", &json!(k - 1));
                     return;
                 }
+                if msg == "ws:0" {
+                    self.command("ws", &json!(PRIVATE_WS));
+                    return;
+                }
                 if let Some(k) = digit("ws:") {
                     self.command("ws", &json!(k - 1));
                     return;
@@ -1692,7 +1946,7 @@ impl App {
                 }
                 match msg.as_str() {
                     "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
-                    | "palette" | "mvnew" | "closeat" | "zoom" => self.command(&msg, &Value::Null),
+                    | "palette" | "mvnew" | "closeat" | "zoom" | "lock" => self.command(&msg, &Value::Null),
                     _ => {}
                 }
             }
@@ -1718,7 +1972,11 @@ impl App {
                     self.sync();
                 }
             }
-            UserEvent::NewTab(url) => self.new_tab(url, String::new(), true),
+            UserEvent::NewTab(slot, url) => {
+                // Links open in the workspace of the page that opened them (private stays private).
+                let ws = self.idx_slot(slot).map(|i| self.tabs[i].ws).unwrap_or(self.ws);
+                self.open_in(ws, url);
+            }
             UserEvent::Procs(p) => self.on_procs(p),
             UserEvent::Heap(slot, r) => {
                 if let (Some(i), Ok(mb)) = (self.idx_slot(slot), r.trim().parse::<f64>()) {
@@ -1745,14 +2003,24 @@ fn bench(app: &mut App) {
         for _ in 0..6 {
             let slot = app.new_slot();
             let t = Instant::now();
-            views.push(app.build_view(slot, Some("about:blank"), rect));
+            views.push(app.build_view(slot, Some("about:blank"), rect, false));
             ms.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         out += &format!("build (shared_env={shared}): {ms:.1?} ms\n");
     }
     app.shared_env = true;
     let slot = app.new_slot();
-    let spare = app.build_view(slot, None, rect).expect("spare");
+    let spare = app.build_view(slot, None, rect, false).expect("spare");
+    let pslot = app.new_slot();
+    let pv = app.build_view(pslot, Some("about:blank"), rect, true);
+    let inprivate = pv.as_ref().and_then(|v| v.webview().cast::<ICoreWebView2_13>().ok()).and_then(|w| unsafe { w.Profile().ok() }).map(|p| {
+        let mut b = BOOL(0);
+        unsafe {
+            let _ = p.IsInPrivateModeEnabled(&mut b);
+        }
+        b.as_bool()
+    });
+    out += &format!("private webview is InPrivate: {inprivate:?}\n");
     let t = Instant::now();
     let _ = spare.set_bounds(rect);
     let _ = spare.load_url("about:blank");
@@ -1809,7 +2077,7 @@ fn main() {
         // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
         .with_initialization_script(format!(
             "window.__ultraCfg = {};",
-            serde_json::to_string(&cfg).unwrap_or_else(|_| "{}".into())
+            ui_cfg(&cfg)
         ))
         .with_bounds(Rect {
             position: LogicalPosition::new(0.0, 0.0).into(),
@@ -1860,6 +2128,10 @@ fn main() {
         total_cpu: 0.0,
         stats_at: now,
         stats_pending: false,
+        locked: false,
+        unlock_fails: 0,
+        lock_check_at: now,
+        layouts: BTreeMap::new(),
         dirty: Cell::new(false),
         visible: false,
         show_at: now + Duration::from_millis(900),
@@ -1879,12 +2151,16 @@ fn main() {
     // Restored tabs start asleep; only the tabs in the visible layout are woken.
     for (i, (url, title)) in session.tabs.into_iter().enumerate() {
         let url = if url == LEGACY_HOME { HOME.to_string() } else { url };
-        app.ws = session.ws.get(i).copied().unwrap_or(0).min(WORKSPACES - 1);
+        app.ws = session.ws.get(i).copied().unwrap_or(0).min(PRIVATE_WS - 1);
         app.push_tab(usize::MAX, url, title);
     }
-    app.ws = session.cur_ws.min(WORKSPACES - 1);
+    app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
-    for (w, l) in session.layouts.into_iter().enumerate().take(WORKSPACES) {
+    app.layouts = fs::read_to_string(app.data_dir.join("layouts.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    for (w, l) in session.layouts.into_iter().enumerate().take(PRIVATE_WS) {
         if let Some((node, f)) = l {
             if let (Some(node), Some(&fid)) = (node.map(&|i| ids.get(i as usize).copied()), ids.get(f)) {
                 let fid = if node.contains(fid) { fid } else { node.first_leaf() };
@@ -1943,6 +2219,10 @@ fn main() {
                 if app.spare_at.is_some_and(|t| now >= t) {
                     app.spare_at = None;
                     app.refill_spare();
+                }
+                if now >= app.lock_check_at {
+                    app.lock_check_at = now + Duration::from_secs(5);
+                    app.check_idle_lock();
                 }
                 if app.cfg.stats && app.visible && !app.stats_pending && now >= app.stats_at {
                     app.stats_at = now + STATS_EVERY;
