@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleName</key>
+	<string>ULTRA</string>
+	<key>CFBundleDisplayName</key>
+	<string>ULTRA</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.ultra.browser</string>
+	<key>CFBundleExecutable</key>
+	<string>ultra</string>
+	<key>CFBundleIconFile</key>
+	<string>ultra</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.2.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.2.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>ULTRA — a minimalist, tiling, memory-frugal browser.</string>
+
+	<!-- Audio-reactive visuals tap ULTRA's own sound (macOS 14.2+ process tap). -->
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>ULTRA listens only to its own tabs' sound to animate the audio-reactive background and audio bars. Nothing is recorded or saved.</string>
+
+	<!-- Websites can ask for these; macOS requires the reason up front or it ends the app. -->
+	<key>NSCameraUsageDescription</key>
+	<string>A website you are using wants to use your camera.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>A website you are using wants to use your microphone.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>A website you are using wants to know your location.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>A website you are using wants to know your location.</string>
+</dict>
+</plist>

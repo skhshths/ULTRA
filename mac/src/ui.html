@@ -1,0 +1,1840 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ULTRA</title>
+<style>
+:root {
+  --bg: #141414; --fg: #c4c4c4; --mid: #8a8a8a; --dim: #555; --line: #2a2a2a;
+  /* accent family: swapped wholesale by themes */
+  --acc: #9fe3d0; --acc-dim: #3d5f57; --acc-deep: #5f9c8d; --acc-sel: #2f4d46; --acc-bg: #14211e;
+  --bad: #e06c6c; --bar: 34px; --gap: 6px; --hdr: 18px;
+  --ease: cubic-bezier(.2, .8, .2, 1); --fast: 120ms; --med: 180ms;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg);
+  font: 12px/1 "JetBrains Mono", "Cascadia Mono", Consolas, monospace; user-select: none; cursor: default; }
+canvas#bg { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
+canvas#barsfx { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; display: none; }
+body.barsfx canvas#barsfx { display: block; }
+
+#bar { position: fixed; top: 0; left: 0; right: 0; height: var(--bar); display: flex; align-items: center;
+  gap: 10px; padding-left: 12px; z-index: 3; background: color-mix(in srgb, var(--bg) 90%, transparent); contain: layout paint; }
+.logo { color: var(--acc); letter-spacing: .32em; font-weight: 700; font-size: 11px; }
+.sep { color: #333; }
+#wsbar { display: flex; gap: 2px; }
+.wsb { min-width: 16px; height: 16px; padding: 0 3px; display: grid; place-items: center; font-size: 10px; color: var(--dim);
+  border: 1px solid #262626; transition: color var(--fast), border-color var(--fast), background-color var(--fast); }
+.wsb:hover { color: var(--fg); }
+.wsb.on { color: var(--bg); background: var(--acc); border-color: var(--acc); }
+#tabs { display: flex; gap: 3px; min-width: 0; flex: 0 1 auto; overflow-x: auto; scrollbar-width: none; scroll-behavior: smooth; }
+#tabs::-webkit-scrollbar { display: none; }
+.tab { position: relative; display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px;
+  color: var(--dim); white-space: nowrap; flex: 0 0 auto; max-width: 118px; overflow: hidden;
+  border-bottom: 1px solid transparent;
+  transition: max-width var(--med) var(--ease), padding var(--med) var(--ease), opacity var(--med) var(--ease),
+    color var(--fast), background-color var(--fast), border-color var(--fast); }
+.tab.enter, .tab.leave { max-width: 0; padding: 0; opacity: 0; }
+.tab.leave { pointer-events: none; }
+.tab .n { color: #4a4a4a; font-size: 10px; transition: color var(--fast); }
+.tab .t { overflow: hidden; text-overflow: ellipsis; }
+.tab.live, .tab.load { color: var(--mid); }
+.tab.sleep .t { color: #4d4d4d; font-style: italic; }
+.tab.vis { border-bottom-color: #3a3a3a; }
+.tab.vis .n { color: var(--mid); }
+.tab:hover { color: var(--fg); background: rgba(255,255,255,.03); }
+.tab.on { max-width: 230px; color: var(--fg); border-bottom-color: var(--acc); background: rgba(255,255,255,.045); }
+.tab.on .n { color: var(--acc); }
+.tab .x { width: 0; opacity: 0; text-align: center; color: var(--dim); transition: width var(--fast), opacity var(--fast); }
+.tab:hover .x { width: 10px; opacity: 1; } .tab .x:hover { color: var(--bad); }
+.tab.load .n { animation: pulse .9s ease-in-out infinite; }
+.tab.drop { box-shadow: -2px 0 0 var(--acc); }
+@keyframes pulse { 50% { color: var(--acc); } }
+#plus { color: var(--dim); padding: 0 6px; height: 22px; display: grid; place-items: center; transition: color var(--fast); }
+#plus:hover { color: var(--acc); }
+
+#urlwrap { flex: 1 1 260px; min-width: 120px; display: flex; align-items: center; height: 22px;
+  border: 1px solid var(--line); background: rgba(10,10,10,.6); padding: 0 8px; gap: 6px;
+  transition: border-color var(--fast); }
+#urlwrap:focus-within { border-color: var(--acc-dim); }
+#urlwrap .p { color: var(--acc); transition: color var(--fast); }
+#urlwrap.insecure { border-color: #5a2a2a; }
+#urlwrap.insecure .p { color: var(--bad); }
+#url { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--fg); font: inherit; }
+input::selection { background: var(--acc-sel); }
+.chip { color: var(--dim); font-size: 11px; white-space: nowrap; transition: color var(--fast); }
+.chip:hover { color: var(--acc); }
+#zoomchip { color: var(--acc); display: none; }
+#stats { color: var(--dim); white-space: nowrap; font-size: 11px; }
+#stats b { color: var(--mid); font-weight: 400; }
+#clock { color: var(--mid); font-size: 11px; }
+.wc { display: flex; height: 100%; }
+.wc div { width: 38px; display: grid; place-items: center; color: var(--dim); transition: background-color var(--fast), color var(--fast); }
+.wc div:hover { background: #1f1f1f; color: var(--fg); }
+.wc .q:hover { background: #6b2626; color: #fff; }
+
+/* tiled panes: positions are driven per-frame from rust, so only colours transition */
+.pf { position: fixed; border: 1px solid #333; z-index: 1; pointer-events: none;
+  transition: border-color var(--med) var(--ease), opacity var(--med); }
+.pf.on { border-color: var(--acc-deep); }
+.pf.solo.on { border-color: #3a3a3a; }
+.pf.home { border-color: #262626; }
+.pf.home.on:not(.solo) { border-color: var(--acc-dim); }
+.pf.zoomed { border-color: var(--acc); }
+.pf.gone, .hp.gone, .ph.gone { opacity: 0; }
+.ph { position: fixed; z-index: 2; height: var(--hdr); display: flex; align-items: center; gap: 8px; padding: 0 6px;
+  font-size: 10px; color: var(--dim); background: #171717; border: 1px solid #333; border-bottom-color: #222; overflow: hidden;
+  white-space: nowrap; transition: color var(--fast), border-color var(--med); }
+.ph.on { color: var(--fg); border-color: var(--acc-deep); border-bottom-color: #222; }
+.ph .n { color: var(--acc); }
+.ph .tt { overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
+.ph .st { color: var(--mid); }
+.ph .st.hot { color: var(--bad); }
+.ph .act { color: var(--dim); padding: 0 2px; }
+.ph .act:hover { color: var(--acc); }
+.ph .act.x:hover { color: var(--bad); }
+.hp { position: fixed; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 22px; overflow: hidden; padding: 12px; opacity: 0; transition: opacity var(--med) var(--ease); contain: strict; }
+.hp.show { opacity: 1; }
+.hp pre { color: #d6d6d6; font: 13px/1.05 Consolas, "Cascadia Mono", monospace;
+  text-shadow: 0 0 18px color-mix(in srgb, var(--acc) 15%, transparent); }
+.hp .mini { color: #d6d6d6; letter-spacing: .6em; font-weight: 700; font-size: 15px; }
+.hp input { width: min(560px, 90%); height: 34px; background: rgba(12,12,12,.85); border: 1px solid #2c2c2c; color: var(--fg);
+  font: 13px Consolas, monospace; padding: 0 12px; outline: 0; transition: border-color var(--fast); }
+.hp input:focus { border-color: var(--acc-dim); }
+.keys { color: #4a4a4a; font-size: 11px; line-height: 1.9; text-align: center; max-width: 94%; }
+/* home screen: today's digest */
+.digest { width: min(460px, 90%); font-size: 11px; color: #5c5c5c; }
+.dg-h { display: flex; align-items: center; gap: 10px; color: var(--mid); letter-spacing: .3em; font-size: 10px; margin-bottom: 9px; }
+.dg-h::after { content: ''; flex: 1; height: 1px; background: #262626; }
+.dg-h.priv { color: var(--priv); }
+.dg-sum { color: var(--mid); margin-bottom: 10px; }
+.dg-sum b { color: var(--fg); font-weight: 400; }
+.dg-row { display: grid; grid-template-columns: 140px 1fr 56px; gap: 10px; align-items: center; margin: 5px 0; }
+.dg-row .h { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dg-bar { height: 5px; background: #1d1d1d; }
+.dg-bar i { display: block; height: 100%; background: var(--acc-deep); }
+.dg-row:first-of-type .dg-bar i { background: var(--acc); }
+.dg-row .t { text-align: right; color: var(--mid); }
+.keys b { color: var(--mid); font-weight: 400; }
+.sp { position: fixed; z-index: 4; transition: background-color var(--fast); }
+.sp.v { cursor: col-resize; } .sp.h { cursor: row-resize; }
+.sp:hover, .sp.drag { background: color-mix(in srgb, var(--acc) 18%, transparent); }
+#panes.anim .sp { display: none; }
+
+/* overlays covering the content area */
+.ovl { position: fixed; left: calc(var(--gap) + 1px); top: calc(var(--top) + 1px); right: calc(var(--gap) + 1px);
+  bottom: calc(var(--gap) + 1px); z-index: 5; opacity: 0; visibility: hidden; outline: 0;
+  transition: opacity var(--med) var(--ease), transform var(--med) var(--ease), visibility 0s linear var(--med); }
+.ovl.on { opacity: 1; visibility: visible; transition: opacity var(--med) var(--ease), transform var(--med) var(--ease); }
+
+#ov { display: flex; flex-direction: column; padding: 18px; gap: 14px; background: rgba(20,20,20,.6); transform: scale(.985); }
+#ov.on { transform: none; }
+#ovq { height: 28px; background: rgba(12,12,12,.85); border: 1px solid #2c2c2c; color: var(--fg); font: inherit;
+  padding: 0 10px; outline: 0; width: 320px; }
+#ovgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; overflow-y: auto; align-content: start; }
+.tile { border: 1px solid #262626; background: rgba(14,14,14,.85); padding: 10px; height: 78px; display: flex;
+  flex-direction: column; gap: 7px; overflow: hidden; transition: border-color var(--fast), transform var(--fast) var(--ease); }
+.tile:hover { transform: translateY(-1px); }
+.tile .h { display: flex; justify-content: space-between; color: var(--dim); font-size: 10px; }
+.tile .tt { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile .uu { color: #4d4d4d; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.tile.sel { border-color: var(--acc); }
+.tile.cur .h span:first-child { color: var(--acc); }
+
+/* command palette */
+#pal { display: flex; justify-content: center; align-items: flex-start; padding-top: 10vh; background: rgba(20,20,20,.55); }
+.pbox { width: min(620px, 92%); border: 1px solid #2c2c2c; background: #161616; transform: translateY(-6px);
+  transition: transform var(--med) var(--ease); }
+#pal.on .pbox { transform: none; }
+.pin { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid #222; }
+.pin span { color: var(--acc); }
+#palq { flex: 1; height: 40px; background: none; border: 0; outline: 0; color: var(--fg); font: 13px Consolas, monospace; }
+#pallist { max-height: 46vh; overflow-y: auto; }
+.pi { display: flex; gap: 12px; align-items: baseline; padding: 8px 12px; color: var(--mid); }
+.pi .k { color: var(--fg); white-space: nowrap; }
+.pi .a { color: var(--dim); white-space: nowrap; }
+.pi .d { color: #5c5c5c; font-size: 11px; margin-left: auto; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pi.sel { background: var(--acc-bg); }
+.pi.sel .k { color: var(--acc); }
+.pft { padding: 8px 12px; color: #444; font-size: 10px; border-top: 1px solid #1d1d1d; }
+
+.rz { position: fixed; z-index: 6; }
+.rz.n { top: 0; left: 8px; right: 8px; height: 3px; cursor: ns-resize; }
+.rz.s { bottom: 0; left: 8px; right: 8px; height: 5px; cursor: ns-resize; }
+.rz.e { right: 0; top: 8px; bottom: 8px; width: 5px; cursor: ew-resize; }
+.rz.w { left: 0; top: 8px; bottom: 8px; width: 5px; cursor: ew-resize; }
+.rz.nw { left: 0; top: 0; width: 8px; height: 8px; cursor: nwse-resize; }
+.rz.se { right: 0; bottom: 0; width: 8px; height: 8px; cursor: nwse-resize; }
+.rz.ne { right: 0; top: 0; width: 8px; height: 8px; cursor: nesw-resize; }
+.rz.sw { left: 0; bottom: 0; width: 8px; height: 8px; cursor: nesw-resize; }
+body.maxed .rz { display: none; }
+/* macOS draws its own window buttons over the left of the bar, and resizes from the window edges. */
+body.mac .wc, body.mac .rz { display: none; }
+body.mac #bar { padding-left: 80px; }
+body.mac.fs #bar { padding-left: 12px; }
+#urlwrap.find .p { color: var(--acc); }
+#urlwrap.find.miss { border-color: #5a2a2a; }
+#urlwrap.find.miss .p { color: var(--bad); }
+
+/* settings */
+#cfgbtn { color: var(--dim); font-size: 11px; padding: 4px 6px; transition: color var(--fast); }
+#cfgbtn:hover, #cfgbtn.on { color: var(--acc); }
+#cfg { display: grid; place-items: center; background: rgba(20,20,20,.7); }
+.card { width: min(560px, 92%); max-height: calc(100% - 28px); overflow-y: auto; border: 1px solid #2c2c2c; background: #161616;
+  transform: translateY(6px); transition: transform var(--med) var(--ease); scrollbar-width: thin; scrollbar-color: #333 transparent; }
+#cfg.on .card { transform: none; }
+.card .hd { display: flex; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid #222;
+  color: var(--fg); letter-spacing: .3em; font-size: 11px; position: sticky; top: 0; background: #161616; z-index: 1; }
+.card .hd .k { color: var(--dim); letter-spacing: 0; }
+.sec { padding: 14px 16px 4px; color: #4a4a4a; font-size: 10px; letter-spacing: .3em; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 16px; border-bottom: 1px solid #1d1d1d; }
+.row .name { color: var(--fg); margin-bottom: 6px; }
+.row .desc { color: #5c5c5c; font-size: 11px; line-height: 1.5; }
+#r-speed .name { color: var(--acc); letter-spacing: .2em; font-weight: 700; }
+.sw { flex: 0 0 auto; width: 36px; height: 18px; border: 1px solid #333; background: #101010; position: relative;
+  transition: border-color var(--fast), background-color var(--fast); }
+.sw::after { content: ''; position: absolute; top: 3px; left: 3px; width: 10px; height: 10px; background: var(--dim);
+  transition: transform var(--fast) var(--ease), background-color var(--fast); }
+.sw.on { border-color: var(--acc-dim); background: var(--acc-bg); }
+.sw.on::after { transform: translateX(18px); background: var(--acc); }
+.step, .seg { display: flex; flex: 0 0 auto; border: 1px solid #2c2c2c; }
+.step button, .seg button { background: none; border: 0; color: var(--mid); font: inherit; padding: 5px 9px; cursor: default;
+  transition: color var(--fast), background-color var(--fast); }
+.step button:hover, .seg button:hover { color: var(--fg); background: #1e1e1e; }
+.step b { min-width: 26px; display: grid; place-items: center; color: var(--fg); font-weight: 400; border: solid #2c2c2c; border-width: 0 1px; }
+.seg button + button { border-left: 1px solid #2c2c2c; }
+.seg button.on { color: var(--bg); background: var(--acc); }
+.swatches { display: flex; gap: 6px; flex: 0 0 auto; }
+.swatch { width: 20px; height: 20px; border: 1px solid #333; padding: 3px; background-clip: content-box;
+  transition: border-color var(--fast), transform var(--fast) var(--ease); }
+.swatch:hover { transform: translateY(-1px); }
+.swatch.on { border-color: var(--fg); }
+.card .ft { padding: 10px 16px; color: #444; font-size: 10px; }
+.row .run { background: none; border: 1px solid #2c2c2c; color: var(--mid); font: inherit; padding: 5px 10px; cursor: default; }
+.row .run:hover { color: var(--acc); border-color: var(--acc-dim); }
+.row .ctl { display: flex; gap: 10px; align-items: center; }
+.spd { display: none; color: var(--bg); background: var(--acc); font-size: 9px; font-weight: 700; padding: 2px 4px; letter-spacing: .12em; }
+
+/* tutorial */
+#tour { display: grid; place-items: center; background: rgba(20,20,20,.72); }
+.tc { width: min(780px, 94%); border: 1px solid #2c2c2c; background: #161616; display: grid;
+  grid-template-columns: 1fr 264px; transform: translateY(6px); transition: transform var(--med) var(--ease); }
+#tour.on .tc { transform: none; }
+.tl { padding: 22px 22px 18px; display: flex; flex-direction: column; gap: 12px; min-height: 290px; }
+.tl .st { color: var(--dim); font-size: 10px; letter-spacing: .3em; }
+.tl h2 { font: 700 15px/1.3 Consolas, "Cascadia Mono", monospace; color: var(--fg); letter-spacing: .08em; }
+.tl .tb { color: #8d8d8d; line-height: 1.75; font-size: 12px; }
+.tl .tb b { color: var(--fg); font-weight: 400; }
+.tl .tb .acc { color: var(--acc); }
+.tl .tb .bad { color: var(--bad); }
+kbd { border: 1px solid #333; border-bottom-width: 2px; padding: 0 5px; color: var(--fg); font: 11px Consolas, monospace; background: #1b1b1b; white-space: nowrap; }
+.try { margin-top: auto; border: 1px dashed var(--acc-dim); padding: 10px 12px; color: var(--mid); font-size: 11px; line-height: 1.6;
+  transition: border-color var(--fast), color var(--fast); }
+.try::before { content: 'try it  '; color: var(--acc); letter-spacing: .15em; }
+.try.done { border-style: solid; border-color: var(--acc); color: var(--acc); }
+.try.done::before { content: '✓ done  '; }
+.tr { border-left: 1px solid #222; padding: 18px; display: grid; place-items: center; background: #131313; }
+.tr pre { color: #6f6f6f; font: 11px/1.25 Consolas, monospace; }
+.tr pre b { color: var(--acc); font-weight: 400; }
+.mm { position: relative; border: 1px solid #2a2a2a; background: #101010; }
+.mp { position: absolute; border: 1px solid #333; display: grid; place-items: center; color: var(--dim); font-size: 10px;
+  overflow: hidden; white-space: nowrap; transition: border-color var(--fast), background-color var(--fast); }
+.mp.on { border-color: var(--acc); color: var(--acc); }
+.mp.hot { background: color-mix(in srgb, var(--acc) 5%, transparent); }
+.mprev { position: absolute; border: 1px dashed var(--acc); background: color-mix(in srgb, var(--acc) 12%, transparent); pointer-events: none; }
+.mcur { position: absolute; width: 6px; height: 6px; margin: -3px 0 0 -3px; background: var(--acc); pointer-events: none; }
+.mmcap { color: #4a4a4a; font-size: 10px; margin-top: 8px; text-align: center; }
+.tf { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-top: 1px solid #222; }
+.dots { display: flex; gap: 3px; }
+.dots i { width: 10px; height: 2px; background: #2a2a2a; transition: background-color var(--fast); }
+.dots i.seen { background: var(--acc-dim); } .dots i.on { background: var(--acc); }
+.optout { margin-left: auto; display: flex; align-items: center; gap: 8px; color: #5c5c5c; font-size: 11px; }
+.optout .sw { transform: scale(.8); }
+.tbtn { display: flex; border: 1px solid #2c2c2c; }
+.tbtn button { background: none; border: 0; color: var(--mid); font: inherit; padding: 6px 11px; cursor: default;
+  transition: color var(--fast), background-color var(--fast); }
+.tbtn button + button { border-left: 1px solid #2c2c2c; }
+.tbtn button:hover { color: var(--fg); background: #1e1e1e; }
+.tbtn button.pri { color: var(--bg); background: var(--acc); }
+
+/* scanlines: one static composited layer over the chrome (pages are native and unaffected) */
+body.scan::after { content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 8;
+  background: repeating-linear-gradient(to bottom, rgba(0,0,0,.22) 0 1px, transparent 1px 3px); }
+body.scan .logo { text-shadow: 0 0 8px color-mix(in srgb, var(--acc) 60%, transparent); }
+
+/* ULTRASPEED: 100% speed, 0% looks. No canvas, no transitions, no animations, nothing composited. */
+body.speed canvas#bg, body.speed canvas#barsfx { display: none; }
+body.speed *, body.speed *::before, body.speed *::after { transition: none !important; animation: none !important; }
+body.speed::after { display: none; }
+body.speed #bar { background: var(--bg); border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, var(--bg)); }
+body.speed .hp pre, body.speed .logo { text-shadow: none; }
+body.speed .spd { display: inline; }
+body.speed .ovl, body.speed .card, body.speed .pbox, body.speed .tc { transform: none; }
+
+/* background styles */
+#bgimg { position: fixed; inset: 0; z-index: 0; display: none; background: center / cover no-repeat; transition: background-image 1.2s ease; }
+#bgimg::after { content: ''; position: absolute; inset: 0; background: var(--bg); opacity: var(--bgdim, .45); }
+body.bgimage #bgimg { display: block; }
+body.bgimage canvas#bg, body.bgsolid canvas#bg { display: none; }
+body.speed #bgimg { display: none; }
+
+/* colour picker */
+.picker { display: flex; flex-direction: column; gap: 8px; padding: 4px 16px 14px; border-bottom: 1px solid #1d1d1d; }
+.picker .top { display: flex; gap: 14px; align-items: flex-start; }
+.pk-sv { position: relative; width: 220px; height: 120px; cursor: crosshair; flex: 0 0 auto; border: 1px solid #2c2c2c; }
+.pk-hue { position: relative; width: 220px; height: 12px; cursor: ew-resize; border: 1px solid #2c2c2c;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+.pk-sv canvas { display: block; width: 100%; height: 100%; }
+.pk-dot { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #000; pointer-events: none; border-radius: 50%; }
+.pk-bar { position: absolute; top: -2px; width: 4px; height: 14px; margin-left: -2px; background: #fff; box-shadow: 0 0 0 1px #000; pointer-events: none; }
+.pk-side { display: flex; flex-direction: column; gap: 8px; font-size: 11px; color: var(--mid); }
+.pk-prev { width: 64px; height: 28px; border: 1px solid #333; }
+.pk-side input { width: 86px; height: 24px; background: #101010; border: 1px solid #2c2c2c; color: var(--fg); font: inherit; padding: 0 6px; outline: 0; }
+.pk-side input:focus { border-color: var(--acc-dim); }
+.pk-rgb { color: var(--dim); }
+.pk-reset { width: 86px; height: 24px; background: none; border: 1px solid #2c2c2c; color: var(--mid); font: 11px Consolas, monospace;
+  cursor: default; transition: color var(--fast), border-color var(--fast), opacity var(--fast); }
+.pk-reset:hover { color: var(--acc); border-color: var(--acc-dim); }
+.pk-reset.off { opacity: .35; pointer-events: none; }
+input[type=range] { accent-color: var(--acc); width: 140px; }
+.bgctl { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
+.swatch.custom { background: conic-gradient(#f66, #fd6, #6f6, #6ff, #66f, #f6f, #f66) content-box; }
+
+/* private workspace */
+:root { --priv: #ff4d6d; }
+.wsb.priv { color: var(--priv); border-color: color-mix(in srgb, var(--priv) 35%, transparent); }
+.wsb.priv.on { color: var(--bg); background: var(--priv); border-color: var(--priv); }
+.privtag { display: none; color: var(--bg); background: var(--priv); font-size: 9px; font-weight: 700; padding: 2px 4px; letter-spacing: .12em; }
+body.private .privtag { display: inline; }
+body.private #bar { box-shadow: inset 0 -1px 0 var(--priv); }
+body.private .pf.on { border-color: var(--priv); }
+body.private .tab.on { border-bottom-color: var(--priv); }
+body.private .tab.on .n { color: var(--priv); }
+#lock { display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 92%, transparent); z-index: 6; }
+.lbox { width: min(420px, 92%); border: 1px solid color-mix(in srgb, var(--priv) 45%, #2c2c2c); background: #161616; padding: 22px;
+  display: flex; flex-direction: column; gap: 12px; }
+.lbox pre { color: var(--priv); font: 11px/1.15 Consolas, monospace; text-align: center; }
+.lbox h2 { font: 700 13px Consolas, monospace; letter-spacing: .25em; color: var(--fg); text-align: center; }
+.lbox .ld { color: #6a6a6a; font-size: 11px; line-height: 1.6; text-align: center; }
+.lbox input { height: 32px; background: #101010; border: 1px solid #2c2c2c; color: var(--fg); font: 13px Consolas, monospace; padding: 0 10px; outline: 0; }
+.lbox input:focus { border-color: color-mix(in srgb, var(--priv) 60%, transparent); }
+.lbox .lerr { color: var(--priv); font-size: 11px; min-height: 14px; text-align: center; }
+.lbox .lbtns { display: flex; gap: 8px; justify-content: center; }
+.lbox button { background: none; border: 1px solid #2c2c2c; color: var(--mid); font: inherit; padding: 6px 14px; cursor: default; }
+.lbox button:hover { color: var(--fg); background: #1e1e1e; }
+.lbox button.pri { color: var(--bg); background: var(--priv); border-color: var(--priv); }
+#toast { position: fixed; top: calc(var(--top) + 10px); left: 50%; transform: translate(-50%, -6px); z-index: 9; opacity: 0; pointer-events: none;
+  background: #1a1a1a; border: 1px solid #333; color: var(--fg); padding: 7px 12px; font-size: 11px; white-space: nowrap;
+  transition: opacity var(--med) var(--ease), transform var(--med) var(--ease); }
+#toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+/* address-bar suggestions + bookmark star */
+#star { color: var(--dim); cursor: default; transition: color var(--fast); }
+#star:hover { color: var(--acc); }
+#star.on { color: var(--acc); }
+#sugg { position: fixed; z-index: 7; display: none; background: #161616; border: 1px solid #2c2c2c; border-top: 0;
+  max-height: 60vh; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+#sugg.on { display: block; }
+.sg { display: flex; gap: 10px; align-items: baseline; padding: 7px 10px; color: var(--mid); white-space: nowrap; overflow: hidden; }
+.sg .ic { color: var(--dim); width: 12px; flex: 0 0 auto; }
+.sg .ic.b { color: var(--acc); }
+.sg .st { color: var(--fg); overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.sg .su { color: #555; font-size: 11px; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; min-width: 0; }
+.sg.sel { background: var(--acc-bg); }
+.sg.sel .st { color: var(--acc); }
+#bgmode { flex-wrap: wrap; justify-content: flex-end; max-width: 300px; }
+#boot { position: fixed; inset: 0; z-index: 20; pointer-events: auto; }
+
+/* bookmarks bar */
+:root { --top: var(--bar); --pulse: 0; }
+body.bmbar { --top: calc(var(--bar) + 26px); }
+/* "support us" strip (5th launch only): Rust moves the panes down while it is shown, so it never covers a page. */
+body.coffee { --top: calc(var(--bar) + 30px); }
+body.bmbar.coffee { --top: calc(var(--bar) + 56px); }
+#coffee { position: fixed; top: calc(var(--top) - 27px); left: var(--gap); right: var(--gap); height: 22px; display: none;
+  align-items: center; gap: 12px; padding: 0 6px 0 10px; z-index: 3; font-size: 11px; color: var(--dim);
+  border: 1px solid color-mix(in srgb, var(--acc) 22%, #1f1f1f); background: color-mix(in srgb, var(--bg) 94%, var(--acc)); }
+body.coffee #coffee { display: flex; }
+#coffee .msg { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#coffee .msg b { color: var(--fg); font-weight: 400; }
+#coffee .cb { color: var(--acc); padding: 1px 8px; border: 1px solid color-mix(in srgb, var(--acc) 45%, transparent); }
+#coffee .cb:hover { background: color-mix(in srgb, var(--acc) 15%, transparent); }
+#coffee .later, #coffee .x { color: var(--dim); padding: 1px 4px; }
+#coffee .later:hover, #coffee .x:hover { color: var(--fg); }
+#bmbar { position: fixed; top: var(--bar); left: 0; right: 0; height: 26px; display: none; align-items: center; gap: 2px;
+  padding: 0 10px; z-index: 3; background: color-mix(in srgb, var(--bg) 92%, transparent); border-bottom: 1px solid #1f1f1f;
+  overflow-x: auto; scrollbar-width: none; }
+#bmbar::-webkit-scrollbar { display: none; }
+body.bmbar #bmbar { display: flex; }
+.bmk { display: flex; gap: 6px; align-items: center; height: 20px; padding: 0 8px 0 4px; color: var(--mid); white-space: nowrap;
+  max-width: 190px; font-size: 11px; flex: 0 0 auto; transition: color var(--fast), background-color var(--fast); }
+.bmk:hover { color: var(--fg); background: rgba(255,255,255,.04); }
+.bmk .ic { width: 14px; height: 14px; display: grid; place-items: center; background: var(--acc-bg); color: var(--acc); font-size: 9px; flex: 0 0 auto; }
+.bmk .bt { overflow: hidden; text-overflow: ellipsis; }
+.bmempty { color: #4a4a4a; font-size: 11px; }
+/* audio reactive: focused pane and logo glow with the music */
+.pf.on { box-shadow: 0 0 calc(var(--pulse) * 18px) color-mix(in srgb, var(--acc) calc(var(--pulse) * 55%), transparent); }
+.logo { text-shadow: 0 0 calc(var(--pulse) * 12px) var(--acc); }
+
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div id="bgimg"></div><canvas id="bg"></canvas><canvas id="barsfx"></canvas>
+<div id="bar">
+  <span class="logo">ULTRA</span><span class="spd">SPEED</span><span class="privtag">PRIVATE</span><span class="sep">│</span>
+  <div id="wsbar"></div><span class="sep">│</span>
+  <div id="tabs"></div><div id="plus" title="new tab (cmd+t)">+</div>
+  <div id="urlwrap"><span class="p">›</span><input id="url" spellcheck="false" autocomplete="off"><span id="star" title="bookmark (cmd+d)">☆</span></div>
+  <span id="zoomchip" class="chip" title="unzoom (cmd+shift+f)">⛶ zoom</span>
+  <span id="stats"></span><span id="trim" class="chip" title="put every hidden tab to sleep">trim</span>
+  <span id="clock"></span><span id="cfgbtn" title="settings (cmd+,)">cfg</span>
+  <div class="wc"><div id="wmin">─</div><div id="wmax">□</div><div id="wq" class="q">✕</div></div>
+</div>
+<div id="bmbar"></div><div id="coffee"><span class="msg">☕ <b>enjoying ULTRA?</b> it's made by a tiny team. if it's saved you some time, you can buy us a coffee.</span>
+  <span class="cb" id="coffee-yes">buy us a coffee</span><span class="later" id="coffee-later">not now</span><span class="x" id="coffee-x" title="close">✕</span></div><div id="panes"></div><div id="toast"></div><div id="sugg"></div>
+<div id="cfg" class="ovl" tabindex="-1"><div class="card">
+  <div class="hd"><span>SETTINGS</span><span class="k">cmd+,</span></div>
+  <div class="sec">PERFORMANCE</div>
+  <div class="row" id="r-speed"><div><div class="name">ULTRASPEED</div>
+    <div class="desc">no swirls, no transitions, no pane animations, no scanlines.<br>100% speed, 0% looks.</div></div><div class="sw" id="sw-speed"></div></div>
+  <div class="row"><div><div class="name">warm tabs</div>
+    <div class="desc">hidden tabs kept loaded for instant switching.<br>more = snappier switching, more memory.</div></div>
+    <div class="step"><button data-d="-1">−</button><b id="warmv">3</b><button data-d="1">+</button></div></div>
+  <div class="row" id="r-stats"><div><div class="name">pane stats</div>
+    <div class="desc">a slim header on every pane with its page's live memory, total memory &amp; cpu<br>in the bar, plus ↻ to rebuild a bloated page. sampled only while on.</div></div><div class="sw" id="sw-stats"></div></div>
+  <div class="sec">PRIVACY</div>
+  <div class="row" id="r-block"><div><div class="name">block ads &amp; trackers</div>
+    <div class="desc">ad networks and tracking beacons are refused at the network level.<br>sign-in providers are never blocked.</div></div><div class="sw" id="sw-block"></div></div>
+  <div class="row"><div><div class="name" style="color:var(--priv)">private workspace</div>
+    <div class="desc">cmd+opt+0. private tabs: no history, cookies, cache or session ever saved.<br>hidden from screen capture, locks after 5 min idle, 5 wrong passwords wipe it.</div></div>
+    <div class="ctl"><button class="run" id="priv-pass">set password</button><button class="run" id="priv-lock">lock</button><button class="run" id="priv-wipe">wipe</button></div></div>
+  <div class="row"><div><div class="name">history</div><div class="desc">pages you visit are remembered on this mac to power address-bar suggestions.<br>never in the private workspace. cmd+d bookmarks a page.</div></div>
+    <div class="ctl"><button class="run" id="hist-clear">clear history</button></div></div>
+  <div class="sec">LOOK</div>
+  <div class="row"><div><div class="name">theme</div><div class="desc" id="themename">mint</div></div><div class="swatches" id="swatches"></div></div>
+  <div class="row" style="border-bottom:0;padding-bottom:6px"><div><div class="name">colour picker</div><div class="desc">drag to pick. accent recolours the whole ui, background tints everything behind it,<br>pattern colours the animated background (default follows the accent).</div></div>
+    <div class="seg" id="pk-target"><button data-p="accent" class="on">accent</button><button data-p="bgcolor">background</button><button data-p="swirlcolor">pattern</button></div></div>
+  <div class="picker">
+    <div class="top">
+      <div><div class="pk-sv" id="pk-sv"><canvas width="220" height="120"></canvas><div class="pk-dot" id="pk-dot"></div></div>
+        <div class="pk-hue" id="pk-hue" style="margin-top:8px"><div class="pk-bar" id="pk-bar"></div></div></div>
+      <div class="pk-side"><div class="pk-prev" id="pk-prev"></div><input id="pk-hex" spellcheck="false" maxlength="7"><div class="pk-rgb" id="pk-rgb"></div>
+        <button class="pk-reset" id="pk-reset">↺ default</button></div>
+    </div>
+  </div>
+  <div class="row"><div><div class="name">background</div><div class="desc">ascii swirl, matrix rain, starfield, gradient, a plain colour, an image, or a slideshow of a folder.</div></div>
+    <div class="seg" id="bgmode"><button data-m="swirl">swirl</button><button data-m="matrix">matrix</button><button data-m="stars">stars</button><button data-m="gradient">gradient</button><button data-m="solid">solid</button><button data-m="image">image</button><button data-m="slideshow">slideshow</button></div></div>
+  <div class="row" id="r-bars"><div><div class="name">audio bars</div><div class="desc">a spectrum visualiser across the bottom, layered over any background above.<br>bounces with sound playing in ULTRA (needs audio reactive on).</div></div><div class="sw" id="sw-bars"></div></div>
+  <div class="row" id="r-swirl"><div><div class="name">pattern brightness</div><div class="desc">how bright the animated background is.</div></div>
+    <div class="bgctl"><input type="range" id="sw-bright" min="30" max="300" step="5"><span id="sw-brightv" style="width:40px;color:var(--mid)"></span></div></div>
+  <div class="row" id="r-slide"><div><div class="name">slideshow folder</div><div class="desc" id="slidedesc">no folder chosen.</div></div>
+    <div class="bgctl"><button class="run" id="slide-pick">choose folder…</button><button class="run" id="slide-next">next ›</button></div></div>
+  <div class="row" id="r-slidesecs"><div><div class="name">change every</div><div class="desc">how long each image stays up before the next fades in.</div></div>
+    <div class="seg" id="slidesecs"><button data-s="10">10s</button><button data-s="30">30s</button><button data-s="60">1m</button><button data-s="300">5m</button><button data-s="900">15m</button><button data-s="3600">1h</button></div></div>
+  <div class="row" id="r-bgimg"><div><div class="name">background image</div><div class="desc" id="bgimgdesc">no image chosen.</div></div>
+    <div class="bgctl"><button class="run" id="bg-pick">choose…</button><button class="run" id="bg-clear">remove</button><input type="file" id="bg-file" accept="image/png,image/jpeg,image/webp" hidden></div></div>
+  <div class="row" id="r-bgdim"><div><div class="name">dim image</div><div class="desc">darkens the picture so text stays readable.</div></div>
+    <div class="bgctl"><input type="range" id="bg-dim" min="0" max="90" step="1"><span id="bg-dimv" style="width:34px;color:var(--mid)"></span></div></div>
+  <div class="row" id="r-audio"><div><div class="name">audio reactive</div><div class="desc">when a tab plays sound, the background, the focused pane's border and the logo pulse with it.<br>reads ULTRA's own volume meter only. off in ULTRASPEED.</div></div><div class="sw" id="sw-audio"></div></div>
+  <div class="row" id="r-bmbar"><div><div class="name">bookmarks bar</div><div class="desc">a row of your bookmarks under the top bar. click opens, middle-click opens a new tab, right-click removes.</div></div><div class="sw" id="sw-bmbar"></div></div>
+  <div class="row" id="r-boot"><div><div class="name">boot animation</div><div class="desc">the logo assembles out of glyphs on launch. any key skips it. off in ULTRASPEED.</div></div><div class="sw" id="sw-boot"></div></div>
+  <div class="row" id="r-scan"><div><div class="name">scanlines</div><div class="desc">retro crt lines over the chrome. off in ULTRASPEED.</div></div><div class="sw" id="sw-scan"></div></div>
+  <div class="sec">INPUT</div>
+  <div class="row" id="r-type"><div><div class="name">type to search</div>
+    <div class="desc">letters &amp; numbers jump to the address bar when you aren't in a text field.<br>turn off if a site's single-key shortcuts matter to you.</div></div><div class="sw" id="sw-type"></div></div>
+  <div class="row"><div><div class="name">search</div><div class="desc">used when the address bar isn't a url.</div></div>
+    <div class="seg" id="seg"><button data-e="duckduckgo">ddg</button><button data-e="google">google</button><button data-e="bing">bing</button><button data-e="brave">brave</button></div></div>
+  <div class="sec">HELP</div>
+  <div class="row"><div><div class="name">tutorial</div><div class="desc">show the tour every time ULTRA starts.</div></div>
+    <div class="ctl"><button class="run" id="run-tour">run now</button><div class="sw" id="sw-tour"></div></div></div>
+  <div class="ft">saved automatically · esc to close</div>
+</div></div>
+<div id="tour" class="ovl" tabindex="-1"><div class="tc">
+  <div class="tl"><div class="st" id="t-st"></div><h2 id="t-h"></h2><div class="tb" id="t-b"></div><div class="try" id="t-try"></div></div>
+  <div class="tr" id="t-r"></div>
+  <div class="tf"><div class="dots" id="t-dots"></div>
+    <div class="optout">show on startup <div class="sw" id="t-opt"></div></div>
+    <div class="tbtn"><button id="t-skip">skip</button><button id="t-back">← back</button><button id="t-next" class="pri">next →</button></div></div>
+</div></div>
+<div id="pal" class="ovl" tabindex="-1"><div class="pbox">
+  <div class="pin"><span>❯</span><input id="palq" placeholder="type a command, or an address…" spellcheck="false" autocomplete="off"></div>
+  <div id="pallist"></div>
+  <div class="pft">↑ on empty = history · ↑↓ choose · tab complete · ; chains commands · enter run · esc close</div>
+</div></div>
+<div id="lock" class="ovl" tabindex="-1"><div class="lbox">
+<pre>┌──────┐
+│ ▄▄▄▄ │
+│ █  █ │
+└──────┘</pre>
+  <h2 id="l-h">PRIVATE</h2><div class="ld" id="l-d"></div>
+  <input type="password" id="l-old" placeholder="current password" autocomplete="off">
+  <input type="password" id="l-p1" placeholder="password" autocomplete="off">
+  <input type="password" id="l-p2" placeholder="confirm password" autocomplete="off">
+  <div class="lerr" id="l-err"></div>
+  <div class="lbtns"><button id="l-cancel">cancel</button><button id="l-ok" class="pri">unlock</button></div>
+</div></div>
+<div id="ov" class="ovl"><input id="ovq" placeholder="filter tabs…" spellcheck="false" autocomplete="off"><div id="ovgrid"></div></div>
+<div class="rz n" data-d="n"></div><div class="rz s" data-d="s"></div><div class="rz e" data-d="e"></div><div class="rz w" data-d="w"></div>
+<div class="rz nw" data-d="nw"></div><div class="rz ne" data-d="ne"></div><div class="rz sw" data-d="sw"></div><div class="rz se" data-d="se"></div>
+<template id="logo"><pre>
+██╗   ██╗██╗  ████████╗██████╗  █████╗
+██║   ██║██║  ╚══██╔══╝██╔══██╗██╔══██╗
+██║   ██║██║     ██║   ██████╔╝███████║
+██║   ██║██║     ██║   ██╔══██╗██╔══██║
+╚██████╔╝███████╗██║   ██║  ██║██║  ██║
+ ╚═════╝ ╚══════╝╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝</pre></template>
+<script>
+(() => {
+const $ = (s) => document.querySelector(s);
+const send = (cmd, arg) => { try { window.ipc.postMessage(JSON.stringify({ cmd, arg })); } catch (_) {} };
+const CFG0 = window.__ultraCfg || {};
+let S = { tabs: [], a: 0, panes: [], splits: [], live: 0, ws: 0, wss: [0], ps: {}, cfg: CFG0 };
+let ovOn = false, cfgOn = false, palOn = false, ovSel = 0, ovList = [], splitSig = '', pendingFocus = null, lastWs = 0;
+let SPEED = !!CFG0.ultraspeed;
+document.body.classList.toggle('speed', SPEED);
+const later = (f, ms) => SPEED ? f() : setTimeout(f, ms);
+
+const host = (u) => { try { return new URL(u).host.replace(/^www\./, ''); } catch (_) { return u; } };
+const label = (t) => t.s === 'home' ? '~' : (t.t || host(t.u) || '…');
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const place = (el, r) => { const st = el.style; st.left = r.x + 'px'; st.top = r.y + 'px'; st.width = r.w + 'px'; st.height = r.h + 'px'; };
+const nextFrame = (f) => SPEED ? f() : requestAnimationFrame(() => requestAnimationFrame(f));
+const setText = (el, v) => { if (el.textContent !== v) el.textContent = v; };
+const setHTML = (el, v) => { if (el.innerHTML !== v) el.innerHTML = v; };
+const cfg = () => S.cfg || {};
+// Slot number (1-based) of every tab within its own workspace.
+const slots = () => { const n = {}, m = new Map(); for (const t of S.tabs) { n[t.w] = (n[t.w] || 0) + 1; m.set(t.id, n[t.w]); } return m; };
+
+// ── themes: every accent-derived colour comes from these variables ──
+const THEMES = {
+  mint: '#9fe3d0', amber: '#ffb454', red: '#ff6b5f', mono: '#e8e8e8', ice: '#8ab4ff', matrix: '#4af626',
+  violet: '#b18cff', pink: '#ff7eb6', orange: '#ff9150', cyan: '#5ce1e6', gold: '#ffd75e', lime: '#b6f35c',
+};
+const hex2rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+const rgb2hex = (c) => '#' + c.map((v) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join('');
+const mix = (a, b, t) => a.map((v, i) => v * t + b[i] * (1 - t));
+let THEME = null, picking = false;
+// Derive the whole accent family from one accent + the background colour.
+function applyTheme(c, force) {
+  if (picking && !force) return;
+  const accHex = c.theme === 'custom' ? (c.accent || '#9fe3d0') : (THEMES[c.theme] || THEMES.mint);
+  const bgHex = /^#[0-9a-f]{6}$/i.test(c.bgcolor || '') ? c.bgcolor : '#141414';
+  const swHex = /^#[0-9a-f]{6}$/i.test(c.swirlcolor || '') ? c.swirlcolor : '';
+  const bright = Math.min(300, Math.max(30, c.swirlbright ?? 100)) / 100;
+  const key = accHex + bgHex + swHex + bright;
+  if (THEME === key) return;
+  THEME = key;
+  const acc = hex2rgb(accHex), bgc = hex2rgb(bgHex);
+  const r = document.documentElement.style;
+  r.setProperty('--bg', bgHex);
+  r.setProperty('--acc', accHex);
+  r.setProperty('--acc-dim', rgb2hex(mix(acc, bgc, .35)));
+  r.setProperty('--acc-deep', rgb2hex(mix(acc, bgc, .6)));
+  r.setProperty('--acc-sel', rgb2hex(mix(acc, bgc, .3)));
+  r.setProperty('--acc-bg', rgb2hex(mix(acc, bgc, .12)));
+  const glyph = swHex ? hex2rgb(swHex) : mix(acc, [190, 190, 190], .15);
+  if (window.__ultraBg) window.__ultraBg.setTint(glyph.map(Math.round).join(','), bgHex, bright);
+  if (window.__ultraBars) window.__ultraBars.setTint(glyph.map(Math.round).join(','), bright);
+}
+applyTheme(CFG0);
+document.body.classList.toggle('scan', !!CFG0.scanlines && !SPEED);
+
+// ── home screen digest: today's browsing, from local data only ──
+const dur = (s) => s < 60 ? '<1m' : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
+const kfmt = (n) => n > 999 ? (n / 1000).toFixed(1) + 'k' : String(n);
+function digestHTML(priv) {
+  if (priv) return `<div class="dg-h priv">PRIVATE</div><div class="dg-sum">nothing in this workspace is remembered: no history, no time, no digest.</div>`;
+  const d = S.digest || { secs: 0, pages: 0, blocked: 0, top: [] };
+  const head = '<div class="dg-h">TODAY</div>';
+  if (!d.secs && !d.pages) return head + `<div class="dg-sum">nothing yet today${d.blocked ? ` · <b>${kfmt(d.blocked)}</b> trackers blocked` : ''}. go explore.</div>`;
+  const max = Math.max(1, ...d.top.map((x) => x[1]));
+  return head + `<div class="dg-sum"><b>${dur(d.secs)}</b> browsing · <b>${d.pages}</b> page${d.pages === 1 ? '' : 's'} · <b>${kfmt(d.blocked)}</b> trackers blocked</div>` +
+    d.top.map(([h, t]) => `<div class="dg-row"><span class="h">${esc(h)}</span><span class="dg-bar"><i style="width:${Math.max(2, t / max * 100).toFixed(1)}%"></i></span><span class="t">${dur(t)}</span></div>`).join('');
+}
+
+// ── state pushed from rust (coalesced: at most once per event-loop turn) ──
+if (window.__ultraMac) document.body.classList.add('mac');
+let findOn = false, findT = 0; // find-in-page mode of the address bar (see below)
+window.ultra = {
+  render(s) {
+    S = s;
+    applyCfg(cfg());
+    renderWs();
+    renderTabs();
+    renderBookmarks();
+    // A suggestion list only ever belongs to the box that currently has focus.
+    if (sgInput && document.activeElement !== sgInput) { sgHide(); sgTyped = false; sgInput = null; }
+    document.body.classList.toggle('private', s.ws === 9);
+    if (s.gate) setLock(cfg().haspass ? 'unlock' : 'create'); else if (lockMode && lockMode !== 'change') setLock(null);
+    setText($('#priv-pass'), cfg().haspass ? 'change password' : 'set password');
+    const cur = s.tabs[s.a] || { s: 'home', u: '' };
+    const url = $('#url'); if (document.activeElement !== url && !findOn) url.value = cur.s === 'home' ? '' : cur.u;
+    const insecure = cur.s !== 'home' && /^http:/i.test(cur.u) && !/^http:\/\/(localhost|127\.)/i.test(cur.u);
+    $('#urlwrap').classList.toggle('insecure', insecure);
+    if (!findOn) setText($('#urlwrap .p'), insecure ? '⚠' : '›');
+    $('#star').classList.toggle('on', !!s.bm); setText($('#star'), s.bm ? '★' : '☆');
+    $('#star').style.display = cur.s === 'home' || cur.p ? 'none' : '';
+    $('#urlwrap').title = insecure ? 'not secure: this page is not encrypted. do not enter passwords here.' : '';
+    const sleeping = s.tabs.filter((t) => t.s === 'sleep').length;
+    let stats = `<b>${s.live}</b> live · <b>${sleeping}</b> asleep`;
+    if (cfg().stats && s.mem) stats += ` · <b>${Math.round(s.mem)}</b> MB · <b>${(s.cpu || 0).toFixed(1)}</b>% cpu`;
+    if (cfg().block && s.blocked) stats += ` · <b>${s.blocked > 999 ? (s.blocked / 1000).toFixed(1) + 'k' : s.blocked}</b> blocked`;
+    setHTML($('#stats'), stats);
+    $('#trim').style.display = cfg().stats ? '' : 'none';
+    $('#zoomchip').style.display = s.zoom != null ? 'inline' : 'none';
+    document.body.classList.toggle('maxed', !!s.max);
+    document.body.classList.toggle('coffee', !!s.coffee);
+    document.body.classList.toggle('fs', !!s.fs);
+    setText($('#wmax'), s.max ? '❐' : '□');
+    renderPanes();
+    if (ovOn) drawOv();
+    if (!!s.tour !== tourOn) setTour(!!s.tour); else tourState();
+  },
+  // One animation frame of pane geometry: [[tabId, x, y, w, h], ...]
+  frame(list) {
+    panesEl.classList.add('anim');
+    for (const [id, x, y, w, h] of list) {
+      const e = paneEl(id), r = { x, y, w, h };
+      place(e.pf, r); if (e.hp) place(e.hp, r); if (e.ph) place(e.ph, { x, y, w, h: 18 });
+    }
+  },
+  focusUrl() { sgHide(); sgTyped = false; sgInput = null; const u = $('#url'); u.focus(); u.select(); },
+  focusHome(id) { sgHide(); sgTyped = false; sgInput = null; pendingFocus = id; applyPendingFocus(); },
+  overview(on) { setOv(on); },
+  settings(on) { setCfg(on); },
+  palette(on) { setPal(on); },
+  tour(on) { setTour(on); },
+  // Type-to-search: put the first typed character into the focused pane's search field.
+  typeUrl(ch) {
+    const cur = S.tabs[S.a];
+    let q = null;
+    if (cur && cur.s === 'home') { const e = paneEls.get(cur.id); q = e && e.hp && e.hp.querySelector('input'); }
+    q = q || $('#url');
+    q.focus(); q.value = ch; q.setSelectionRange(1, 1);
+    sgTyped = true; sgAsk(q);
+  },
+};
+const anyOverlay = () => ovOn || cfgOn || palOn || tourOn || !!lockMode;
+
+// ── settings ──
+const swatches = $('#swatches');
+swatches.innerHTML = Object.entries(THEMES).map(([n, a]) => `<div class="swatch" data-t="${n}" title="${n}" style="background-color:${a}"></div>`).join('') +
+  '<div class="swatch custom" data-t="custom" title="custom (use the picker)"></div>';
+function applyCfg(c) {
+  const speed = !!c.ultraspeed;
+  if (speed !== SPEED) {
+    SPEED = speed;
+    document.body.classList.toggle('speed', speed);
+    bg.setEnabled(!speed);
+  }
+  applyTheme(c);
+  applyBg(c);
+  if (!picking) syncPicker();
+  document.body.classList.toggle('scan', !!c.scanlines && !speed);
+  $('#sw-speed').classList.toggle('on', speed);
+  setText($('#warmv'), String(c.warm ?? 3));
+  $('#sw-stats').classList.toggle('on', !!c.stats);
+  $('#sw-block').classList.toggle('on', c.block ?? true);
+  $('#sw-scan').classList.toggle('on', !!c.scanlines);
+  $('#sw-boot').classList.toggle('on', c.boot ?? true);
+  $('#sw-audio').classList.toggle('on', c.audio ?? true);
+  $('#sw-bmbar').classList.toggle('on', c.bmbar ?? true);
+  document.body.classList.toggle('bmbar', c.bmbar ?? true);
+  $('#sw-type').classList.toggle('on', c.typeahead ?? true);
+  $('#sw-tour').classList.toggle('on', c.tour ?? true);
+  $('#t-opt').classList.toggle('on', c.tour ?? true);
+  setText($('#themename'), c.theme === 'custom' ? 'custom ' + (c.accent || '') : (c.theme || 'mint'));
+  swatches.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('on', s.dataset.t === (c.theme || 'mint')));
+  $('#seg').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.e === (c.search || 'duckduckgo')));
+}
+function setCfg(on) {
+  cfgOn = on;
+  $('#cfg').classList.toggle('on', on);
+  $('#cfgbtn').classList.toggle('on', on);
+  if (on) { if (ovOn) setOv(false); if (palOn) setPal(false); if (tourOn) setTour(false); setTimeout(() => $('#cfg').focus(), 0); }
+  renderPanes();
+}
+function closeCfg() { setCfg(false); send('settings', false); }
+const toggle = (key, dflt) => send('set', [key, !(cfg()[key] ?? dflt)]);
+$('#cfgbtn').onclick = () => cfgOn ? closeCfg() : send('settings', true);
+$('#r-speed').onclick = () => send('set', ['ultraspeed', !SPEED]);
+$('#r-stats').onclick = () => toggle('stats', false);
+$('#r-block').onclick = () => toggle('block', true);
+$('#r-scan').onclick = () => toggle('scanlines', false);
+$('#r-boot').onclick = () => toggle('boot', true);
+$('#r-audio').onclick = () => toggle('audio', true);
+$('#r-bmbar').onclick = () => toggle('bmbar', true);
+$('#r-bars').onclick = () => toggle('bars', false);
+$('#hist-clear').onclick = () => send('clearhistory');
+$('#r-type').onclick = () => toggle('typeahead', true);
+$('#sw-tour').onclick = (e) => { e.stopPropagation(); toggle('tour', true); };
+$('.step').onclick = (e) => { const d = +e.target.dataset.d; if (d) send('set', ['warm', Math.max(0, Math.min(12, (cfg().warm ?? 3) + d))]); };
+$('#seg').onclick = (e) => { if (e.target.dataset.e) send('set', ['search', e.target.dataset.e]); };
+swatches.onclick = (e) => { if (e.target.dataset.t) send('set', ['theme', e.target.dataset.t]); };
+
+// ── background style ──
+let bgImg = null, slideImg = null, slideName = '', shownPic = null;
+function applyBg(c) {
+  const mode = c.bgmode || 'swirl';
+  const pic = mode === 'image' ? bgImg : mode === 'slideshow' ? slideImg : null;
+  // Only touch the (possibly huge) data URL when the picture actually changes.
+  if (pic !== shownPic) { shownPic = pic; $('#bgimg').style.backgroundImage = pic ? `url("${pic}")` : 'none'; }
+  document.body.classList.toggle('bgimage', !!pic);
+  document.body.classList.toggle('bgsolid', mode === 'solid' || ((mode === 'image' || mode === 'slideshow') && !pic));
+  const canvasMode = ['swirl', 'matrix', 'stars', 'gradient'].includes(mode);
+  barsFx.setEnabled(!SPEED && !!c.bars);
+  $('#sw-bars').classList.toggle('on', !!c.bars);
+  if (canvasMode) bg.setMode(mode);
+  bg.setEnabled(!SPEED && canvasMode);
+  document.documentElement.style.setProperty('--bgdim', ((c.bgdim ?? 45) / 100).toFixed(2));
+  $('#bgmode').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === mode));
+  $('#r-bgimg').style.display = mode === 'image' ? '' : 'none';
+  $('#r-swirl').style.display = canvasMode ? '' : 'none';
+  if (document.activeElement !== $('#sw-bright')) $('#sw-bright').value = c.swirlbright ?? 100;
+  setText($('#sw-brightv'), (c.swirlbright ?? 100) + '%');
+  $('#r-bgdim').style.display = mode === 'image' || mode === 'slideshow' ? '' : 'none';
+  $('#r-slide').style.display = mode === 'slideshow' ? '' : 'none';
+  $('#r-slidesecs').style.display = mode === 'slideshow' ? '' : 'none';
+  $('#slidesecs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', +b.dataset.s === (c.slidesecs ?? 60)));
+  setText($('#slidedesc'), c.slidedir ? (slideName ? `${c.slidedir} · showing ${slideName}` : c.slidedir) : 'no folder chosen.');
+  if (document.activeElement !== $('#bg-dim')) $('#bg-dim').value = c.bgdim ?? 45;
+  setText($('#bg-dimv'), (c.bgdim ?? 45) + '%');
+}
+ultra.setSlide = (url, name) => { slideImg = url; slideName = name || ''; applyBg(cfg()); };
+ultra.setBgImage = (url) => {
+  bgImg = url;
+  setText($('#bgimgdesc'), url ? `${Math.round(url.length * 0.75 / 1024)} KB image, saved with your settings.` : 'no image chosen.');
+  applyBg(cfg());
+};
+$('#bgmode').onclick = (e) => {
+  const m = e.target.dataset.m; if (!m) return;
+  if (m === 'image' && !bgImg) $('#bg-file').click();
+  if (m === 'slideshow' && !cfg().slidedir) { send('pickfolder'); return; }
+  send('set', ['bgmode', m]);
+};
+$('#slide-pick').onclick = () => send('pickfolder');
+$('#slide-next').onclick = () => send('nextslide');
+$('#slidesecs').onclick = (e) => { const v = +e.target.dataset.s; if (v) send('set', ['slidesecs', v]); };
+$('#bg-pick').onclick = () => $('#bg-file').click();
+$('#bg-clear').onclick = () => send('bgclear');
+$('#bg-file').onchange = (e) => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  if (f.size > 12 * 1024 * 1024) { setText($('#bgimgdesc'), 'that image is over 12 MB, pick a smaller one.'); return; }
+  const rd = new FileReader();
+  rd.onload = () => send('bgimage', rd.result);
+  rd.readAsDataURL(f);
+};
+$('#bg-dim').oninput = (e) => { document.documentElement.style.setProperty('--bgdim', (e.target.value / 100).toFixed(2)); setText($('#bg-dimv'), e.target.value + '%'); };
+$('#bg-dim').onchange = (e) => send('set', ['bgdim', +e.target.value]);
+$('#sw-bright').oninput = (e) => { setText($('#sw-brightv'), e.target.value + '%'); applyTheme({ ...cfg(), swirlbright: +e.target.value }, true); };
+$('#sw-bright').onchange = (e) => send('set', ['swirlbright', +e.target.value]);
+
+// ── colour picker: saturation/value square + hue strip, for the accent or the background ──
+let pkTarget = 'accent', hsv = [0, 0, 1];
+const sv = $('#pk-sv'), svc = sv.querySelector('canvas').getContext('2d'), hue = $('#pk-hue');
+const rgb2hsv = ([r, g, b]) => {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let h = 0;
+  if (d) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [(h * 60 + 360) % 360, mx ? d / mx : 0, mx];
+};
+const hsv2rgb = ([h, s, v]) => {
+  const f = (n) => { const k = (n + h / 60) % 6; return (v - v * s * Math.max(0, Math.min(k, 4 - k, 1))) * 255; };
+  return [f(5), f(3), f(1)];
+};
+function drawSV() {
+  const W = 220, H = 120;
+  svc.fillStyle = rgb2hex(hsv2rgb([hsv[0], 1, 1])); svc.fillRect(0, 0, W, H);
+  let g = svc.createLinearGradient(0, 0, W, 0); g.addColorStop(0, '#fff'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  svc.fillStyle = g; svc.fillRect(0, 0, W, H);
+  g = svc.createLinearGradient(0, 0, 0, H); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, '#000');
+  svc.fillStyle = g; svc.fillRect(0, 0, W, H);
+}
+function showPicker() {
+  const hex = rgb2hex(hsv2rgb(hsv)), rgb = hex2rgb(hex);
+  $('#pk-dot').style.left = hsv[1] * 100 + '%'; $('#pk-dot').style.top = (1 - hsv[2]) * 100 + '%';
+  $('#pk-bar').style.left = hsv[0] / 360 * 100 + '%';
+  $('#pk-prev').style.background = hex;
+  if (document.activeElement !== $('#pk-hex')) $('#pk-hex').value = hex;
+  const c = cfg(), d = PK_DEFAULT[pkTarget];
+  const isDefault = d.is(c);
+  setText($('#pk-rgb'), `rgb ${rgb.join(' ')}${isDefault ? ' · default' : ''}`);
+  $('#pk-reset').classList.toggle('off', isDefault);
+  $('#pk-reset').title = `reset ${d.label}`;
+  return hex;
+}
+function pickerHex() {
+  const c = cfg();
+  const acc = c.theme === 'custom' ? c.accent : THEMES[c.theme] || THEMES.mint;
+  if (pkTarget === 'swirlcolor') return c.swirlcolor || rgb2hex(mix(hex2rgb(acc || '#9fe3d0'), [190, 190, 190], .15));
+  return pkTarget === 'accent' ? acc : (c.bgcolor || '#141414');
+}
+function syncPicker() { hsv = rgb2hsv(hex2rgb(pickerHex() || '#9fe3d0')); drawSV(); showPicker(); }
+// Live preview while dragging; the setting is saved when the drag ends.
+function previewPick() {
+  const hex = showPicker(), c = { ...cfg() };
+  if (pkTarget === 'accent') { c.theme = 'custom'; c.accent = hex; } else c[pkTarget] = hex;
+  applyTheme(c, true);
+  return hex;
+}
+function commitPick() { picking = false; send('set', [pkTarget, rgb2hex(hsv2rgb(hsv))]); }
+function dragOn(el, onMove) {
+  el.addEventListener('pointerdown', (e) => {
+    el.setPointerCapture(e.pointerId); picking = true; onMove(e);
+    const mv = (ev) => onMove(ev);
+    const up = () => { el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); commitPick(); };
+    el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up);
+  });
+}
+const rel = (el, e) => { const r = el.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))]; };
+dragOn(sv, (e) => { const [x, y] = rel(sv, e); hsv[1] = x; hsv[2] = 1 - y; previewPick(); });
+dragOn(hue, (e) => { const [x] = rel(hue, e); hsv[0] = x * 360; drawSV(); previewPick(); });
+$('#pk-hex').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const v = e.target.value.trim().toLowerCase(), hex = v.startsWith('#') ? v : '#' + v;
+  if (/^#[0-9a-f]{6}$/.test(hex)) { hsv = rgb2hsv(hex2rgb(hex)); drawSV(); previewPick(); commitPick(); }
+});
+$('#pk-target').onclick = (e) => {
+  const t = e.target.dataset.p; if (!t) return;
+  pkTarget = t;
+  $('#pk-target').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.p === t));
+  syncPicker();
+};
+// What "default" means for each picker target, and how to get back to it.
+const PK_DEFAULT = {
+  accent: { label: 'accent to the mint theme', is: (c) => (c.theme || 'mint') === 'mint', reset: () => send('set', ['theme', 'mint']) },
+  bgcolor: { label: 'background to #141414', is: (c) => (c.bgcolor || '#141414') === '#141414', reset: () => send('set', ['bgcolor', '#141414']) },
+  swirlcolor: { label: 'swirl to follow the accent', is: (c) => !c.swirlcolor, reset: () => send('set', ['swirlcolor', 'auto']) },
+};
+$('#pk-reset').onclick = () => PK_DEFAULT[pkTarget].reset();
+$('#cfg').addEventListener('pointerdown', (e) => { if (e.target.id === 'cfg') closeCfg(); });
+$('#trim').onclick = () => send('trim');
+$('#zoomchip').onclick = () => send('zoom');
+
+// ── command palette (cmd+shift+p) ──
+const onoff = (x, cur) => x === 'on' ? true : x === 'off' ? false : !cur;
+const num = (x) => { const n = parseInt(x, 10); return n >= 1 && n <= 9 ? n : 0; };
+const focusedId = () => (S.tabs[S.a] || {}).id;
+const CMDS = [
+  { k: 'split right', a: '[url]', d: 'split the focused pane, new tab on the right', run: (x) => send('splitdir', ['r', x]) },
+  { k: 'split left', a: '[url]', d: 'split the focused pane, new tab on the left', run: (x) => send('splitdir', ['l', x]) },
+  { k: 'split down', a: '[url]', d: 'split the focused pane, new tab below', run: (x) => send('splitdir', ['d', x]) },
+  { k: 'split up', a: '[url]', d: 'split the focused pane, new tab above', run: (x) => send('splitdir', ['u', x]) },
+  { k: 'open', a: '<url or search>', d: 'load it in the focused pane', run: (x) => x && send('go', x) },
+  { k: 'new', a: '[url]', d: 'new tab', run: (x) => x ? send('newurl', x) : send('new') },
+  { k: 'close', d: 'close the focused tab', run: () => send('close') },
+  { k: 'zoom', d: 'zoom / unzoom the focused pane', run: () => send('zoomid', focusedId()) },
+  { k: 'ws', a: '<1-9>', d: 'switch workspace', opts: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], run: (x) => num(x) && send('ws', num(x) - 1) },
+  { k: 'move', a: '<1-9>', d: 'send the focused tab to a workspace', opts: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], run: (x) => num(x) && send('tows', num(x) - 1) },
+  { k: 'sleep all', d: 'put every hidden tab to sleep now', run: () => send('trim') },
+  { k: 'bookmark', d: 'bookmark / unbookmark this page (cmd+d)', run: () => send('bookmark') },
+  { k: 'clear history', d: 'forget every page visited', run: () => send('clearhistory') },
+  { k: 'layout save', a: '<name>', d: "save this workspace's layout and tabs", run: (x) => x && send('layout', ['save', x]) },
+  { k: 'layout load', a: '<name>', d: 'open a saved layout in a free workspace', opts: () => S.layouts || [], run: (x) => x && send('layout', ['load', x]) },
+  { k: 'layout delete', a: '<name>', d: 'forget a saved layout', opts: () => S.layouts || [], run: (x) => x && send('layout', ['delete', x]) },
+  { k: 'private', d: 'open the private workspace (cmd+opt+0)', run: () => send('ws', 9) },
+  { k: 'lock', d: 'lock the private workspace now (cmd+opt+l)', run: () => send('lock') },
+  { k: 'wipe private', d: 'close every private tab', run: () => send('wipe') },
+  { k: 'reload', d: 'reload the focused page', run: () => send('reload') },
+  { k: 'reopen', d: 'reopen the last closed tab', run: () => send('reopen') },
+  { k: 'devtools', d: 'developer tools for the focused page', run: () => send('devtools') },
+  { k: 'theme', a: '<name>', d: Object.keys(THEMES).join(' · '), opts: Object.keys(THEMES), run: (x) => THEMES[x] && send('set', ['theme', x]) },
+  { k: 'bg', a: '<style>', d: 'swirl · matrix · stars · gradient · solid · image · slideshow', opts: ['swirl', 'matrix', 'stars', 'gradient', 'solid', 'image', 'slideshow'], run: (x) => ['swirl', 'matrix', 'stars', 'gradient', 'solid', 'image', 'slideshow'].includes(x) && send('set', ['bgmode', x]) },
+  { k: 'bars', a: '[on|off]', d: 'audio bars over the background', opts: ['on', 'off'], run: (x) => send('set', ['bars', onoff(x, !!cfg().bars)]) },
+  { k: 'next image', d: 'skip to the next slideshow image', run: () => send('nextslide') },
+  { k: 'accent', a: '<#rrggbb>', d: 'custom accent colour', run: (x) => /^#?[0-9a-f]{6}$/i.test(x) && send('set', ['accent', (x[0] === '#' ? x : '#' + x).toLowerCase()]) },
+  { k: 'swirl', a: '<#rrggbb|auto>', d: 'swirl glyph colour', opts: ['auto'], run: (x) => (x === 'auto' || /^#?[0-9a-f]{6}$/i.test(x)) && send('set', ['swirlcolor', x === 'auto' ? 'auto' : (x[0] === '#' ? x : '#' + x).toLowerCase()]) },
+  { k: 'speed', a: '[on|off]', d: 'ULTRASPEED: 100% speed, 0% looks', opts: ['on', 'off'], run: (x) => send('set', ['ultraspeed', onoff(x, SPEED)]) },
+  { k: 'stats', a: '[on|off]', d: 'per-pane memory & cpu', opts: ['on', 'off'], run: (x) => send('set', ['stats', onoff(x, !!cfg().stats)]) },
+  { k: 'block', a: '[on|off]', d: 'ad & tracker blocking', opts: ['on', 'off'], run: (x) => send('set', ['block', onoff(x, cfg().block ?? true)]) },
+  { k: 'scanlines', a: '[on|off]', d: 'retro crt lines', opts: ['on', 'off'], run: (x) => send('set', ['scanlines', onoff(x, !!cfg().scanlines)]) },
+  { k: 'overview', d: 'every tab at a glance', run: () => send('overview', true) },
+  { k: 'settings', d: 'open settings', run: () => send('settings', true) },
+  { k: 'tour', d: 'run the tutorial', run: () => send('tour', true) },
+];
+let palItems = [], palSel = 0;
+function setPal(on) {
+  palOn = on;
+  $('#pal').classList.toggle('on', on);
+  if (on) {
+    if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (tourOn) setTour(false);
+    $('#palq').value = ''; palSel = 0; drawPal(); setTimeout(() => $('#palq').focus(), 0);
+  } else $('#palq').blur();
+  renderPanes();
+}
+function closePal() { setPal(false); send('palette', false); }
+// Exact command at the start of the input, plus whatever follows it.
+function parsePal(q) {
+  const lq = q.toLowerCase();
+  for (const c of CMDS) if (lq === c.k || lq.startsWith(c.k + ' ')) return [c, q.slice(c.k.length).trim()];
+  return null;
+}
+function drawPal() {
+  const q = $('#palq').value.trim(), lq = q.toLowerCase(), hit = parsePal(q);
+  const optsOf = (c) => typeof c.opts === 'function' ? c.opts() : c.opts;
+  if (hit && optsOf(hit[0])) {
+    // Completing an argument: offer the matching options.
+    const [c, arg] = hit;
+    palItems = optsOf(c).filter((o) => o.startsWith(arg.toLowerCase())).map((o) => ({ k: c.k + ' ' + o, d: c.d, cmd: c, arg: o }));
+  } else if (hit) palItems = [{ k: hit[0].k, a: hit[0].a, d: hit[0].d, cmd: hit[0], arg: hit[1] }];
+  else palItems = CMDS.filter((c) => !lq || c.k.startsWith(lq) || c.k.includes(lq)).map((c) => ({ k: c.k, a: c.a, d: c.d, cmd: c }));
+  if (q && !palItems.length) palItems = [{ k: 'open', a: q, d: 'go to this address / search', cmd: CMDS.find((c) => c.k === 'open'), arg: q }];
+  palSel = Math.min(palSel, Math.max(0, palItems.length - 1));
+  $('#pallist').innerHTML = palItems.map((it, i) =>
+    `<div class="pi${i === palSel ? ' sel' : ''}" data-i="${i}"><span class="k">${esc(it.k)}</span><span class="a">${esc(it.a || '')}</span><span class="d">${esc(it.d || '')}</span></div>`).join('');
+  const sel = $('#pallist .sel'); if (sel) sel.scrollIntoView({ block: 'nearest' });
+}
+function runPal(it) {
+  if (!it) return;
+  const needsArg = (it.cmd.a || '').startsWith('<') && it.arg == null;
+  if (needsArg) { $('#palq').value = it.cmd.k + ' '; drawPal(); return; }
+  send('palhist', (it.k + (it.arg && !it.k.endsWith(it.arg) ? ' ' + it.arg : '')).trim());
+  closePal();
+  it.cmd.run((it.arg || '').trim());
+}
+// `split right github.com; theme amber; ws 2` runs each part in order.
+function runChain(text) {
+  send('palhist', text);
+  closePal();
+  for (const part of text.split(';').map((x) => x.trim()).filter(Boolean)) {
+    const hit = parsePal(part);
+    if (hit) hit[0].run(hit[1]); else send('go', part);
+  }
+}
+let palHist = -1;
+$('#palq').addEventListener('input', () => { palSel = 0; palHist = -1; drawPal(); });
+$('#palq').addEventListener('keydown', (e) => {
+  const hist = S.palhist || [], q = $('#palq');
+  // ↑ on an empty line (or while already browsing) walks back through past commands.
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && (palHist >= 0 || (!q.value && e.key === 'ArrowUp')) && hist.length) {
+    palHist = e.key === 'ArrowUp' ? Math.min(hist.length - 1, palHist + 1) : palHist - 1;
+    q.value = palHist >= 0 ? hist[hist.length - 1 - palHist] : '';
+    palSel = 0; drawPal(); e.preventDefault(); return;
+  }
+  if (e.key === 'Enter' && q.value.includes(';')) { runChain(q.value.trim()); e.preventDefault(); return; }
+  if (e.key === 'ArrowDown') { palSel = Math.min(palItems.length - 1, palSel + 1); drawPal(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { palSel = Math.max(0, palSel - 1); drawPal(); e.preventDefault(); }
+  else if (e.key === 'Tab') { const it = palItems[palSel]; if (it) { $('#palq').value = it.k + (it.cmd.a && it.arg == null ? ' ' : ''); drawPal(); } e.preventDefault(); }
+  else if (e.key === 'Enter') { runPal(palItems[palSel]); e.preventDefault(); }
+  else if (e.key === 'Escape') { closePal(); e.preventDefault(); }
+});
+$('#pallist').addEventListener('click', (e) => { const p = e.target.closest('.pi'); if (p) runPal(palItems[+p.dataset.i]); });
+$('#pal').addEventListener('pointerdown', (e) => { if (e.target.id === 'pal') closePal(); });
+
+// ── tutorial ──
+// Practice steps run on the real layout: pages stay hidden while the tour is open,
+// shortcuts still work, and a mini-map mirrors the actual panes.
+const MINI = `<pre><b>██╗   ██╗</b>
+<b>██║   ██║</b>  ULTRA
+<b>██║   ██║</b>  ─────
+<b>╚██████╔╝</b>  tiling · light · fast
+<b> ╚═════╝ </b></pre>`;
+const paneSig = (s) => JSON.stringify(s.panes.map((p) => p.id));
+const TOUR = [
+  { t: 'welcome to ULTRA', art: MINI,
+    b: `a tiling browser that stays light. this tour takes about a minute and every step is skippable.<br><br>
+      <kbd>→</kbd> next · <kbd>←</kbd> back · <kbd>esc</kbd> close` },
+  { t: 'tabs', art: `<pre> ULTRA │ 1 2 │ <b>1 docs</b>  2 mail  <i>3 news</i>\n                ───────\n\n <b>1</b>  focused tab\n 2  loaded, hidden\n <i>3</i>  asleep: ~0 memory</pre>`,
+    b: `tabs sit in the bar up top, numbered by slot.<br>
+      <kbd>cmd+t</kbd> new · <kbd>cmd+w</kbd> close · <kbd>cmd+1‥9</kbd> jump<br><kbd>ctrl+tab</kbd> cycle · <kbd>cmd+shift+t</kbd> reopen closed<br><br>
+      <i>italic</i> tabs are asleep: they cost almost nothing and wake when clicked.` },
+  { t: 'split a pane', map: true, try: 'move the mouse to a side of the window (the map previews the split), then press cmd+shift+e.',
+    b: `point at any side of the window and press <kbd>cmd+shift+e</kbd>.<br>ULTRA splits the pane under your cursor toward the nearest edge and opens a blank tab there.`,
+    check: (a, b) => b.panes.length > a.panes.length },
+  { t: 'split again', map: true, try: 'point near the bottom of a pane and press cmd+shift+e.',
+    b: `every pane can split again. wide panes prefer side-by-side, tall ones stack.<br>if a split would be too cramped, the tab swaps in instead.`,
+    check: (a, b) => b.panes.length > a.panes.length },
+  { t: 'pull a tab in', map: true, try: 'point at a pane and press cmd+shift+1.',
+    b: `<kbd>cmd+shift+1‥9</kbd> pulls that tab into the pane under your cursor, splitting it the same smart way.`,
+    check: (a, b) => paneSig(b) !== paneSig(a) },
+  { t: 'focus & resize', map: true, try: 'press cmd+opt+← or cmd+opt+→.',
+    b: `<kbd>cmd+opt+arrows</kbd> move focus between panes, or just click one.<br>drag the gaps between panes to resize them.`,
+    check: (a, b) => b.a !== a.a },
+  { t: 'zoom', map: true, try: 'point at a pane and press cmd+shift+f (press it again to unzoom).',
+    b: `<kbd>cmd+shift+f</kbd> zooms the pane under your cursor to fill the workspace. press it again and it snaps back; the rest of the layout waits untouched.`,
+    check: (a, b) => (a.zoom ?? null) !== (b.zoom ?? null) },
+  { t: 'close a pane', map: true, try: 'point at a pane and press cmd+shift+w.',
+    b: `<kbd>cmd+shift+w</kbd> closes the pane under your cursor and its neighbour grows into the space.<br><kbd>cmd+shift+t</kbd> brings it back.`,
+    check: (a, b) => b.panes.length < a.panes.length },
+  { t: 'workspaces', map: true, try: 'press cmd+opt+2, then cmd+opt+1 to come back.',
+    b: `<kbd>cmd+opt+1‥9</kbd> flips between workspaces, each a whole layout of its own (the numbers next to the logo).<br>
+      <kbd>cmd+opt+shift+1‥9</kbd> sends the focused tab to one. <kbd>cmd+opt+0</kbd> opens the private workspace: nothing saved, password-locked when idle.`,
+    check: (a, b) => a.ws !== b.ws },
+  { t: 'get anywhere fast', art: `<pre> › <b>gith</b>_\n\n type anywhere:\n letters &amp; numbers\n jump to the bar.\n\n cmd+k  ▦ ▦ ▦\n         ▦ ▦ ▦</pre>`,
+    b: `<kbd>cmd+l</kbd> focuses the address bar, or just start typing: any letter or number jumps there when you aren't in a text field.<br>
+      <kbd>cmd+k</kbd> opens an overview of every tab. type to filter, <kbd>enter</kbd> to jump.` },
+  { t: 'command palette', art: `<pre> ❯ <b>split right</b> github.com\n ─────────────────────\n <b>split right</b> [url]\n ws <1-9>\n theme amber\n sleep all\n speed on</pre>`,
+    b: `<kbd>cmd+shift+p</kbd> opens the command palette. try <b>split right github.com</b>, <b>ws 2</b>, <b>theme amber</b>, <b>sleep all</b> or <b>speed on</b>.<br>
+      <kbd>tab</kbd> completes, <kbd>enter</kbd> runs. anything that isn't a command is treated as an address.` },
+  { t: 'light by design', art: () => `<pre> live    <b>${S.live}</b>\n asleep  <b>${S.tabs.filter((t) => t.s === 'sleep').length}</b>\n warm    <b>${cfg().warm ?? 3}</b>\n\n hidden ─20s─▶ frozen\n frozen ─10m─▶ asleep</pre>`,
+    b: `only what's on screen (plus a few warm tabs) stays loaded. hidden tabs freeze after 20s and sleep after 10 min; music keeps playing.<br>
+      turn on <b>pane stats</b> to see each pane's live memory &amp; cpu, with ↻ to rebuild a bloated page.` },
+  { t: 'safe & clean', art: `<pre> › https://bank.com\n   <b>encrypted</b>\n\n <span style="color:var(--bad)">⚠ http://site.com</span>\n   don't type passwords\n\n ads.example ── <b>blocked</b></pre>`,
+    b: `a red <span class="bad">⚠</span> in the address bar means the page isn't encrypted; never type passwords there.<br>
+      ads &amp; trackers are refused at the network level, sign-in popups open as real windows so logins work, and fraudulent-website warnings are on.` },
+  { t: 'make it yours', art: `<pre> SETTINGS        cmd+,\n ─────────────────────\n <b>ULTRASPEED</b>        [■ ]\n pane stats        [ ■]\n block ads         [ ■]\n theme  <b>■</b> ■ ■ ■ ■ ■\n scanlines         [■ ]</pre>`,
+    b: `<kbd>cmd+,</kbd> opens settings: six themes, scanlines, pane stats, ad blocking and more. <span class="acc">ULTRASPEED</span> turns off every effect: 100% speed, 0% looks.<br>
+      you can re-run this tour from settings any time.` },
+  { t: "you're set", art: MINI, last: true,
+    b: `that's everything. go split some panes.<br><br>want this tour gone for good? switch off <b>show on startup</b> below.` },
+];
+let tourOn = false, tStep = 0, tBase = null, tDone = false, tTimer = 0, mouse = null, mmRaf = 0;
+const seen = new Set();
+
+function setTour(on) {
+  if (on === tourOn) { if (on) drawTour(); return; }
+  tourOn = on;
+  $('#tour').classList.toggle('on', on);
+  if (on) {
+    if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false);
+    tStep = 0; seen.clear(); enterStep();
+    setTimeout(() => $('#tour').focus(), 0);
+  } else clearTimeout(tTimer);
+  renderPanes();
+}
+function closeTour() { setTour(false); send('tour', false); }
+function enterStep() {
+  clearTimeout(tTimer);
+  tBase = JSON.parse(JSON.stringify(S)); tDone = false; seen.add(tStep);
+  drawTour();
+}
+function go(d) {
+  const n = tStep + d;
+  if (n < 0) return;
+  if (n >= TOUR.length) { closeTour(); return; }
+  tStep = n; enterStep();
+}
+function drawTour() {
+  const st = TOUR[tStep];
+  setText($('#t-st'), `${String(tStep + 1).padStart(2, '0')} / ${TOUR.length}`);
+  setText($('#t-h'), st.t);
+  setHTML($('#t-b'), st.b);
+  const tr = $('#t-try');
+  tr.style.display = st.try ? '' : 'none';
+  setText(tr, st.try || '');
+  tr.classList.toggle('done', tDone);
+  if (st.map) drawMap(); else setHTML($('#t-r'), typeof st.art === 'function' ? st.art() : (st.art || ''));
+  setHTML($('#t-dots'), TOUR.map((_, i) => `<i class="${i === tStep ? 'on' : seen.has(i) ? 'seen' : ''}"></i>`).join(''));
+  $('#t-back').style.visibility = tStep ? 'visible' : 'hidden';
+  setText($('#t-next'), st.last ? 'finish' : st.check && !tDone ? 'skip step →' : 'next →');
+  $('#t-skip').style.display = st.last ? 'none' : '';
+}
+// Mirror of pick_split in main.rs, used only for the preview.
+function pickSplit(r, px, py) {
+  const cl = (v) => Math.min(1, Math.max(0, v));
+  const nx = cl((px - r.x) / r.w), ny = cl((py - r.y) / r.h), asp = Math.sqrt(Math.max(.01, r.w / r.h));
+  const preferV = Math.min(nx, 1 - nx) / asp <= Math.min(ny, 1 - ny) * asp;
+  const canV = (r.w - 6) / 2 >= 260, canH = (r.h - 6) / 2 >= 160;
+  let v;
+  if ((preferV && canV) || (!preferV && canV && !canH)) v = true;
+  else if ((!preferV && canH) || (preferV && !canV && canH)) v = false;
+  else return null;
+  return { v, first: v ? nx < .5 : ny < .5 };
+}
+function drawMap() {
+  const top = 34 + ((cfg().bmbar ?? true) ? 26 : 0);
+  const area = { x: 6, y: top, w: innerWidth - 12, h: innerHeight - top - 6 };
+  const k = Math.min(226 / area.w, 160 / area.h);
+  const sx = (x) => (x - area.x) * k, sy = (y) => (y - area.y) * k;
+  const sl = slots();
+  let h = '';
+  let hot = null;
+  for (const p of S.panes) {
+    const r = p.r, t = S.tabs[p.i] || {};
+    const isHot = mouse && r.x <= mouse.x && mouse.x < r.x + r.w && r.y <= mouse.y && mouse.y < r.y + r.h;
+    if (isHot) hot = r;
+    h += `<div class="mp${p.i === S.a ? ' on' : ''}${isHot ? ' hot' : ''}" style="left:${sx(r.x)}px;top:${sy(r.y)}px;width:${r.w * k}px;height:${r.h * k}px">${sl.get(t.id) || ''} ${esc(label(t)).slice(0, 10)}</div>`;
+  }
+  if (hot && S.zoom == null) {
+    const sp = pickSplit(hot, mouse.x, mouse.y);
+    let pr = hot;
+    if (sp) pr = sp.v ? { x: sp.first ? hot.x : hot.x + hot.w / 2, y: hot.y, w: hot.w / 2, h: hot.h }
+                      : { x: hot.x, y: sp.first ? hot.y : hot.y + hot.h / 2, w: hot.w, h: hot.h / 2 };
+    h += `<div class="mprev" style="left:${sx(pr.x)}px;top:${sy(pr.y)}px;width:${pr.w * k}px;height:${pr.h * k}px"></div>`;
+  }
+  if (mouse) h += `<div class="mcur" style="left:${sx(mouse.x)}px;top:${sy(mouse.y)}px"></div>`;
+  const cap = S.zoom != null ? `workspace ${S.ws + 1} · zoomed` : hot ? 'dashed = where the split lands' : `workspace ${S.ws + 1} · live map`;
+  setHTML($('#t-r'), `<div><div class="mm" style="width:${area.w * k}px;height:${area.h * k}px">${h}</div><div class="mmcap">${cap}</div></div>`);
+}
+function tourState() {
+  if (!tourOn) return;
+  const st = TOUR[tStep];
+  if (st.check && !tDone && tBase && st.check(tBase, S)) {
+    tDone = true;
+    tTimer = setTimeout(() => go(1), SPEED ? 450 : 900);
+  }
+  drawTour();
+}
+$('#tour').addEventListener('mousemove', (e) => {
+  mouse = { x: e.clientX, y: e.clientY };
+  if (!TOUR[tStep].map || mmRaf) return;
+  mmRaf = requestAnimationFrame(() => { mmRaf = 0; if (tourOn) drawMap(); });
+});
+$('#tour').addEventListener('mouseleave', () => { mouse = null; if (tourOn && TOUR[tStep].map) drawMap(); });
+$('#t-next').onclick = () => go(1);
+$('#t-back').onclick = () => go(-1);
+$('#t-skip').onclick = closeTour;
+$('#t-opt').onclick = () => toggle('tour', true);
+$('#run-tour').onclick = () => { closeCfg(); send('tour', true); };
+
+
+
+// ── private workspace: lock screen (create / unlock / change password) and toasts ──
+let lockMode = null;
+function setLock(mode) {
+  if (mode === lockMode) return;
+  lockMode = mode;
+  $('#lock').classList.toggle('on', !!mode);
+  if (!mode) { renderPanes(); return; }
+  const txt = {
+    create: ['PRIVATE', 'set a password for the private workspace. it is never stored, only a salted hash.<br>nothing you do in here is ever saved.', 'set password'],
+    unlock: ['LOCKED', 'the private workspace locked after 5 minutes idle.<br>enter your password to continue.', 'unlock'],
+    change: ['PASSWORD', 'change the private workspace password.', 'change'],
+  }[mode];
+  setText($('#l-h'), txt[0]); $('#l-d').innerHTML = txt[1]; setText($('#l-ok'), txt[2]);
+  $('#l-old').style.display = mode === 'change' && cfg().haspass ? '' : 'none';
+  $('#l-p2').style.display = mode === 'unlock' ? 'none' : '';
+  $('#l-p1').placeholder = mode === 'unlock' ? 'password' : 'new password';
+  $('#l-cancel').style.display = mode === 'change' ? '' : 'none';
+  for (const id of ['#l-old', '#l-p1', '#l-p2']) $(id).value = '';
+  setText($('#l-err'), '');
+  setTimeout(() => (mode === 'change' && cfg().haspass ? $('#l-old') : $('#l-p1')).focus(), 0);
+  renderPanes();
+}
+function submitLock() {
+  const p1 = $('#l-p1').value, p2 = $('#l-p2').value;
+  if (lockMode === 'unlock') { if (p1) send('unlock', p1); $('#l-p1').value = ''; return; }
+  if (p1.length < 4) { setText($('#l-err'), 'use at least 4 characters'); return; }
+  if (p1 !== p2) { setText($('#l-err'), "passwords don't match"); return; }
+  send('setpass', [$('#l-old').value, p1]);
+}
+$('#l-ok').onclick = submitLock;
+$('#l-cancel').onclick = () => setLock(null);
+$('#lock').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { submitLock(); e.preventDefault(); }
+  else if (e.key === 'Escape' && lockMode === 'change') { setLock(null); e.preventDefault(); }
+});
+ultra.lockError = (msg) => { setText($('#l-err'), msg); $('#l-p1').focus(); };
+ultra.passSet = () => { if (lockMode === 'change' || lockMode === 'create') setLock(null); };
+let toastT = 0;
+ultra.toast = (msg) => {
+  const t = $('#toast'); setText(t, msg); t.classList.add('on');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 2600);
+};
+$('#priv-pass').onclick = () => { closeCfg(); setLock('change'); };
+$('#priv-lock').onclick = () => { closeCfg(); send('lock'); };
+$('#priv-wipe').onclick = () => send('wipe');
+
+
+// ── workspaces ──
+const wsbar = $('#wsbar');
+function renderWs() {
+  const list = [...new Set([...(S.wss || [0]).filter((w) => w !== 9), 9])];
+  setHTML(wsbar, list.map((w) => w === 9
+    ? `<div class="wsb priv${S.ws === 9 ? ' on' : ''}" data-w="9" title="private workspace (cmd+opt+0)${S.locked ? ' · locked' : ''}">${S.locked ? '■' : 'P'}</div>`
+    : `<div class="wsb${w === S.ws ? ' on' : ''}" data-w="${w}" title="workspace ${w + 1} (cmd+opt+${w + 1})">${w + 1}</div>`).join(''));
+}
+wsbar.onclick = (e) => { const w = e.target.dataset.w; if (w != null) send('ws', +w); };
+
+// ── tab strip: current workspace only, keyed by tab id so hover state survives and tabs animate in/out ──
+const tabsEl = $('#tabs'), tabEls = new Map();
+function renderTabs() {
+  const switched = S.ws !== lastWs; lastWs = S.ws;
+  const seen = new Set();
+  let prev = null, slot = 0;
+  S.tabs.forEach((t, i) => {
+    if (t.w !== S.ws) return;
+    slot++;
+    let el = tabEls.get(t.id);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = SPEED || switched ? 'tab' : 'tab enter';
+      el.draggable = true;
+      el.innerHTML = '<span class="n"></span><span class="t"></span><span class="x">×</span>';
+      tabEls.set(t.id, el);
+      if (!switched) nextFrame(() => el.classList.remove('enter'));
+    }
+    if (el.dataset.s !== t.s) { if (el.dataset.s) el.classList.remove(el.dataset.s); el.classList.add(t.s); el.dataset.s = t.s; }
+    el.classList.toggle('vis', !!t.v);
+    el.classList.toggle('on', i === S.a);
+    el.dataset.i = i;
+    const title = t.t || t.u; if (el.title !== title) el.title = title;
+    setText(el.children[0], String(slot));
+    setText(el.children[1], label(t));
+    const next = prev ? prev.nextSibling : tabsEl.firstChild;
+    if (next !== el) tabsEl.insertBefore(el, next);
+    prev = el; seen.add(t.id);
+  });
+  for (const [id, el] of tabEls) {
+    if (seen.has(id)) continue;
+    tabEls.delete(id); el.dataset.i = -1;
+    // Workspace switches swap the strip instantly; closing a tab animates it out.
+    if (switched) el.remove(); else { el.classList.add('leave'); later(() => el.remove(), 200); }
+  }
+  const on = tabsEl.querySelector('.tab.on');
+  if (on) {
+    const l = on.offsetLeft, r = l + on.offsetWidth;
+    if (l < tabsEl.scrollLeft) tabsEl.scrollLeft = l - 8;
+    else if (r > tabsEl.scrollLeft + tabsEl.clientWidth) tabsEl.scrollLeft = r - tabsEl.clientWidth + 8;
+  }
+}
+
+// ── panes: keyed by tab id; geometry from render() or per-frame from frame() ──
+const panesEl = $('#panes'), paneEls = new Map();
+function paneEl(id) {
+  let e = paneEls.get(id);
+  if (!e) {
+    const pf = document.createElement('div');
+    pf.className = 'pf';
+    panesEl.appendChild(pf);
+    e = { pf, hp: null, ph: null, big: null };
+    paneEls.set(id, e);
+  }
+  return e;
+}
+function homeContent(e, id, big, tall) {
+  const keep = e.hp.querySelector('input');
+  const val = keep ? keep.value : '';
+  e.hp.innerHTML = `${big ? $('#logo').innerHTML : '<div class="mini">ULTRA</div>'}` +
+    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big && tall ? '<div class="digest"></div>' : ''}`;
+  const q = e.hp.querySelector('input'); q.value = val;
+  e.big = big + ':' + tall;
+}
+function headerHTML(p, t, slot) {
+  const st = (S.ps || {})[p.id];
+  // Per pane: memory and cpu of the process rendering this page.
+  const stat = t.s === 'home' ? '' : st ? `<span class="st${st[0] > 400 ? ' hot' : ''}" title="memory and cpu of this page's process">${Math.round(st[0])} MB${st[1] >= 0 ? ` · ${st[1].toFixed(1)}%` : ''}</span>` : '<span class="st">…</span>';
+  const zoomed = S.zoom === p.id;
+  return `<span class="n">${slot}</span><span class="tt">${esc(label(t))}</span>${stat}` +
+    (t.s === 'home' ? '' : `<span class="act" data-act="recycle" data-id="${p.id}" title="rebuild this page (frees leaked memory)">↻</span>`) +
+    (S.panes.length > 1 || zoomed ? `<span class="act" data-act="zoomid" data-id="${p.id}" title="${zoomed ? 'unzoom' : 'zoom'}">${zoomed ? '⧉' : '⛶'}</span>` : '') +
+    `<span class="act x" data-act="closeid" data-id="${p.id}" title="close">×</span>`;
+}
+function renderPanes() {
+  const solo = S.panes.length === 1, stats = !!cfg().stats, sl = slots();
+  const seen = new Set();
+  let homes = 0;
+  for (const p of S.panes) {
+    const t = S.tabs[p.i] || {}, home = t.s === 'home';
+    const e = paneEl(p.id);
+    e.pf.classList.remove('gone');
+    place(e.pf, p.r);
+    e.pf.classList.toggle('home', home);
+    e.pf.classList.toggle('solo', solo);
+    e.pf.classList.toggle('on', p.i === S.a);
+    e.pf.classList.toggle('zoomed', S.zoom === p.id);
+    if (stats) {
+      if (!e.ph) { e.ph = document.createElement('div'); e.ph.className = 'ph'; panesEl.appendChild(e.ph); }
+      place(e.ph, { x: p.r.x, y: p.r.y, w: p.r.w, h: 18 });
+      e.ph.classList.toggle('on', p.i === S.a);
+      setHTML(e.ph, headerHTML(p, t, sl.get(t.id) || ''));
+    } else if (e.ph) { e.ph.remove(); e.ph = null; }
+    if (home) {
+      homes++;
+      if (!e.hp) {
+        e.hp = document.createElement('div');
+        e.hp.className = 'hp';
+        e.hp.dataset.id = p.id;
+        panesEl.appendChild(e.hp);
+        nextFrame(() => e.hp && e.hp.classList.add('show'));
+      }
+      const r = stats ? { x: p.r.x, y: p.r.y + 18, w: p.r.w, h: p.r.h - 18 } : p.r;
+      place(e.hp, r);
+      const big = r.w >= 560 && r.h >= 300, tall = r.h >= 420;
+      if (e.big !== big + ':' + tall) homeContent(e, p.id, big, tall);
+      const dg = e.hp.querySelector('.digest');
+      if (dg) setHTML(dg, digestHTML(t.w === 9));
+    } else if (e.hp) {
+      e.hp.remove(); e.hp = null; e.big = null;
+    }
+    seen.add(p.id);
+  }
+  for (const [id, e] of paneEls) {
+    if (seen.has(id)) continue;
+    paneEls.delete(id);
+    for (const el of [e.pf, e.hp, e.ph]) if (el) el.classList.add('gone');
+    later(() => { for (const el of [e.pf, e.hp, e.ph]) if (el) el.remove(); }, 200);
+  }
+  const sig = JSON.stringify(S.splits);
+  if (sig !== splitSig) {
+    splitSig = sig;
+    panesEl.querySelectorAll('.sp').forEach((x) => x.remove());
+    for (const sp of S.splits) {
+      const d = document.createElement('div');
+      d.className = 'sp ' + (sp.v ? 'v' : 'h'); d.dataset.p = sp.path; place(d, sp.gap);
+      panesEl.appendChild(d);
+    }
+  }
+  panesEl.classList.toggle('anim', S.panes.length > 1 && S.splits.length === 0);
+  applyPendingFocus();
+  bg.animate(homes > 0 || anyOverlay());
+  barsFx.animate(homes > 0 || anyOverlay());
+}
+function applyPendingFocus() {
+  if (pendingFocus == null || anyOverlay()) return;
+  const e = paneEls.get(pendingFocus);
+  const q = e && e.hp && e.hp.querySelector('input');
+  if (q) { q.focus(); pendingFocus = null; }
+}
+
+panesEl.addEventListener('pointerdown', (e) => {
+  const act = e.target.closest('[data-act]');
+  if (act) { send(act.dataset.act, +act.dataset.id); return; }
+  const hp = e.target.closest('.hp');
+  if (hp) send('focuspane', +hp.dataset.id);
+  const sp = e.target.closest('.sp');
+  if (!sp) return;
+  const info = S.splits.find((x) => x.path === sp.dataset.p); if (!info) return;
+  sp.setPointerCapture(e.pointerId); sp.classList.add('drag');
+  let pending = null, raf = 0;
+  const move = (ev) => {
+    const r = info.parent;
+    pending = info.v ? (ev.clientX - r.x - 3) / (r.w - 6) : (ev.clientY - r.y - 3) / (r.h - 6);
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; send('ratio', [info.path, Math.min(.9, Math.max(.1, pending))]); });
+  };
+  const up = () => { sp.removeEventListener('pointermove', move); sp.removeEventListener('pointerup', up); sp.classList.remove('drag'); };
+  sp.addEventListener('pointermove', move); sp.addEventListener('pointerup', up);
+});
+panesEl.addEventListener('keydown', (e) => {
+  const q = e.target.closest('.hp input'); if (!q) return;
+  if (sgKey(e)) return;
+  if (e.key === 'Enter' && q.value.trim()) { const v = sgPick(q); sgHide(); send('go', [+q.dataset.id, v]); }
+});
+
+// ── overview (cmd+k): every tab in every workspace ──
+function setOv(on) {
+  ovOn = on;
+  $('#ov').classList.toggle('on', on);
+  if (on) { if (cfgOn) setCfg(false); if (palOn) setPal(false); $('#ovq').value = ''; ovSel = S.a; drawOv(); setTimeout(() => $('#ovq').focus(), 0); }
+  else $('#ovq').blur();
+  renderPanes();
+}
+function drawOv() {
+  const f = $('#ovq').value.toLowerCase(), sl = slots();
+  ovList = S.tabs.map((t, i) => [t, i]).filter(([t]) => !f || (t.t + ' ' + t.u).toLowerCase().includes(f));
+  if (!ovList.some(([, i]) => i === ovSel)) ovSel = ovList.length ? ovList[0][1] : -1;
+  $('#ovgrid').innerHTML = ovList.map(([t, i]) =>
+    `<div class="tile${i === ovSel ? ' sel' : ''}${i === S.a ? ' cur' : ''}" data-i="${i}">` +
+    `<div class="h"><span>${t.w === 9 ? 'P' : t.w + 1}:${sl.get(t.id)}${t.v ? ' ▪' : ''}</span><span>${t.s === 'home' ? 'home' : t.s === 'sleep' ? '◌ asleep' : t.s === 'load' ? '◍ loading' : '● live'}</span></div>` +
+    `<div class="tt">${esc(label(t))}</div><div class="uu">${esc(t.s === 'home' ? 'ultra:home' : t.u)}</div></div>`).join('');
+}
+function closeOv(pick) { setOv(false); if (pick != null && pick >= 0) send('tab', pick); else send('overview', false); }
+$('#ovq').addEventListener('input', drawOv);
+$('#ovgrid').addEventListener('click', (e) => { const t = e.target.closest('.tile'); if (t) closeOv(+t.dataset.i); });
+$('#ovq').addEventListener('keydown', (e) => {
+  const pos = ovList.findIndex(([, i]) => i === ovSel);
+  const cols = Math.max(1, Math.floor($('#ovgrid').clientWidth / 218));
+  const mv = (d) => { const p = Math.min(ovList.length - 1, Math.max(0, pos + d)); if (ovList[p]) { ovSel = ovList[p][1]; drawOv(); } e.preventDefault(); };
+  if (e.key === 'Enter') closeOv(ovSel);
+  else if (e.key === 'Escape') closeOv(null);
+  else if (e.key === 'ArrowRight') mv(1); else if (e.key === 'ArrowLeft') mv(-1);
+  else if (e.key === 'ArrowDown') mv(cols); else if (e.key === 'ArrowUp') mv(-cols);
+});
+
+// ── tabs: click / middle-click / right-click / drag-reorder ──
+const tabIdx = (el) => { const t = el.closest('.tab'); const i = t ? +t.dataset.i : -1; return i >= 0 ? i : null; };
+tabsEl.addEventListener('mousedown', (e) => {
+  const i = tabIdx(e.target); if (i == null) return;
+  if (e.button === 1) { e.preventDefault(); send('close', i); }
+  else if (e.button === 0 && !e.target.classList.contains('x')) send('tab', i);
+});
+tabsEl.addEventListener('click', (e) => { if (e.target.classList.contains('x')) { const i = tabIdx(e.target); if (i != null) send('close', i); } });
+tabsEl.addEventListener('contextmenu', (e) => { e.preventDefault(); const i = tabIdx(e.target); if (i != null) send('sleep', i); });
+let dragFrom = -1;
+tabsEl.addEventListener('dragstart', (e) => { const i = tabIdx(e.target); dragFrom = i == null ? -1 : i; });
+tabsEl.addEventListener('dragover', (e) => { e.preventDefault(); tabsEl.querySelectorAll('.tab.drop').forEach((x) => x.classList.remove('drop')); const t = e.target.closest('.tab'); if (t) t.classList.add('drop'); });
+tabsEl.addEventListener('drop', (e) => { e.preventDefault(); tabsEl.querySelectorAll('.tab.drop').forEach((x) => x.classList.remove('drop')); const i = tabIdx(e.target); if (i != null && dragFrom >= 0) send('move', [dragFrom, i]); dragFrom = -1; });
+tabsEl.addEventListener('wheel', (e) => { tabsEl.scrollLeft += e.deltaY + e.deltaX; e.preventDefault(); }, { passive: false });
+$('#plus').onclick = () => send('new');
+
+// ── address bar ──
+const url = $('#url');
+// Find in page (cmd+f) borrows the address bar: type to search, enter / shift+enter step, esc ends.
+ultra.find = (last) => {
+  findOn = true; sgHide();
+  $('#urlwrap').classList.add('find'); $('#urlwrap').classList.remove('miss', 'insecure');
+  setText($('#urlwrap .p'), '⌕'); url.placeholder = 'find in page';
+  url.value = last || ''; url.focus(); url.select();
+};
+ultra.found = (f) => { if (findOn) $('#urlwrap').classList.toggle('miss', !f && !!url.value); };
+function endFind() {
+  if (!findOn) return;
+  findOn = false; clearTimeout(findT);
+  $('#urlwrap').classList.remove('find', 'miss'); url.placeholder = '';
+  ultra.render(S);
+}
+url.addEventListener('keydown', (e) => {
+  if (findOn) {
+    if (e.key === 'Enter') { e.preventDefault(); send('findtext', [url.value, e.shiftKey]); }
+    else if (e.key === 'Escape') { e.preventDefault(); url.blur(); send('findclose'); }
+    return;
+  }
+  if (sgKey(e)) return;
+  if (e.key === 'Enter') { const v = sgPick(url); sgHide(); send('go', v); url.blur(); }
+  else if (e.key === 'Escape') { sgHide(); url.blur(); ultra.render(S); send('content'); }
+});
+url.addEventListener('focus', () => url.select());
+
+// ── address-bar suggestions: history + bookmarks, ranked by Rust ──
+const sugg = $('#sugg');
+let sgItems = [], sgSel = -1, sgInput = null, sgTimer = 0, urlPanel = false, sgTyped = false;
+function sgHide() {
+  sugg.classList.remove('on'); sgItems = []; sgSel = -1;
+  if (urlPanel) { urlPanel = false; send('urlpanel', false); }
+}
+function sgAsk(input) {
+  sgInput = input;
+  clearTimeout(sgTimer);
+  const q = input.value.trim();
+  if (!q) { sgHide(); return; }
+  sgTimer = setTimeout(() => send('suggest', q), 40);
+}
+ultra.urlpanel = () => {};
+ultra.suggestions = (r) => {
+  // Only once the user has typed in this box since it got focus (a freshly focused box stays quiet).
+  if (!sgTyped || !sgInput || document.activeElement !== sgInput || r.q !== sgInput.value.trim()) return;
+  sgItems = r.items; sgSel = -1;
+  if (!sgItems.length) { sgHide(); return; }
+  // The address bar sits above the pages, so pages are hidden while its list is open.
+  if (sgInput === url && !urlPanel) { urlPanel = true; send('urlpanel', true); }
+  const b = (sgInput === url ? $('#urlwrap') : sgInput).getBoundingClientRect();
+  Object.assign(sugg.style, { left: b.left + 'px', top: b.bottom + 'px', width: Math.max(b.width, 360) + 'px' });
+  sgDraw(); sugg.classList.add('on');
+};
+function sgDraw() {
+  sugg.innerHTML = sgItems.map((it, i) => `<div class="sg${i === sgSel ? ' sel' : ''}" data-i="${i}"><span class="ic${it.b ? ' b' : ''}">${it.b ? '★' : '↺'}</span>` +
+    `<span class="st">${esc(it.t || host(it.u))}</span><span class="su">${esc(it.u.replace(/^https?:\/\/(www\.)?/, ''))}</span></div>`).join('');
+}
+// Shared keys for any input with suggestions; returns the value to navigate to on Enter.
+function sgKey(e) {
+  if (!sugg.classList.contains('on')) return false;
+  if (e.key === 'ArrowDown') { sgSel = Math.min(sgItems.length - 1, sgSel + 1); sgDraw(); e.preventDefault(); return true; }
+  if (e.key === 'ArrowUp') { sgSel = Math.max(-1, sgSel - 1); sgDraw(); e.preventDefault(); return true; }
+  if (e.key === 'Tab') { const it = sgItems[Math.max(0, sgSel)]; if (it) { e.target.value = it.u; sgAsk(e.target); } e.preventDefault(); return true; }
+  if (e.key === 'Escape') { sgHide(); return false; }
+  return false;
+}
+const sgPick = (input) => (sgSel >= 0 && sgItems[sgSel] ? sgItems[sgSel].u : input.value);
+sugg.addEventListener('pointerdown', (e) => {
+  const it = e.target.closest('.sg'); if (!it || !sgInput) return;
+  e.preventDefault();
+  const u = sgItems[+it.dataset.i].u, inp = sgInput;
+  sgHide();
+  if (inp === url) { send('go', u); url.blur(); } else send('go', [+inp.dataset.id, u]);
+});
+url.addEventListener('input', () => {
+  if (findOn) { clearTimeout(findT); findT = setTimeout(() => send('findtext', [url.value, false]), 120); return; }
+  sgTyped = true; sgAsk(url);
+});
+// Moving focus to another box closes any list and waits for fresh typing.
+document.addEventListener('focusin', (e) => { if (e.target !== sgInput) { sgHide(); sgTyped = false; sgInput = null; } });
+url.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== url) { sgHide(); endFind(); } }, 0));
+panesEl.addEventListener('input', (e) => { const q = e.target.closest('.hp input'); if (q) { sgTyped = true; sgAsk(q); } });
+$('#star').onclick = () => send('bookmark');
+// Support prompt: shown once, on the 5th launch. The button is a placeholder for now (no payment link yet).
+$('#coffee-yes').onclick = () => send('coffee', 'yes');
+$('#coffee-later').onclick = () => send('coffee', 'later');
+$('#coffee-x').onclick = () => send('coffee', 'close');
+
+// ── bookmarks bar ──
+const bmbar = $('#bmbar');
+function renderBookmarks() {
+  const bms = S.bms || [];
+  setHTML(bmbar, bms.length
+    ? bms.map((b) => { const h = host(b.u); return `<div class="bmk" data-u="${esc(b.u)}" title="${esc((b.t || h) + '\n' + b.u)}"><span class="ic">${esc((h[0] || '•').toUpperCase())}</span><span class="bt">${esc(b.t || h)}</span></div>`; }).join('')
+    : '<span class="bmempty">☆ cmd+d bookmarks the current page</span>');
+}
+bmbar.addEventListener('mousedown', (e) => {
+  const b = e.target.closest('.bmk');
+  if (!b) { if (e.button === 0) send('drag'); return; }
+  if (e.button === 0) send('openbm', [b.dataset.u, false]);
+  else if (e.button === 1) { e.preventDefault(); send('openbm', [b.dataset.u, true]); }
+});
+bmbar.addEventListener('contextmenu', (e) => { e.preventDefault(); const b = e.target.closest('.bmk'); if (b) send('unbookmark', b.dataset.u); });
+bmbar.addEventListener('wheel', (e) => { bmbar.scrollLeft += e.deltaY + e.deltaX; e.preventDefault(); }, { passive: false });
+ultra.audio = (l) => { bg.setAudio(l); barsFx.setLevel(l); };
+ultra.bars = (b) => barsFx.setBars(b);
+
+// ── window chrome ──
+$('#bar').addEventListener('mousedown', (e) => {
+  if (e.button !== 0 || e.detail > 1) return;
+  if (e.target.closest('.tab,#plus,#urlwrap,.wc,.wsb,.chip,#cfgbtn')) return;
+  send('drag');
+});
+$('#bar').addEventListener('dblclick', (e) => { if (!e.target.closest('.tab,#plus,#urlwrap,.wc,.wsb,.chip,#cfgbtn')) send('max'); });
+$('#wmin').onclick = () => send('min');
+$('#wmax').onclick = () => send('max');
+$('#wq').onclick = () => send('quit');
+document.querySelectorAll('.rz').forEach((r) => r.addEventListener('mousedown', (e) => { if (e.button === 0) send('resize', r.dataset.d); }));
+document.addEventListener('contextmenu', (e) => { if (!e.target.closest('input')) e.preventDefault(); });
+
+// ── shortcuts while the chrome has focus ──
+document.addEventListener('keydown', (e) => {
+  // cmd is the Mac's ctrl. ctrl also works with shift/option held (cmd+shift+3/4/5 are macOS
+  // screenshots) and for ctrl+tab; a bare ctrl+letter stays a text-editing key.
+  const k = e.key.toLowerCase(), code = e.code || '';
+  const c = (e.metaKey && !e.ctrlKey) || (e.ctrlKey && !e.metaKey && (e.shiftKey || e.altKey || k === 'tab'));
+  const inText = !!e.target.closest('input,textarea,select,[contenteditable]');
+  const digit = /^(Digit|Numpad)([1-9])$/.exec(code);
+  let m = null, a;
+  if (c && e.altKey && e.shiftKey && digit) { m = 'tows'; a = +digit[2] - 1; }
+  else if (c && e.altKey && digit) { m = 'ws'; a = +digit[2] - 1; }
+  else if (c && e.altKey && !e.shiftKey && (code === 'Digit0' || code === 'Numpad0')) { m = 'ws'; a = 9; }
+  else if (c && e.altKey && code === 'KeyL') m = 'lock';
+  else if (c && e.shiftKey && digit) { m = 'mv'; a = +digit[2] - 1; }
+  else if (c && e.shiftKey && code === 'KeyE') m = 'mvnew';
+  else if (c && e.shiftKey && code === 'KeyW') m = 'closeat';
+  else if (c && e.shiftKey && code === 'KeyF') m = 'zoom';
+  else if (c && e.shiftKey && code === 'KeyP') { if (palOn) closePal(); else send('palette', true); e.preventDefault(); return; }
+  else if (c && e.altKey && k.startsWith('arrow')) { m = 'dir'; a = k[5]; }
+  else if (c && code === 'KeyT') m = e.shiftKey ? 'reopen' : 'new';
+  else if (c && code === 'KeyW') m = 'close';
+  else if (c && code === 'KeyL') { ultra.focusUrl(); e.preventDefault(); return; }
+  else if (c && code === 'KeyK') { if (ovOn) closeOv(null); else send('overview', true); e.preventDefault(); return; }
+  else if (c && !e.shiftKey && !e.altKey && code === 'KeyD') { send('bookmark'); e.preventDefault(); return; }
+  else if (c && !e.shiftKey && !e.altKey && code === 'KeyF') { send('find'); e.preventDefault(); return; }
+  else if (c && code === 'Comma') { if (cfgOn) closeCfg(); else send('settings', true); e.preventDefault(); return; }
+  else if (k === 'escape' && cfgOn) { closeCfg(); e.preventDefault(); return; }
+  else if (tourOn && !c && !e.altKey && (k === 'escape' || k === 'arrowright' || k === 'arrowleft' || k === 'enter')) {
+    e.preventDefault(); if (k === 'escape') closeTour(); else go(k === 'arrowleft' ? -1 : 1); return;
+  }
+  else if (cfg().typeahead !== false && !c && !e.altKey && !e.isComposing && e.key.length === 1 && /[\p{L}\p{N}]/u.test(e.key)
+    && !e.target.closest('input,textarea,select,[contenteditable]') && !anyOverlay()) {
+    e.preventDefault(); ultra.typeUrl(e.key); return;
+  }
+  else if (c && k === 'tab') m = e.shiftKey ? 'prev' : 'next';
+  else if (c && !e.altKey && digit) { if (digit[2] === '9') m = 'last'; else { m = 'slot'; a = +digit[2] - 1; } }
+  else if (k === 'f5' || (c && code === 'KeyR')) m = 'reload';
+  else if ((c && code === 'BracketLeft') || (e.altKey && !c && !inText && k === 'arrowleft')) m = 'back';
+  else if ((c && code === 'BracketRight') || (e.altKey && !c && !inText && k === 'arrowright')) m = 'fwd';
+  // Shortcuts keep the tour open (it practises on the live layout) but close the other panels.
+  if (m) { e.preventDefault(); if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false); send(m, a); }
+}, true);
+
+// ── clock ──
+const tickClock = () => setText($('#clock'), new Date().toTimeString().slice(0, 5));
+tickClock(); setInterval(tickClock, 15000);
+
+// ── animated backgrounds: swirl, matrix rain, starfield, drifting gradient ──
+// Each is drawn on one canvas, only animates while a home pane or panel is visible,
+// and otherwise holds a single static frame. Glyphs come from a pre-rendered atlas.
+const bg = (() => {
+  const cv = $('#bg'), cx = cv.getContext('2d', { alpha: false });
+  const GL = 'abcdef0123456789ghijklmnopqrstuvwxyz0123456789';
+  const CW = 7, LH = 14, LV = 7, BAND = 0.32, FREQ = 3.4;
+  const FPS = { swirl: 90, matrix: 70, stars: 33, gradient: 110 };
+  const CANVAS = ['swirl', 'matrix', 'stars', 'gradient'];
+  let mode = CANVAS.includes(CFG0.bgmode) ? CFG0.bgmode : 'swirl';
+  let W = 0, H = 0, dpr = 1, phase = 0, frame = 0, running = false, last = 0, enabled = !SPEED && CANVAS.includes(CFG0.bgmode || 'swirl');
+  let cells = null, F = null, M = null, G = null, atlas = null, tint = '190,190,190', fill = '#141414', bright = 1;
+  let drops = null, speeds = null, stars = null, gt = 0;
+  // Audio: target level from Rust, smoothed level, slow average, beat flash, combined energy.
+  let aTarget = 0, aLv = 0, aAvg = 0, beat = 0, lastBeat = 0, energy = 0, wantAnim = false, pulseOut = -1;
+  const hash = (x, y) => { let h = (x * 374761393 + y * 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+  const sm = (v) => v * v * (3 - 2 * v);
+  function vn(x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y), u = sm(x - xi), v = sm(y - yi);
+    const a = hash(xi, yi), b = hash(xi + 1, yi), c = hash(xi, yi + 1), d = hash(xi + 1, yi + 1);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  }
+  const fillRGB = () => { const h = fill.replace('#', ''); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)).join(','); };
+  function computeSwirl() {
+    const cols = Math.ceil(W / CW), rows = Math.ceil(H / LH);
+    const idx = [], fs = [], ms = [], gs = [];
+    for (let r = 0; r < rows; r++) {
+      const y = r * 0.1;
+      for (let c = 0; c < cols; c++) {
+        const x = c * 0.02;
+        const mask = vn(x * 0.6 + 11, y * 0.6 + 3);
+        if (mask < 0.45) continue;
+        const qx = vn(x, y * 0.9), qy = vn(x * 0.9 + 5.2, y + 1.3);
+        idx.push(c, r);
+        fs.push(vn(x * 1.2 + 2.4 * qx, y * 1.2 + 2.4 * qy) * FREQ);
+        ms.push(mask > 0.7 ? 1 : (mask - 0.45) / 0.25);
+        gs.push(Math.floor(hash(c, r) * 997));
+      }
+    }
+    cells = Int16Array.from(idx); F = Float32Array.from(fs); M = Float32Array.from(ms); G = Uint16Array.from(gs);
+  }
+  // Every glyph pre-rendered at every brightness: a frame is just sprite copies.
+  function buildAtlas() {
+    atlas = document.createElement('canvas');
+    atlas.width = Math.ceil(GL.length * CW * dpr); atlas.height = Math.ceil(LV * LH * dpr);
+    const a = atlas.getContext('2d');
+    a.setTransform(dpr, 0, 0, dpr, 0, 0);
+    a.font = '10px Consolas, "Cascadia Mono", monospace'; a.textBaseline = 'top';
+    const boost = mode === 'matrix' ? 3 : 1;
+    for (let l = 0; l < LV; l++) {
+      a.fillStyle = `rgba(${tint},${Math.min(1, (0.045 + l * 0.038) * bright * boost).toFixed(3)})`;
+      for (let g = 0; g < GL.length; g++) a.fillText(GL[g], g * CW, l * LH);
+    }
+  }
+  const glyph = (gi, l, x, y) => { const sw = CW * dpr, sh = LH * dpr; cx.drawImage(atlas, gi * sw, l * sh, sw, sh, Math.round(x * dpr), Math.round(y * dpr), sw, sh); };
+  function initMode() {
+    if (mode === 'swirl') computeSwirl();
+    if (mode === 'matrix') {
+      const cols = Math.ceil(W / CW);
+      drops = Float32Array.from({ length: cols }, () => -Math.random() * (H / LH));
+      speeds = Float32Array.from({ length: cols }, () => .25 + Math.random() * .7);
+      cx.setTransform(1, 0, 0, 1, 0, 0); cx.fillStyle = fill; cx.fillRect(0, 0, cv.width, cv.height);
+      for (let i = 0; i < 90; i++) stepMatrix(); // warm up so a static frame already has rain
+    }
+    if (mode === 'stars') {
+      const n = Math.round(W * H / 5000);
+      stars = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) { stars[i * 3] = Math.random() * 2 - 1; stars[i * 3 + 1] = Math.random() * 2 - 1; stars[i * 3 + 2] = Math.random(); }
+    }
+  }
+  function stepMatrix() {
+    cx.setTransform(1, 0, 0, 1, 0, 0);
+    cx.fillStyle = `rgba(${fillRGB()},.16)`; cx.fillRect(0, 0, cv.width, cv.height);
+    const rows = H / LH;
+    for (let c = 0; c < drops.length; c++) {
+      const y = drops[c];
+      if (y >= 0) {
+        glyph((Math.random() * GL.length) | 0, LV - 1, c * CW, Math.floor(y) * LH);
+        if (y >= 1) glyph((c * 7 + frame) % GL.length, 3, c * CW, (Math.floor(y) - 1) * LH);
+      }
+      drops[c] += speeds[c] * (1 + energy * 2.5);
+      if (beat > .9 && Math.random() < .06) drops[c] = 0;
+      if (drops[c] > rows && Math.random() > .97) drops[c] = -Math.random() * 20;
+    }
+  }
+  function drawSwirl() {
+    cx.setTransform(1, 0, 0, 1, 0, 0);
+    cx.fillStyle = fill; cx.fillRect(0, 0, cv.width, cv.height);
+    for (let k = 0, len = F.length; k < len; k++) {
+      const g = (F[k] + phase) % 1;
+      if (g > BAND) continue;
+      const iv = Math.sin((g / BAND) * Math.PI) * M[k] * (1 + energy * .9);
+      if (iv < 0.12) continue;
+      const seed = G[k];
+      glyph((seed + ((frame + seed) / 40 | 0)) % GL.length, Math.min(LV - 1, (iv * LV) | 0), cells[2 * k] * CW, cells[2 * k + 1] * LH);
+    }
+  }
+  function drawStars() {
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx.fillStyle = fill; cx.fillRect(0, 0, W, H);
+    const cxp = W / 2, cyp = H / 2, n = stars.length / 3;
+    for (let i = 0; i < n; i++) {
+      const z = stars[i * 3 + 2], x = cxp + stars[i * 3] / z * cxp * .6, y = cyp + stars[i * 3 + 1] / z * cyp * .6;
+      if (x < 0 || x > W || y < 0 || y > H) continue;
+      const a = Math.min(1, (1 - z) * .9 * bright * (1 + energy * .5)), s = ((1 - z) * 2 + .4) * (1 + energy * .8);
+      cx.fillStyle = `rgba(${tint},${a.toFixed(3)})`; cx.fillRect(x, y, s, s);
+    }
+  }
+  function stepStars() {
+    const n = stars.length / 3;
+    for (let i = 0; i < n; i++) {
+      stars[i * 3 + 2] -= .0035 * (1 + energy * 7);
+      if (stars[i * 3 + 2] <= .02) { stars[i * 3] = Math.random() * 2 - 1; stars[i * 3 + 1] = Math.random() * 2 - 1; stars[i * 3 + 2] = 1; }
+    }
+  }
+  function drawGradient() {
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx.fillStyle = fill; cx.fillRect(0, 0, W, H);
+    const blob = (px, py, r, a) => {
+      const g = cx.createRadialGradient(px, py, 0, px, py, r);
+      g.addColorStop(0, `rgba(${tint},${Math.min(1, a * bright).toFixed(3)})`); g.addColorStop(1, `rgba(${tint},0)`);
+      cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+    };
+    const R = Math.max(W, H) * .6;
+    const boost = 1 + energy * 1.8;
+    blob(W * (.5 + .35 * Math.cos(gt)), H * (.5 + .35 * Math.sin(gt * .8)), R, .16 * boost);
+    blob(W * (.5 + .35 * Math.cos(gt * .7 + 2)), H * (.5 + .35 * Math.sin(gt + 1)), R * .8, .1 * boost);
+  }
+  function draw() {
+    if (mode === 'swirl') drawSwirl();
+    else if (mode === 'matrix') stepMatrix();
+    else if (mode === 'stars') drawStars();
+    else drawGradient();
+  }
+  // Smooth the mixer level, detect beats (a jump well above the running average), and
+  // publish the energy as --pulse for the focused pane's border and the logo.
+  function stepAudio(ts) {
+    aLv += (aTarget - aLv) * .35;
+    aAvg += (aLv - aAvg) * .04;
+    if (aLv > aAvg * 1.4 && aLv > .06 && ts - lastBeat > 180) { beat = 1; lastBeat = ts; }
+    beat *= .82;
+    energy = Math.min(1.5, aLv * 1.2 + beat * .8);
+    const out = energy < .02 ? 0 : Math.round(energy * 100) / 100;
+    if (out !== pulseOut) { pulseOut = out; document.documentElement.style.setProperty('--pulse', out); }
+  }
+  const audible = () => aTarget > 0 || energy > .02;
+  let glowing = false, glowLast = 0;
+  function glowLoop(ts) {
+    if (ts - glowLast >= 33) { glowLast = ts; stepAudio(ts); }
+    if (enabled || SPEED || !audible()) { glowing = false; if (!enabled) { energy = 0; stepAudio(ts); } return; }
+    requestAnimationFrame(glowLoop);
+  }
+  function loop(ts) {
+    if (!running) return;
+    const fps = audible() ? Math.min(FPS[mode], 45) : FPS[mode];
+    if (ts - last >= fps) {
+      last = ts; frame++;
+      stepAudio(ts);
+      if (mode === 'swirl') phase += 0.006 + energy * .025;
+      if (mode === 'stars') stepStars();
+      if (mode === 'gradient') gt += 0.012 * (1 + energy * 4);
+      draw();
+    }
+    // Keep going while a home pane/panel is visible, or while music is playing.
+    if (!wantAnim && !audible()) { running = false; return; }
+    requestAnimationFrame(loop);
+  }
+  function resize() {
+    dpr = window.devicePixelRatio || 1; W = innerWidth; H = innerHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    buildAtlas(); initMode(); draw();
+  }
+  let rzT = 0;
+  addEventListener('resize', () => { if (!enabled) return; clearTimeout(rzT); rzT = setTimeout(resize, 120); });
+  if (enabled) resize();
+  return {
+    animate(on) {
+      wantAnim = on;
+      if ((on || audible()) && enabled && !running) { running = true; requestAnimationFrame(loop); }
+      else if (!on && !audible()) running = false;
+    },
+    setAudio(l) {
+      aTarget = Math.max(0, Math.min(1, +l || 0));
+      if (aTarget > 0 && enabled && !running) { running = true; requestAnimationFrame(loop); }
+      // Solid/image backgrounds have no canvas: still drive the border/logo glow (never in ULTRASPEED).
+      if (!enabled && !SPEED && aTarget > 0 && !glowing) { glowing = true; requestAnimationFrame(glowLoop); }
+    },
+    // ULTRASPEED / non-canvas styles: drop the canvas backing store and all state.
+    setEnabled(on) {
+      if (on === enabled) return;
+      enabled = on;
+      if (on) { resize(); return; }
+      running = false; cells = F = M = G = atlas = drops = speeds = stars = null; cv.width = cv.height = 0;
+    },
+    setMode(m) { if (m === mode || !CANVAS.includes(m)) return; mode = m; if (enabled) resize(); },
+    setTint(rgb, bgHex, b) { tint = rgb; fill = bgHex || fill; bright = b || 1; if (enabled && atlas) { buildAtlas(); if (mode === 'matrix') initMode(); draw(); } },
+  };
+})();
+window.__ultraBg = bg;
+
+// ── audio bars layer: a transparent canvas over any background ──
+// Real spectrum when Rust sends one; otherwise driven by the volume level, and a slow
+// breathing idle when silent. Animates only while music plays or a home pane/panel is
+// visible, and holds still otherwise.
+const barsFx = (() => {
+  const cv = $('#barsfx'), cx = cv.getContext('2d');
+  const NB = 40;
+  const barT = new Float32Array(NB), barV = new Float32Array(NB), caps = new Float32Array(NB);
+  let W = 0, H = 0, dpr = 1, on = false, running = false, wantAnim = false, last = 0;
+  let lastBars = 0, level = 0, lv = 0, avg = 0, beat = 0, lastBeat = 0, tint = '190,190,190', bright = 1;
+  function resize() {
+    dpr = window.devicePixelRatio || 1; W = innerWidth; H = innerHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  }
+  function draw(now) {
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx.clearRect(0, 0, W, H);
+    lv += (level - lv) * .35; avg += (lv - avg) * .04;
+    if (lv > avg * 1.4 && lv > .06 && now - lastBeat > 180) { beat = 1; lastBeat = now; }
+    beat *= .82;
+    const live = now - lastBars < 300;
+    const width = Math.min(W * .62, 1100), x0 = (W - width) / 2, maxH = H * .32, base = H - 32;
+    const bw = width / NB, gap = Math.max(2, bw * .24);
+    for (let i = 0; i < NB; i++) {
+      const t = live ? barT[i]
+        : lv > .01 ? lv * (.35 + .65 * (.5 + .5 * Math.sin(now / 170 + i * 1.7))) * (1 - i / NB * .45) + (i < 8 ? beat * .3 : 0)
+        : .025 + .02 * Math.sin(now / 700 + i * .45);
+      barV[i] += (t - barV[i]) * (t > barV[i] ? .55 : .18);
+      caps[i] = barV[i] > caps[i] ? barV[i] : Math.max(0, caps[i] - .008);
+      const v = Math.min(1, barV[i]), h = Math.max(2, v * maxH), x = x0 + i * bw;
+      cx.fillStyle = `rgba(${tint},${Math.min(1, (.35 + .6 * v) * bright).toFixed(3)})`;
+      cx.fillRect(x, base - h, bw - gap, h);
+      cx.fillStyle = `rgba(${tint},${Math.min(1, .08 * bright).toFixed(3)})`; // faint reflection
+      cx.fillRect(x, base + 3, bw - gap, h * .22);
+      cx.fillStyle = `rgba(${tint},${Math.min(1, .9 * bright).toFixed(3)})`; // peak cap
+      cx.fillRect(x, base - Math.min(1, caps[i]) * maxH - 5, bw - gap, 2);
+    }
+  }
+  const audible = () => level > 0 || lv > .01;
+  function loop(ts) {
+    if (!running) return;
+    if (ts - last >= 33) { last = ts; draw(ts); }
+    if (!on || (!wantAnim && !audible())) { running = false; return; }
+    requestAnimationFrame(loop);
+  }
+  const kick = () => { if (on && !running) { running = true; requestAnimationFrame(loop); } };
+  addEventListener('resize', () => { if (on) { resize(); draw(performance.now()); } });
+  return {
+    setEnabled(v) {
+      if (v === on) return;
+      on = v;
+      document.body.classList.toggle('barsfx', v);
+      if (v) { resize(); draw(performance.now()); kick(); } else { running = false; cv.width = cv.height = 0; }
+    },
+    animate(v) { wantAnim = v; if (v) kick(); },
+    setLevel(l) { level = Math.max(0, Math.min(1, +l || 0)); if (level > 0) kick(); },
+    setBars(b) { for (let i = 0; i < NB; i++) barT[i] = +b[i] || 0; lastBars = performance.now(); kick(); },
+    setTint(rgb, b) { tint = rgb; bright = b || 1; if (on && !running) draw(performance.now()); },
+  };
+})();
+window.__ultraBars = barsFx;
+
+THEME = null; applyTheme(cfg());
+
+send('ready');
+
+// ── boot animation: the ULTRA logo assembles out of drifting glyphs ──
+// Pages stay hidden (Rust holds them) until this reports `booted`. Any key or click skips it.
+(() => {
+  if (CFG0.boot === false || SPEED) { send('booted'); return; }
+  const cv = document.createElement('canvas'); cv.id = 'boot'; document.body.appendChild(cv);
+  const g = cv.getContext('2d');
+  const dpr = window.devicePixelRatio || 1, W = innerWidth, H = innerHeight;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const lines = $('#logo').content.textContent.split('\n').filter((l) => l.trim());
+  const CW = 9, LH = 14, GL = 'abcdef0123456789#$%&*+=<>/\\|';
+  const ox = (W - Math.max(...lines.map((l) => l.length)) * CW) / 2, oy = (H - lines.length * LH) / 2;
+  const parts = [];
+  lines.forEach((l, r) => [...l].forEach((ch, c) => {
+    if (ch === ' ') return;
+    const a = Math.random() * Math.PI * 2, d = Math.max(W, H) * (.35 + Math.random() * .4);
+    parts.push({ ch, tx: ox + c * CW, ty: oy + r * LH, sx: W / 2 + Math.cos(a) * d, sy: H / 2 + Math.sin(a) * d, delay: Math.random() * .25 });
+  }));
+  const css = getComputedStyle(document.documentElement);
+  const acc = css.getPropertyValue('--acc').trim() || '#9fe3d0', bgc = css.getPropertyValue('--bg').trim() || '#141414';
+  const ASSEMBLE = 850, HOLD = 220, FADE = 280, t0 = performance.now();
+  let done = false;
+  const finish = () => {
+    if (done) return; done = true;
+    cv.style.transition = `opacity ${FADE}ms`; cv.style.opacity = '0';
+    send('booted');
+    setTimeout(() => cv.remove(), FADE + 20);
+    removeEventListener('keydown', finish, true); removeEventListener('pointerdown', finish, true);
+  };
+  addEventListener('keydown', finish, true); addEventListener('pointerdown', finish, true);
+  g.font = '13px Consolas, "Cascadia Mono", monospace'; g.textBaseline = 'top';
+  (function frame(now) {
+    if (done) return;
+    const t = (now - t0) / ASSEMBLE;
+    g.fillStyle = bgc; g.fillRect(0, 0, W, H);
+    for (const p of parts) {
+      const k = Math.min(1, Math.max(0, (t - p.delay) / (1 - .25)));
+      const e = 1 - Math.pow(1 - k, 3);
+      g.globalAlpha = .15 + .85 * e;
+      g.fillStyle = k >= 1 ? '#e6e6e6' : acc;
+      const ch = k > .8 ? p.ch : GL[(Math.random() * GL.length) | 0];
+      g.fillText(ch, p.sx + (p.tx - p.sx) * e, p.sy + (p.ty - p.sy) * e);
+    }
+    g.globalAlpha = 1;
+    if (now - t0 > ASSEMBLE + HOLD) { finish(); return; }
+    requestAnimationFrame(frame);
+  })(t0);
+})();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+[package]
+name = "ultra"
+version = "0.2.0"
+edition = "2021"
+description = "ULTRA — a minimalist, tiling, memory-frugal browser (macOS)"
+
+[dependencies]
+wry = { version = "0.57.0", features = ["devtools"] }
+tao = "0.37.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10"
+libc = "0.2"
+
+# The same objc2 generation wry 0.57 uses, so WKWebView/NSWindow types line up.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+objc2-web-kit = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-quartz-core = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
