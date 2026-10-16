@@ -272,6 +272,10 @@ body.speed #bgimg { display: none; }
 .pk-side input { width: 86px; height: 24px; background: #101010; border: 1px solid #2c2c2c; color: var(--fg); font: inherit; padding: 0 6px; outline: 0; }
 .pk-side input:focus { border-color: var(--acc-dim); }
 .pk-rgb { color: var(--dim); }
+.pk-reset { width: 86px; height: 24px; background: none; border: 1px solid #2c2c2c; color: var(--mid); font: 11px Consolas, monospace;
+  cursor: default; transition: color var(--fast), border-color var(--fast), opacity var(--fast); }
+.pk-reset:hover { color: var(--acc); border-color: var(--acc-dim); }
+.pk-reset.off { opacity: .35; pointer-events: none; }
 input[type=range] { accent-color: var(--acc); width: 140px; }
 .bgctl { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
 .swatch.custom { background: conic-gradient(#f66, #fd6, #6f6, #6ff, #66f, #f6f, #f66) content-box; }
@@ -314,7 +318,7 @@ input[type=range] { accent-color: var(--acc); width: 140px; }
       <div><div class="pk-sv" id="pk-sv"><canvas width="220" height="120"></canvas><div class="pk-dot" id="pk-dot"></div></div>
         <div class="pk-hue" id="pk-hue" style="margin-top:8px"><div class="pk-bar" id="pk-bar"></div></div></div>
       <div class="pk-side"><div class="pk-prev" id="pk-prev"></div><input id="pk-hex" spellcheck="false" maxlength="7"><div class="pk-rgb" id="pk-rgb"></div>
-        <button class="run" id="pk-auto" title="let the swirl follow the accent again">auto</button></div>
+        <button class="pk-reset" id="pk-reset">↺ default</button></div>
     </div>
   </div>
   <div class="row"><div><div class="name">background</div><div class="desc">animated swirl, a plain colour, or your own image (png, jpg, webp).</div></div>
@@ -587,7 +591,11 @@ function showPicker() {
   $('#pk-bar').style.left = hsv[0] / 360 * 100 + '%';
   $('#pk-prev').style.background = hex;
   if (document.activeElement !== $('#pk-hex')) $('#pk-hex').value = hex;
-  setText($('#pk-rgb'), `rgb ${rgb.join(' ')}`);
+  const c = cfg(), d = PK_DEFAULT[pkTarget];
+  const isDefault = d.is(c);
+  setText($('#pk-rgb'), `rgb ${rgb.join(' ')}${isDefault ? ' · default' : ''}`);
+  $('#pk-reset').classList.toggle('off', isDefault);
+  $('#pk-reset').title = `reset ${d.label}`;
   return hex;
 }
 function pickerHex() {
@@ -625,11 +633,15 @@ $('#pk-target').onclick = (e) => {
   const t = e.target.dataset.p; if (!t) return;
   pkTarget = t;
   $('#pk-target').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.p === t));
-  $('#pk-auto').style.display = t === 'swirlcolor' ? '' : 'none';
   syncPicker();
 };
-$('#pk-auto').style.display = 'none';
-$('#pk-auto').onclick = () => send('set', ['swirlcolor', 'auto']);
+// What "default" means for each picker target, and how to get back to it.
+const PK_DEFAULT = {
+  accent: { label: 'accent to the mint theme', is: (c) => (c.theme || 'mint') === 'mint', reset: () => send('set', ['theme', 'mint']) },
+  bgcolor: { label: 'background to #141414', is: (c) => (c.bgcolor || '#141414') === '#141414', reset: () => send('set', ['bgcolor', '#141414']) },
+  swirlcolor: { label: 'swirl to follow the accent', is: (c) => !c.swirlcolor, reset: () => send('set', ['swirlcolor', 'auto']) },
+};
+$('#pk-reset').onclick = () => PK_DEFAULT[pkTarget].reset();
 $('#cfg').addEventListener('pointerdown', (e) => { if (e.target.id === 'cfg') closeCfg(); });
 $('#trim').onclick = () => send('trim');
 $('#zoomchip').onclick = () => send('zoom');
