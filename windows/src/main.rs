@@ -63,6 +63,12 @@ use wry::{
 const BAR: f64 = 34.0;
 /// Height of the bookmarks bar under the top bar (when shown).
 const BMBAR: f64 = 26.0;
+/// Height of the one-time "support us" strip under the bars.
+const COFFEE_BAR: f64 = 30.0;
+/// The support prompt appears on this launch (and only this one).
+const COFFEE_LAUNCH: u32 = 5;
+/// ...this long after the window is up, so it never competes with startup.
+const COFFEE_DELAY: Duration = Duration::from_secs(4);
 const GAP: f64 = 6.0;
 /// Height of the per-pane header strip shown while "pane stats" is on.
 const HDR: f64 = 18.0;
@@ -213,6 +219,8 @@ struct Settings {
     slidesecs: u32,
     /// Audio bars layered over whatever background is chosen.
     bars: bool,
+    /// How many times ULTRA has been started (drives the one-time support prompt).
+    launches: u32,
 }
 
 impl Default for Settings {
@@ -244,6 +252,7 @@ impl Default for Settings {
             slidedir: String::new(),
             slidesecs: 60,
             bars: false,
+            launches: 0,
         }
     }
 }
@@ -342,6 +351,9 @@ struct App {
     slide_loading: bool,
     boot_until: Instant,
     dirty: Cell<bool>,
+    /// Support strip: when it is due to appear, and whether it is showing.
+    coffee_at: Option<Instant>,
+    coffee: bool,
     visible: bool,
     show_at: Instant,
     next_tick: Instant,
@@ -609,7 +621,7 @@ impl App {
 
     fn area(&self) -> R {
         let (w, h) = self.logical_size();
-        let top = BAR + if self.cfg.bmbar { BMBAR } else { 0.0 };
+        let top = BAR + if self.cfg.bmbar { BMBAR } else { 0.0 } + if self.coffee { COFFEE_BAR } else { 0.0 };
         R { x: GAP, y: top, w: (w - 2.0 * GAP).max(1.0), h: (h - top - GAP).max(1.0) }
     }
 
@@ -1368,6 +1380,7 @@ impl App {
             "digest": self.lib.digest_view(),
             "bms": self.lib.bookmarks.iter().map(|b| json!({ "u": b.url, "t": b.title })).collect::<Vec<_>>(),
             "tour": self.tour,
+            "coffee": self.coffee,
             "max": self.window.is_maximized(),
         });
         let _ = self.ui.evaluate_script(&format!("ultra.render({state})"));
@@ -1480,6 +1493,9 @@ impl App {
         }
         if let Some(t) = self.refocus_at {
             d = d.min(t);
+        }
+        if let Some(t) = self.coffee_at {
+            d = d.min(t.max(now + Duration::from_millis(250)));
         }
         if self.slideshow_on() {
             d = d.min(self.slide_at);
@@ -2218,7 +2234,18 @@ impl App {
             }
             "min" => self.window.set_minimized(true),
             "max" => self.window.set_maximized(!self.window.is_maximized()),
+            "coffee" => {
+                // "buy us a coffee" is a placeholder for now: every answer just closes the strip.
+                if self.coffee {
+                    self.coffee = false;
+                    self.apply_layout(true);
+                    self.focus_active();
+                }
+            }
             "ready" => {
+                if self.cfg.launches == COFFEE_LAUNCH && self.coffee_at.is_none() && !self.coffee {
+                    self.coffee_at = Some(Instant::now() + COFFEE_DELAY);
+                }
                 self.send_bg_image();
                 if self.slideshow_on() {
                     self.next_slide(Instant::now());
@@ -2447,7 +2474,13 @@ fn main() {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     // Older settings had "bars" as a background; it is now a layer over the swirl.
-    let cfg = if cfg.bgmode == "bars" { Settings { bgmode: "swirl".into(), bars: true, ..cfg } } else { cfg };
+    let mut cfg = if cfg.bgmode == "bars" { Settings { bgmode: "swirl".into(), bars: true, ..cfg } } else { cfg };
+    if !bench_mode {
+        cfg.launches = cfg.launches.saturating_add(1);
+        if let Ok(j) = serde_json::to_string_pretty(&cfg) {
+            let _ = fs::write(data_dir.join("settings.json"), j);
+        }
+    }
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
@@ -2545,6 +2578,8 @@ fn main() {
         slide_loading: false,
         boot_until: now,
         dirty: Cell::new(false),
+        coffee_at: None,
+        coffee: false,
         visible: false,
         show_at: now + Duration::from_millis(900),
         next_tick: now + TICK,
@@ -2651,6 +2686,12 @@ fn main() {
                 if app.refocus_at.is_some_and(|t| now >= t) {
                     app.refocus_at = None;
                     app.restore_focus();
+                }
+                // The support strip waits until nothing else is on screen (boot, tour, panels, lock).
+                if app.coffee_at.is_some_and(|t| now >= t) && !app.booting && !app.tour && !app.overlay && !app.gate() {
+                    app.coffee_at = None;
+                    app.coffee = true;
+                    app.apply_layout(true);
                 }
                 if app.booting && now >= app.boot_until {
                     app.command("booted", &Value::Null);

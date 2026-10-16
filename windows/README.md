@@ -1,4 +1,6 @@
-# ULTRA
+# ULTRA for Windows
+
+The macOS version lives in [`../mac`](../mac).
 
 A minimalist, tiling, memory-frugal browser for Windows, written in Rust on top of
 WebView2 (via [wry](https://github.com/tauri-apps/wry) and [tao](https://github.com/tauri-apps/tao)).
@@ -16,6 +18,8 @@ WebView2 (via [wry](https://github.com/tauri-apps/wry) and [tao](https://github.
 
 ## Build
 
+From this `windows/` folder:
+
 ```
 cargo build --release
 ```
@@ -24,3 +28,8 @@ The exe lands in `target/release/ultra.exe`. Requires the Microsoft Edge WebView
 (preinstalled on Windows 11). Settings, session and sign-ins live in `%LOCALAPPDATA%\Ultra`.
 
 `tools/make_icon.py` regenerates `assets/ultra.ico` (needs Pillow); `build.rs` embeds it.
+
+On the fifth launch only, a slim "buy us a coffee" strip appears under the top bar a few
+seconds after startup (never over a page, the tutorial or an open panel). Its button is a
+placeholder for now; every choice just closes it. The launch count is `launches` in
+`settings.json`.
