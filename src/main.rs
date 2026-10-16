@@ -13,6 +13,7 @@
 //! are coalesced to one per event-loop turn, and layout changes animate with
 //! the same eased frames applied to both the native webviews and the chrome.
 
+mod audio;
 mod blocker;
 mod layout;
 mod library;
@@ -21,7 +22,7 @@ mod stats;
 
 use std::{
     cell::Cell,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::PathBuf,
     rc::Rc,
@@ -58,6 +59,8 @@ use wry::{
 };
 
 const BAR: f64 = 34.0;
+/// Height of the bookmarks bar under the top bar (when shown).
+const BMBAR: f64 = 26.0;
 const GAP: f64 = 6.0;
 /// Height of the per-pane header strip shown while "pane stats" is on.
 const HDR: f64 = 18.0;
@@ -197,6 +200,10 @@ struct Settings {
     privpass: String,
     /// Logo boot animation on launch.
     boot: bool,
+    /// Backgrounds, focused border and logo pulse with audio playing in ULTRA.
+    audio: bool,
+    /// Bookmarks bar under the top bar.
+    bmbar: bool,
 }
 
 impl Default for Settings {
@@ -223,6 +230,8 @@ impl Default for Settings {
             swirlbright: 100,
             privpass: String::new(),
             boot: true,
+            audio: true,
+            bmbar: true,
         }
     }
 }
@@ -305,6 +314,13 @@ struct App {
     last_blocked: u64,
     /// After the window is activated (alt+tab), check where keyboard focus landed.
     refocus_at: Option<Instant>,
+    /// Audio-reactive visuals: mixer meters for the WebView2 process tree.
+    meter: audio::Meter,
+    engine_pids: HashSet<u32>,
+    pids_dirty: bool,
+    meter_at: Instant,
+    audio_at: Instant,
+    audio_on: bool,
     boot_until: Instant,
     dirty: Cell<bool>,
     visible: bool,
@@ -574,7 +590,8 @@ impl App {
 
     fn area(&self) -> R {
         let (w, h) = self.logical_size();
-        R { x: GAP, y: BAR, w: (w - 2.0 * GAP).max(1.0), h: (h - BAR - GAP).max(1.0) }
+        let top = BAR + if self.cfg.bmbar { BMBAR } else { 0.0 };
+        R { x: GAP, y: top, w: (w - 2.0 * GAP).max(1.0), h: (h - top - GAP).max(1.0) }
     }
 
     fn top(&self) -> f64 {
@@ -1230,6 +1247,11 @@ impl App {
 
     fn on_procs(&mut self, procs: Vec<u32>) {
         self.stats_pending = false;
+        let pids: HashSet<u32> = procs.iter().copied().chain([std::process::id()]).collect();
+        if pids != self.engine_pids {
+            self.engine_pids = pids;
+            self.pids_dirty = true;
+        }
         if !self.cfg.stats {
             return;
         }
@@ -1325,6 +1347,7 @@ impl App {
             "bm": self.tabs.get(self.cur()).is_some_and(|t| t.ws != PRIVATE_WS && self.lib.is_bookmarked(&t.url)),
             "palhist": self.lib.commands,
             "digest": self.lib.digest_view(),
+            "bms": self.lib.bookmarks.iter().map(|b| json!({ "u": b.url, "t": b.title })).collect::<Vec<_>>(),
             "tour": self.tour,
             "max": self.window.is_maximized(),
         });
@@ -1439,7 +1462,41 @@ impl App {
         if let Some(t) = self.refocus_at {
             d = d.min(t);
         }
+        if (self.cfg.audio && !self.cfg.ultraspeed) || self.audio_on {
+            d = d.min(self.audio_at);
+        }
         d
+    }
+
+    /// Audio-reactive visuals: while a tab plays sound, send the mixer level to the UI ~30x/s;
+    /// otherwise just check twice a second whether anything started playing.
+    fn poll_audio(&mut self, now: Instant) {
+        let enabled = self.cfg.audio && !self.cfg.ultraspeed && self.visible;
+        let playing = enabled && self.tabs.iter().any(|t| t.view.as_ref().is_some_and(playing_audio));
+        if !playing {
+            if self.audio_on {
+                self.audio_on = false;
+                let _ = self.ui.evaluate_script("ultra.audio(0)");
+            }
+            self.audio_at = now + Duration::from_millis(600);
+            return;
+        }
+        // Keep the process list and mixer sessions fresh (output device or tabs may change).
+        if now >= self.meter_at {
+            self.meter_at = now + Duration::from_secs(2);
+            if !self.stats_pending {
+                self.sample_stats();
+            }
+            self.pids_dirty = true;
+        }
+        if self.pids_dirty {
+            self.pids_dirty = false;
+            self.meter.refresh(&self.engine_pids);
+        }
+        self.audio_on = true;
+        let level = if self.meter.is_empty() { 0.0 } else { self.meter.peak() };
+        let _ = self.ui.evaluate_script(&format!("ultra.audio({level:.3})"));
+        self.audio_at = now + Duration::from_millis(33);
     }
 
     /// Alt+tab activates the top-level window, which leaves keyboard focus on that bare
@@ -1490,6 +1547,9 @@ impl App {
                 }
             }
             "scanlines" => self.cfg.scanlines = v.as_bool().unwrap_or(false),
+            "boot" => self.cfg.boot = v.as_bool().unwrap_or(true),
+            "audio" => self.cfg.audio = v.as_bool().unwrap_or(true),
+            "bmbar" => self.cfg.bmbar = v.as_bool().unwrap_or(true),
             "accent" => {
                 if let Some(c) = v.as_str().filter(|c| is_hex_color(c)) {
                     self.cfg.accent = c.to_ascii_lowercase();
@@ -2009,6 +2069,28 @@ impl App {
                     self.sync();
                 }
             }
+            "openbm" => {
+                // Bookmarks bar: [url, new_tab]
+                let url = arg[0].as_str().unwrap_or("").to_string();
+                if !url.is_empty() {
+                    if arg[1].as_bool().unwrap_or(false) {
+                        self.new_tab(url, String::new(), true);
+                    } else {
+                        let c = self.cur();
+                        self.navigate(c, &url);
+                    }
+                }
+            }
+            "unbookmark" => {
+                if let Some(u) = arg.as_str() {
+                    if self.lib.is_bookmarked(u) {
+                        self.lib.toggle_bookmark(u, "");
+                        self.lib.save(&self.data_dir);
+                        self.toast("bookmark removed");
+                        self.sync();
+                    }
+                }
+            }
             "palhist" => {
                 // Commands typed in the private workspace are not remembered.
                 if self.ws != PRIVATE_WS {
@@ -2337,6 +2419,12 @@ fn main() {
         timing: None,
         last_blocked: 0,
         refocus_at: None,
+        meter: audio::Meter::default(),
+        engine_pids: HashSet::new(),
+        pids_dirty: false,
+        meter_at: now,
+        audio_at: now,
+        audio_on: false,
         boot_until: now,
         dirty: Cell::new(false),
         visible: false,
@@ -2436,6 +2524,9 @@ fn main() {
                     app.refill_spare();
                 }
                 app.track();
+                if now >= app.audio_at {
+                    app.poll_audio(now);
+                }
                 if app.refocus_at.is_some_and(|t| now >= t) {
                     app.refocus_at = None;
                     app.restore_focus();

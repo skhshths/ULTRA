@@ -121,7 +121,7 @@ input::selection { background: var(--acc-sel); }
 #panes.anim .sp { display: none; }
 
 /* overlays covering the content area */
-.ovl { position: fixed; left: calc(var(--gap) + 1px); top: calc(var(--bar) + 1px); right: calc(var(--gap) + 1px);
+.ovl { position: fixed; left: calc(var(--gap) + 1px); top: calc(var(--top) + 1px); right: calc(var(--gap) + 1px);
   bottom: calc(var(--gap) + 1px); z-index: 5; opacity: 0; visibility: hidden; outline: 0;
   transition: opacity var(--med) var(--ease), transform var(--med) var(--ease), visibility 0s linear var(--med); }
 .ovl.on { opacity: 1; visibility: visible; transition: opacity var(--med) var(--ease), transform var(--med) var(--ease); }
@@ -316,7 +316,7 @@ body.private .tab.on .n { color: var(--priv); }
 .lbox button { background: none; border: 1px solid #2c2c2c; color: var(--mid); font: inherit; padding: 6px 14px; cursor: default; }
 .lbox button:hover { color: var(--fg); background: #1e1e1e; }
 .lbox button.pri { color: var(--bg); background: var(--priv); border-color: var(--priv); }
-#toast { position: fixed; top: calc(var(--bar) + 10px); left: 50%; transform: translate(-50%, -6px); z-index: 9; opacity: 0; pointer-events: none;
+#toast { position: fixed; top: calc(var(--top) + 10px); left: 50%; transform: translate(-50%, -6px); z-index: 9; opacity: 0; pointer-events: none;
   background: #1a1a1a; border: 1px solid #333; color: var(--fg); padding: 7px 12px; font-size: 11px; white-space: nowrap;
   transition: opacity var(--med) var(--ease), transform var(--med) var(--ease); }
 #toast.on { opacity: 1; transform: translate(-50%, 0); }
@@ -338,6 +338,24 @@ body.private .tab.on .n { color: var(--priv); }
 #bgmode { flex-wrap: wrap; justify-content: flex-end; max-width: 300px; }
 #boot { position: fixed; inset: 0; z-index: 20; pointer-events: auto; }
 
+/* bookmarks bar */
+:root { --top: var(--bar); --pulse: 0; }
+body.bmbar { --top: calc(var(--bar) + 26px); }
+#bmbar { position: fixed; top: var(--bar); left: 0; right: 0; height: 26px; display: none; align-items: center; gap: 2px;
+  padding: 0 10px; z-index: 3; background: color-mix(in srgb, var(--bg) 92%, transparent); border-bottom: 1px solid #1f1f1f;
+  overflow-x: auto; scrollbar-width: none; }
+#bmbar::-webkit-scrollbar { display: none; }
+body.bmbar #bmbar { display: flex; }
+.bmk { display: flex; gap: 6px; align-items: center; height: 20px; padding: 0 8px 0 4px; color: var(--mid); white-space: nowrap;
+  max-width: 190px; font-size: 11px; flex: 0 0 auto; transition: color var(--fast), background-color var(--fast); }
+.bmk:hover { color: var(--fg); background: rgba(255,255,255,.04); }
+.bmk .ic { width: 14px; height: 14px; display: grid; place-items: center; background: var(--acc-bg); color: var(--acc); font-size: 9px; flex: 0 0 auto; }
+.bmk .bt { overflow: hidden; text-overflow: ellipsis; }
+.bmempty { color: #4a4a4a; font-size: 11px; }
+/* audio reactive: focused pane and logo glow with the music */
+.pf.on { box-shadow: 0 0 calc(var(--pulse) * 18px) color-mix(in srgb, var(--acc) calc(var(--pulse) * 55%), transparent); }
+.logo { text-shadow: 0 0 calc(var(--pulse) * 12px) var(--acc); }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation: none !important; } }
 </style>
 </head>
@@ -353,7 +371,7 @@ body.private .tab.on .n { color: var(--priv); }
   <span id="clock"></span><span id="cfgbtn" title="settings (ctrl+,)">cfg</span>
   <div class="wc"><div id="wmin">─</div><div id="wmax">□</div><div id="wq" class="q">✕</div></div>
 </div>
-<div id="panes"></div><div id="toast"></div><div id="sugg"></div>
+<div id="bmbar"></div><div id="panes"></div><div id="toast"></div><div id="sugg"></div>
 <div id="cfg" class="ovl" tabindex="-1"><div class="card">
   <div class="hd"><span>SETTINGS</span><span class="k">ctrl+,</span></div>
   <div class="sec">PERFORMANCE</div>
@@ -392,6 +410,8 @@ body.private .tab.on .n { color: var(--priv); }
     <div class="bgctl"><button class="run" id="bg-pick">choose…</button><button class="run" id="bg-clear">remove</button><input type="file" id="bg-file" accept="image/png,image/jpeg,image/webp" hidden></div></div>
   <div class="row" id="r-bgdim"><div><div class="name">dim image</div><div class="desc">darkens the picture so text stays readable.</div></div>
     <div class="bgctl"><input type="range" id="bg-dim" min="0" max="90" step="1"><span id="bg-dimv" style="width:34px;color:var(--mid)"></span></div></div>
+  <div class="row" id="r-audio"><div><div class="name">audio reactive</div><div class="desc">when a tab plays sound, the background, the focused pane's border and the logo pulse with it.<br>reads ULTRA's own volume meter only. off in ULTRASPEED.</div></div><div class="sw" id="sw-audio"></div></div>
+  <div class="row" id="r-bmbar"><div><div class="name">bookmarks bar</div><div class="desc">a row of your bookmarks under the top bar. click opens, middle-click opens a new tab, right-click removes.</div></div><div class="sw" id="sw-bmbar"></div></div>
   <div class="row" id="r-boot"><div><div class="name">boot animation</div><div class="desc">the logo assembles out of glyphs on launch. any key skips it. off in ULTRASPEED.</div></div><div class="sw" id="sw-boot"></div></div>
   <div class="row" id="r-scan"><div><div class="name">scanlines</div><div class="desc">retro crt lines over the chrome. off in ULTRASPEED.</div></div><div class="sw" id="sw-scan"></div></div>
   <div class="sec">INPUT</div>
@@ -513,6 +533,9 @@ window.ultra = {
     applyCfg(cfg());
     renderWs();
     renderTabs();
+    renderBookmarks();
+    // A suggestion list only ever belongs to the box that currently has focus.
+    if (sgInput && document.activeElement !== sgInput) { sgHide(); sgTyped = false; sgInput = null; }
     document.body.classList.toggle('private', s.ws === 9);
     if (s.gate) setLock(cfg().haspass ? 'unlock' : 'create'); else if (lockMode && lockMode !== 'change') setLock(null);
     setText($('#priv-pass'), cfg().haspass ? 'change password' : 'set password');
@@ -545,8 +568,8 @@ window.ultra = {
       place(e.pf, r); if (e.hp) place(e.hp, r); if (e.ph) place(e.ph, { x, y, w, h: 18 });
     }
   },
-  focusUrl() { const u = $('#url'); u.focus(); u.select(); },
-  focusHome(id) { pendingFocus = id; applyPendingFocus(); },
+  focusUrl() { sgHide(); sgTyped = false; sgInput = null; const u = $('#url'); u.focus(); u.select(); },
+  focusHome(id) { sgHide(); sgTyped = false; sgInput = null; pendingFocus = id; applyPendingFocus(); },
   overview(on) { setOv(on); },
   settings(on) { setCfg(on); },
   palette(on) { setPal(on); },
@@ -558,6 +581,7 @@ window.ultra = {
     if (cur && cur.s === 'home') { const e = paneEls.get(cur.id); q = e && e.hp && e.hp.querySelector('input'); }
     q = q || $('#url');
     q.focus(); q.value = ch; q.setSelectionRange(1, 1);
+    sgTyped = true; sgAsk(q);
   },
 };
 const anyOverlay = () => ovOn || cfgOn || palOn || tourOn || !!lockMode;
@@ -583,6 +607,9 @@ function applyCfg(c) {
   $('#sw-block').classList.toggle('on', c.block ?? true);
   $('#sw-scan').classList.toggle('on', !!c.scanlines);
   $('#sw-boot').classList.toggle('on', c.boot ?? true);
+  $('#sw-audio').classList.toggle('on', c.audio ?? true);
+  $('#sw-bmbar').classList.toggle('on', c.bmbar ?? true);
+  document.body.classList.toggle('bmbar', c.bmbar ?? true);
   $('#sw-type').classList.toggle('on', c.typeahead ?? true);
   $('#sw-tour').classList.toggle('on', c.tour ?? true);
   $('#t-opt').classList.toggle('on', c.tour ?? true);
@@ -605,6 +632,8 @@ $('#r-stats').onclick = () => toggle('stats', false);
 $('#r-block').onclick = () => toggle('block', true);
 $('#r-scan').onclick = () => toggle('scanlines', false);
 $('#r-boot').onclick = () => toggle('boot', true);
+$('#r-audio').onclick = () => toggle('audio', true);
+$('#r-bmbar').onclick = () => toggle('bmbar', true);
 $('#hist-clear').onclick = () => send('clearhistory');
 $('#r-type').onclick = () => toggle('typeahead', true);
 $('#sw-tour').onclick = (e) => { e.stopPropagation(); toggle('tour', true); };
@@ -959,7 +988,8 @@ function pickSplit(r, px, py) {
   return { v, first: v ? nx < .5 : ny < .5 };
 }
 function drawMap() {
-  const area = { x: 6, y: 34, w: innerWidth - 12, h: innerHeight - 40 };
+  const top = 34 + ((cfg().bmbar ?? true) ? 26 : 0);
+  const area = { x: 6, y: top, w: innerWidth - 12, h: innerHeight - top - 6 };
   const k = Math.min(226 / area.w, 160 / area.h);
   const sx = (x) => (x - area.x) * k, sy = (y) => (y - area.y) * k;
   const sl = slots();
@@ -1283,7 +1313,7 @@ url.addEventListener('focus', () => url.select());
 
 // ── address-bar suggestions: history + bookmarks, ranked by Rust ──
 const sugg = $('#sugg');
-let sgItems = [], sgSel = -1, sgInput = null, sgTimer = 0, urlPanel = false;
+let sgItems = [], sgSel = -1, sgInput = null, sgTimer = 0, urlPanel = false, sgTyped = false;
 function sgHide() {
   sugg.classList.remove('on'); sgItems = []; sgSel = -1;
   if (urlPanel) { urlPanel = false; send('urlpanel', false); }
@@ -1297,7 +1327,8 @@ function sgAsk(input) {
 }
 ultra.urlpanel = () => {};
 ultra.suggestions = (r) => {
-  if (!sgInput || document.activeElement !== sgInput || r.q !== sgInput.value.trim()) return;
+  // Only once the user has typed in this box since it got focus (a freshly focused box stays quiet).
+  if (!sgTyped || !sgInput || document.activeElement !== sgInput || r.q !== sgInput.value.trim()) return;
   sgItems = r.items; sgSel = -1;
   if (!sgItems.length) { sgHide(); return; }
   // The address bar sits above the pages, so pages are hidden while its list is open.
@@ -1327,10 +1358,30 @@ sugg.addEventListener('pointerdown', (e) => {
   sgHide();
   if (inp === url) { send('go', u); url.blur(); } else send('go', [+inp.dataset.id, u]);
 });
-url.addEventListener('input', () => sgAsk(url));
+url.addEventListener('input', () => { sgTyped = true; sgAsk(url); });
+// Moving focus to another box closes any list and waits for fresh typing.
+document.addEventListener('focusin', (e) => { if (e.target !== sgInput) { sgHide(); sgTyped = false; sgInput = null; } });
 url.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== url) sgHide(); }, 0));
-panesEl.addEventListener('input', (e) => { const q = e.target.closest('.hp input'); if (q) sgAsk(q); });
+panesEl.addEventListener('input', (e) => { const q = e.target.closest('.hp input'); if (q) { sgTyped = true; sgAsk(q); } });
 $('#star').onclick = () => send('bookmark');
+
+// ── bookmarks bar ──
+const bmbar = $('#bmbar');
+function renderBookmarks() {
+  const bms = S.bms || [];
+  setHTML(bmbar, bms.length
+    ? bms.map((b) => { const h = host(b.u); return `<div class="bmk" data-u="${esc(b.u)}" title="${esc((b.t || h) + '\n' + b.u)}"><span class="ic">${esc((h[0] || '•').toUpperCase())}</span><span class="bt">${esc(b.t || h)}</span></div>`; }).join('')
+    : '<span class="bmempty">☆ ctrl+d bookmarks the current page</span>');
+}
+bmbar.addEventListener('mousedown', (e) => {
+  const b = e.target.closest('.bmk');
+  if (!b) { if (e.button === 0) send('drag'); return; }
+  if (e.button === 0) send('openbm', [b.dataset.u, false]);
+  else if (e.button === 1) { e.preventDefault(); send('openbm', [b.dataset.u, true]); }
+});
+bmbar.addEventListener('contextmenu', (e) => { e.preventDefault(); const b = e.target.closest('.bmk'); if (b) send('unbookmark', b.dataset.u); });
+bmbar.addEventListener('wheel', (e) => { bmbar.scrollLeft += e.deltaY + e.deltaX; e.preventDefault(); }, { passive: false });
+ultra.audio = (l) => bg.setAudio(l);
 
 // ── window chrome ──
 $('#bar').addEventListener('mousedown', (e) => {
@@ -1400,6 +1451,8 @@ const bg = (() => {
   let W = 0, H = 0, dpr = 1, phase = 0, frame = 0, running = false, last = 0, enabled = !SPEED && CANVAS.includes(CFG0.bgmode || 'swirl');
   let cells = null, F = null, M = null, G = null, atlas = null, tint = '190,190,190', fill = '#141414', bright = 1;
   let drops = null, speeds = null, stars = null, gt = 0;
+  // Audio: target level from Rust, smoothed level, slow average, beat flash, combined energy.
+  let aTarget = 0, aLv = 0, aAvg = 0, beat = 0, lastBeat = 0, energy = 0, wantAnim = false, pulseOut = -1;
   const hash = (x, y) => { let h = (x * 374761393 + y * 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
   const sm = (v) => v * v * (3 - 2 * v);
   function vn(x, y) {
@@ -1465,7 +1518,8 @@ const bg = (() => {
         glyph((Math.random() * GL.length) | 0, LV - 1, c * CW, Math.floor(y) * LH);
         if (y >= 1) glyph((c * 7 + frame) % GL.length, 3, c * CW, (Math.floor(y) - 1) * LH);
       }
-      drops[c] += speeds[c];
+      drops[c] += speeds[c] * (1 + energy * 2.5);
+      if (beat > .9 && Math.random() < .06) drops[c] = 0;
       if (drops[c] > rows && Math.random() > .97) drops[c] = -Math.random() * 20;
     }
   }
@@ -1475,7 +1529,7 @@ const bg = (() => {
     for (let k = 0, len = F.length; k < len; k++) {
       const g = (F[k] + phase) % 1;
       if (g > BAND) continue;
-      const iv = Math.sin((g / BAND) * Math.PI) * M[k];
+      const iv = Math.sin((g / BAND) * Math.PI) * M[k] * (1 + energy * .9);
       if (iv < 0.12) continue;
       const seed = G[k];
       glyph((seed + ((frame + seed) / 40 | 0)) % GL.length, Math.min(LV - 1, (iv * LV) | 0), cells[2 * k] * CW, cells[2 * k + 1] * LH);
@@ -1488,14 +1542,14 @@ const bg = (() => {
     for (let i = 0; i < n; i++) {
       const z = stars[i * 3 + 2], x = cxp + stars[i * 3] / z * cxp * .6, y = cyp + stars[i * 3 + 1] / z * cyp * .6;
       if (x < 0 || x > W || y < 0 || y > H) continue;
-      const a = Math.min(1, (1 - z) * .9 * bright), s = (1 - z) * 2 + .4;
+      const a = Math.min(1, (1 - z) * .9 * bright * (1 + energy * .5)), s = ((1 - z) * 2 + .4) * (1 + energy * .8);
       cx.fillStyle = `rgba(${tint},${a.toFixed(3)})`; cx.fillRect(x, y, s, s);
     }
   }
   function stepStars() {
     const n = stars.length / 3;
     for (let i = 0; i < n; i++) {
-      stars[i * 3 + 2] -= .0035;
+      stars[i * 3 + 2] -= .0035 * (1 + energy * 7);
       if (stars[i * 3 + 2] <= .02) { stars[i * 3] = Math.random() * 2 - 1; stars[i * 3 + 1] = Math.random() * 2 - 1; stars[i * 3 + 2] = 1; }
     }
   }
@@ -1508,8 +1562,9 @@ const bg = (() => {
       cx.fillStyle = g; cx.fillRect(0, 0, W, H);
     };
     const R = Math.max(W, H) * .6;
-    blob(W * (.5 + .35 * Math.cos(gt)), H * (.5 + .35 * Math.sin(gt * .8)), R, .16);
-    blob(W * (.5 + .35 * Math.cos(gt * .7 + 2)), H * (.5 + .35 * Math.sin(gt + 1)), R * .8, .1);
+    const boost = 1 + energy * 1.8;
+    blob(W * (.5 + .35 * Math.cos(gt)), H * (.5 + .35 * Math.sin(gt * .8)), R, .16 * boost);
+    blob(W * (.5 + .35 * Math.cos(gt * .7 + 2)), H * (.5 + .35 * Math.sin(gt + 1)), R * .8, .1 * boost);
   }
   function draw() {
     if (mode === 'swirl') drawSwirl();
@@ -1517,15 +1572,37 @@ const bg = (() => {
     else if (mode === 'stars') drawStars();
     else drawGradient();
   }
+  // Smooth the mixer level, detect beats (a jump well above the running average), and
+  // publish the energy as --pulse for the focused pane's border and the logo.
+  function stepAudio(ts) {
+    aLv += (aTarget - aLv) * .35;
+    aAvg += (aLv - aAvg) * .04;
+    if (aLv > aAvg * 1.4 && aLv > .06 && ts - lastBeat > 180) { beat = 1; lastBeat = ts; }
+    beat *= .82;
+    energy = Math.min(1.5, aLv * 1.2 + beat * .8);
+    const out = energy < .02 ? 0 : Math.round(energy * 100) / 100;
+    if (out !== pulseOut) { pulseOut = out; document.documentElement.style.setProperty('--pulse', out); }
+  }
+  const audible = () => aTarget > 0 || energy > .02;
+  let glowing = false, glowLast = 0;
+  function glowLoop(ts) {
+    if (ts - glowLast >= 33) { glowLast = ts; stepAudio(ts); }
+    if (enabled || SPEED || !audible()) { glowing = false; if (!enabled) { energy = 0; stepAudio(ts); } return; }
+    requestAnimationFrame(glowLoop);
+  }
   function loop(ts) {
     if (!running) return;
-    if (ts - last >= FPS[mode]) {
+    const fps = audible() ? Math.min(FPS[mode], 45) : FPS[mode];
+    if (ts - last >= fps) {
       last = ts; frame++;
-      if (mode === 'swirl') phase += 0.006;
+      stepAudio(ts);
+      if (mode === 'swirl') phase += 0.006 + energy * .025;
       if (mode === 'stars') stepStars();
-      if (mode === 'gradient') gt += 0.012;
+      if (mode === 'gradient') gt += 0.012 * (1 + energy * 4);
       draw();
     }
+    // Keep going while a home pane/panel is visible, or while music is playing.
+    if (!wantAnim && !audible()) { running = false; return; }
     requestAnimationFrame(loop);
   }
   function resize() {
@@ -1538,8 +1615,15 @@ const bg = (() => {
   if (enabled) resize();
   return {
     animate(on) {
-      if (on && enabled && !running) { running = true; requestAnimationFrame(loop); }
-      else if (!on) running = false;
+      wantAnim = on;
+      if ((on || audible()) && enabled && !running) { running = true; requestAnimationFrame(loop); }
+      else if (!on && !audible()) running = false;
+    },
+    setAudio(l) {
+      aTarget = Math.max(0, Math.min(1, +l || 0));
+      if (aTarget > 0 && enabled && !running) { running = true; requestAnimationFrame(loop); }
+      // Solid/image backgrounds have no canvas: still drive the border/logo glow (never in ULTRASPEED).
+      if (!enabled && !SPEED && aTarget > 0 && !glowing) { glowing = true; requestAnimationFrame(glowLoop); }
     },
     // ULTRASPEED / non-canvas styles: drop the canvas backing store and all state.
     setEnabled(on) {
