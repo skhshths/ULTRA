@@ -124,6 +124,7 @@ video players, ad iframes, PDFs, and sites that swallow keys. On Windows that is
 | Audio-reactive visuals | Windows mixer peak meter (no permission needed) | Core Audio process tap on ULTRA's own processes (macOS asks once for **System Audio Recording**) |
 | Audio bars | WASAPI process loopback + FFT | The same tap + the same FFT |
 | Crash recovery | Renderer crash → reload, twice → sleep; engine crash → relaunch | Page process crash → reload, twice → sleep; WebKit restarts its shared processes itself, so no relaunch is needed |
+| Downloads | Saved to Downloads, numbered instead of overwriting; download bubble | Saved to ~/Downloads, numbered the same way; ULTRA shows a notice when each starts and finishes |
 | Slideshow folder picker | Windows folder dialog | Native folder picker as a sheet on the window |
 | Phishing protection | SmartScreen | WebKit's fraudulent-website warnings (Safe Browsing) |
 | App icon | `.ico` embedded by `build.rs` | `.icns` in the app bundle; set at runtime for `cargo run` |

@@ -118,6 +118,9 @@ enum UserEvent {
     RulesReady,
     /// Find-in-page result.
     Found(bool),
+    /// A download started (file name in ~/Downloads) or finished (ok).
+    DownloadStarted(String),
+    DownloadDone(bool),
 }
 
 struct Tab {
@@ -598,7 +601,9 @@ impl App {
     }
 
     fn build_view(&mut self, slot: u64, url: Option<&str>, bounds: Rect, private: bool) -> Option<WebView> {
-        let (p1, p2, p3, p4, p5) = (
+        let (p1, p2, p3, p4, p5, p6, p7) = (
+            self.proxy.clone(),
+            self.proxy.clone(),
             self.proxy.clone(),
             self.proxy.clone(),
             self.proxy.clone(),
@@ -654,6 +659,16 @@ impl App {
             })
             .with_on_web_content_process_terminate_handler(move || {
                 let _ = p5.send_event(UserEvent::Failed(slot));
+            })
+            // Downloads go to ~/Downloads, numbered instead of overwriting (as WebView2 does);
+            // the chrome says when one starts and ends, in place of WebView2's download bubble.
+            .with_download_started_handler(move |_, path| {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let _ = p6.send_event(UserEvent::DownloadStarted(name));
+                true
+            })
+            .with_download_completed_handler(move |_, _, ok| {
+                let _ = p7.send_event(UserEvent::DownloadDone(ok));
             })
             .build_as_child(&self.window);
         match res {
@@ -2344,6 +2359,8 @@ impl App {
             UserEvent::Found(found) => {
                 let _ = self.ui.evaluate_script(&format!("ultra.found({found})"));
             }
+            UserEvent::DownloadStarted(name) => self.toast(&format!("downloading {name} to Downloads")),
+            UserEvent::DownloadDone(ok) => self.toast(if ok { "download finished · in your Downloads folder" } else { "download failed" }),
         }
     }
 
