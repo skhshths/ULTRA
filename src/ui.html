@@ -15,6 +15,8 @@
 html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg);
   font: 12px/1 "JetBrains Mono", "Cascadia Mono", Consolas, monospace; user-select: none; cursor: default; }
 canvas#bg { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
+canvas#barsfx { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; display: none; }
+body.barsfx canvas#barsfx { display: block; }
 
 #bar { position: fixed; top: 0; left: 0; right: 0; height: var(--bar); display: flex; align-items: center;
   gap: 10px; padding-left: 12px; z-index: 3; background: color-mix(in srgb, var(--bg) 90%, transparent); contain: layout paint; }
@@ -255,7 +257,7 @@ body.scan::after { content: ''; position: fixed; inset: 0; pointer-events: none;
 body.scan .logo { text-shadow: 0 0 8px color-mix(in srgb, var(--acc) 60%, transparent); }
 
 /* ULTRASPEED: 100% speed, 0% looks. No canvas, no transitions, no animations, nothing composited. */
-body.speed canvas#bg { display: none; }
+body.speed canvas#bg, body.speed canvas#barsfx { display: none; }
 body.speed *, body.speed *::before, body.speed *::after { transition: none !important; animation: none !important; }
 body.speed::after { display: none; }
 body.speed #bar { background: var(--bg); border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, var(--bg)); }
@@ -360,7 +362,7 @@ body.bmbar #bmbar { display: flex; }
 </style>
 </head>
 <body>
-<div id="bgimg"></div><canvas id="bg"></canvas>
+<div id="bgimg"></div><canvas id="bg"></canvas><canvas id="barsfx"></canvas>
 <div id="bar">
   <span class="logo">ULTRA</span><span class="spd">SPEED</span><span class="privtag">PRIVATE</span><span class="sep">│</span>
   <div id="wsbar"></div><span class="sep">│</span>
@@ -402,8 +404,9 @@ body.bmbar #bmbar { display: flex; }
         <button class="pk-reset" id="pk-reset">↺ default</button></div>
     </div>
   </div>
-  <div class="row"><div><div class="name">background</div><div class="desc">ascii swirl, matrix rain, starfield, gradient, audio bars, a plain colour, an image, or a slideshow of a folder.</div></div>
-    <div class="seg" id="bgmode"><button data-m="swirl">swirl</button><button data-m="matrix">matrix</button><button data-m="stars">stars</button><button data-m="gradient">gradient</button><button data-m="bars">bars</button><button data-m="solid">solid</button><button data-m="image">image</button><button data-m="slideshow">slideshow</button></div></div>
+  <div class="row"><div><div class="name">background</div><div class="desc">ascii swirl, matrix rain, starfield, gradient, a plain colour, an image, or a slideshow of a folder.</div></div>
+    <div class="seg" id="bgmode"><button data-m="swirl">swirl</button><button data-m="matrix">matrix</button><button data-m="stars">stars</button><button data-m="gradient">gradient</button><button data-m="solid">solid</button><button data-m="image">image</button><button data-m="slideshow">slideshow</button></div></div>
+  <div class="row" id="r-bars"><div><div class="name">audio bars</div><div class="desc">a spectrum visualiser across the bottom, layered over any background above.<br>bounces with sound playing in ULTRA (needs audio reactive on).</div></div><div class="sw" id="sw-bars"></div></div>
   <div class="row" id="r-swirl"><div><div class="name">pattern brightness</div><div class="desc">how bright the animated background is.</div></div>
     <div class="bgctl"><input type="range" id="sw-bright" min="30" max="300" step="5"><span id="sw-brightv" style="width:40px;color:var(--mid)"></span></div></div>
   <div class="row" id="r-slide"><div><div class="name">slideshow folder</div><div class="desc" id="slidedesc">no folder chosen.</div></div>
@@ -513,6 +516,7 @@ function applyTheme(c, force) {
   r.setProperty('--acc-bg', rgb2hex(mix(acc, bgc, .12)));
   const glyph = swHex ? hex2rgb(swHex) : mix(acc, [190, 190, 190], .15);
   if (window.__ultraBg) window.__ultraBg.setTint(glyph.map(Math.round).join(','), bgHex, bright);
+  if (window.__ultraBars) window.__ultraBars.setTint(glyph.map(Math.round).join(','), bright);
 }
 applyTheme(CFG0);
 document.body.classList.toggle('scan', !!CFG0.scanlines && !SPEED);
@@ -638,6 +642,7 @@ $('#r-scan').onclick = () => toggle('scanlines', false);
 $('#r-boot').onclick = () => toggle('boot', true);
 $('#r-audio').onclick = () => toggle('audio', true);
 $('#r-bmbar').onclick = () => toggle('bmbar', true);
+$('#r-bars').onclick = () => toggle('bars', false);
 $('#hist-clear').onclick = () => send('clearhistory');
 $('#r-type').onclick = () => toggle('typeahead', true);
 $('#sw-tour').onclick = (e) => { e.stopPropagation(); toggle('tour', true); };
@@ -654,7 +659,9 @@ function applyBg(c) {
   if (pic !== shownPic) { shownPic = pic; $('#bgimg').style.backgroundImage = pic ? `url("${pic}")` : 'none'; }
   document.body.classList.toggle('bgimage', !!pic);
   document.body.classList.toggle('bgsolid', mode === 'solid' || ((mode === 'image' || mode === 'slideshow') && !pic));
-  const canvasMode = ['swirl', 'matrix', 'stars', 'gradient', 'bars'].includes(mode);
+  const canvasMode = ['swirl', 'matrix', 'stars', 'gradient'].includes(mode);
+  barsFx.setEnabled(!SPEED && !!c.bars);
+  $('#sw-bars').classList.toggle('on', !!c.bars);
   if (canvasMode) bg.setMode(mode);
   bg.setEnabled(!SPEED && canvasMode);
   document.documentElement.style.setProperty('--bgdim', ((c.bgdim ?? 45) / 100).toFixed(2));
@@ -812,7 +819,8 @@ const CMDS = [
   { k: 'reopen', d: 'reopen the last closed tab', run: () => send('reopen') },
   { k: 'devtools', d: 'developer tools for the focused page', run: () => send('devtools') },
   { k: 'theme', a: '<name>', d: Object.keys(THEMES).join(' · '), opts: Object.keys(THEMES), run: (x) => THEMES[x] && send('set', ['theme', x]) },
-  { k: 'bg', a: '<style>', d: 'swirl · matrix · stars · gradient · bars · solid · image · slideshow', opts: ['swirl', 'matrix', 'stars', 'gradient', 'bars', 'solid', 'image', 'slideshow'], run: (x) => ['swirl', 'matrix', 'stars', 'gradient', 'bars', 'solid', 'image', 'slideshow'].includes(x) && send('set', ['bgmode', x]) },
+  { k: 'bg', a: '<style>', d: 'swirl · matrix · stars · gradient · solid · image · slideshow', opts: ['swirl', 'matrix', 'stars', 'gradient', 'solid', 'image', 'slideshow'], run: (x) => ['swirl', 'matrix', 'stars', 'gradient', 'solid', 'image', 'slideshow'].includes(x) && send('set', ['bgmode', x]) },
+  { k: 'bars', a: '[on|off]', d: 'audio bars over the background', opts: ['on', 'off'], run: (x) => send('set', ['bars', onoff(x, !!cfg().bars)]) },
   { k: 'next image', d: 'skip to the next slideshow image', run: () => send('nextslide') },
   { k: 'accent', a: '<#rrggbb>', d: 'custom accent colour', run: (x) => /^#?[0-9a-f]{6}$/i.test(x) && send('set', ['accent', (x[0] === '#' ? x : '#' + x).toLowerCase()]) },
   { k: 'swirl', a: '<#rrggbb|auto>', d: 'swirl glyph colour', opts: ['auto'], run: (x) => (x === 'auto' || /^#?[0-9a-f]{6}$/i.test(x)) && send('set', ['swirlcolor', x === 'auto' ? 'auto' : (x[0] === '#' ? x : '#' + x).toLowerCase()]) },
@@ -1240,6 +1248,7 @@ function renderPanes() {
   panesEl.classList.toggle('anim', S.panes.length > 1 && S.splits.length === 0);
   applyPendingFocus();
   bg.animate(homes > 0 || anyOverlay());
+  barsFx.animate(homes > 0 || anyOverlay());
 }
 function applyPendingFocus() {
   if (pendingFocus == null || anyOverlay()) return;
@@ -1397,8 +1406,8 @@ bmbar.addEventListener('mousedown', (e) => {
 });
 bmbar.addEventListener('contextmenu', (e) => { e.preventDefault(); const b = e.target.closest('.bmk'); if (b) send('unbookmark', b.dataset.u); });
 bmbar.addEventListener('wheel', (e) => { bmbar.scrollLeft += e.deltaY + e.deltaX; e.preventDefault(); }, { passive: false });
-ultra.audio = (l) => bg.setAudio(l);
-ultra.bars = (b) => bg.setBars(b);
+ultra.audio = (l) => { bg.setAudio(l); barsFx.setLevel(l); };
+ultra.bars = (b) => barsFx.setBars(b);
 
 // ── window chrome ──
 $('#bar').addEventListener('mousedown', (e) => {
@@ -1462,12 +1471,8 @@ const bg = (() => {
   const cv = $('#bg'), cx = cv.getContext('2d', { alpha: false });
   const GL = 'abcdef0123456789ghijklmnopqrstuvwxyz0123456789';
   const CW = 7, LH = 14, LV = 7, BAND = 0.32, FREQ = 3.4;
-  const FPS = { swirl: 90, matrix: 70, stars: 33, gradient: 110, bars: 33 };
-  const CANVAS = ['swirl', 'matrix', 'stars', 'gradient', 'bars'];
-  const NB = 40;
-  // Bars: latest spectrum from Rust, displayed heights, falling peak caps.
-  const barT = new Float32Array(NB), barV = new Float32Array(NB), caps = new Float32Array(NB);
-  let lastBars = 0;
+  const FPS = { swirl: 90, matrix: 70, stars: 33, gradient: 110 };
+  const CANVAS = ['swirl', 'matrix', 'stars', 'gradient'];
   let mode = CANVAS.includes(CFG0.bgmode) ? CFG0.bgmode : 'swirl';
   let W = 0, H = 0, dpr = 1, phase = 0, frame = 0, running = false, last = 0, enabled = !SPEED && CANVAS.includes(CFG0.bgmode || 'swirl');
   let cells = null, F = null, M = null, G = null, atlas = null, tint = '190,190,190', fill = '#141414', bright = 1;
@@ -1574,29 +1579,6 @@ const bg = (() => {
       if (stars[i * 3 + 2] <= .02) { stars[i * 3] = Math.random() * 2 - 1; stars[i * 3 + 1] = Math.random() * 2 - 1; stars[i * 3 + 2] = 1; }
     }
   }
-  // Audio bars across the bottom-middle of the screen. Real spectrum when Rust sends one;
-  // otherwise driven by the volume level, and a slow breathing idle when silent.
-  function drawBars() {
-    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    cx.fillStyle = fill; cx.fillRect(0, 0, W, H);
-    const now = performance.now(), live = now - lastBars < 300;
-    const width = Math.min(W * .62, 1100), x0 = (W - width) / 2, maxH = H * .32, base = H - 32;
-    const bw = width / NB, gap = Math.max(2, bw * .24);
-    for (let i = 0; i < NB; i++) {
-      const t = live ? barT[i]
-        : aLv > .01 ? aLv * (.35 + .65 * (.5 + .5 * Math.sin(now / 170 + i * 1.7))) * (1 - i / NB * .45) + (i < 8 ? beat * .3 : 0)
-        : .025 + .02 * Math.sin(now / 700 + i * .45);
-      barV[i] += (t - barV[i]) * (t > barV[i] ? .55 : .18);
-      caps[i] = barV[i] > caps[i] ? barV[i] : Math.max(0, caps[i] - .008);
-      const v = Math.min(1, barV[i]), h = Math.max(2, v * maxH), x = x0 + i * bw;
-      cx.fillStyle = `rgba(${tint},${Math.min(1, (.3 + .6 * v) * bright).toFixed(3)})`;
-      cx.fillRect(x, base - h, bw - gap, h);
-      cx.fillStyle = `rgba(${tint},${Math.min(1, .07 * bright).toFixed(3)})`; // faint reflection
-      cx.fillRect(x, base + 3, bw - gap, h * .22);
-      cx.fillStyle = `rgba(${tint},${Math.min(1, .85 * bright).toFixed(3)})`; // peak cap
-      cx.fillRect(x, base - Math.min(1, caps[i]) * maxH - 5, bw - gap, 2);
-    }
-  }
   function drawGradient() {
     cx.setTransform(dpr, 0, 0, dpr, 0, 0);
     cx.fillStyle = fill; cx.fillRect(0, 0, W, H);
@@ -1614,7 +1596,6 @@ const bg = (() => {
     if (mode === 'swirl') drawSwirl();
     else if (mode === 'matrix') stepMatrix();
     else if (mode === 'stars') drawStars();
-    else if (mode === 'bars') drawBars();
     else drawGradient();
   }
   // Smooth the mixer level, detect beats (a jump well above the running average), and
@@ -1664,11 +1645,6 @@ const bg = (() => {
       if ((on || audible()) && enabled && !running) { running = true; requestAnimationFrame(loop); }
       else if (!on && !audible()) running = false;
     },
-    setBars(b) {
-      for (let i = 0; i < NB; i++) barT[i] = +b[i] || 0;
-      lastBars = performance.now();
-      if (enabled && !running) { running = true; requestAnimationFrame(loop); }
-    },
     setAudio(l) {
       aTarget = Math.max(0, Math.min(1, +l || 0));
       if (aTarget > 0 && enabled && !running) { running = true; requestAnimationFrame(loop); }
@@ -1687,6 +1663,69 @@ const bg = (() => {
   };
 })();
 window.__ultraBg = bg;
+
+// ── audio bars layer: a transparent canvas over any background ──
+// Real spectrum when Rust sends one; otherwise driven by the volume level, and a slow
+// breathing idle when silent. Animates only while music plays or a home pane/panel is
+// visible, and holds still otherwise.
+const barsFx = (() => {
+  const cv = $('#barsfx'), cx = cv.getContext('2d');
+  const NB = 40;
+  const barT = new Float32Array(NB), barV = new Float32Array(NB), caps = new Float32Array(NB);
+  let W = 0, H = 0, dpr = 1, on = false, running = false, wantAnim = false, last = 0;
+  let lastBars = 0, level = 0, lv = 0, avg = 0, beat = 0, lastBeat = 0, tint = '190,190,190', bright = 1;
+  function resize() {
+    dpr = window.devicePixelRatio || 1; W = innerWidth; H = innerHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  }
+  function draw(now) {
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx.clearRect(0, 0, W, H);
+    lv += (level - lv) * .35; avg += (lv - avg) * .04;
+    if (lv > avg * 1.4 && lv > .06 && now - lastBeat > 180) { beat = 1; lastBeat = now; }
+    beat *= .82;
+    const live = now - lastBars < 300;
+    const width = Math.min(W * .62, 1100), x0 = (W - width) / 2, maxH = H * .32, base = H - 32;
+    const bw = width / NB, gap = Math.max(2, bw * .24);
+    for (let i = 0; i < NB; i++) {
+      const t = live ? barT[i]
+        : lv > .01 ? lv * (.35 + .65 * (.5 + .5 * Math.sin(now / 170 + i * 1.7))) * (1 - i / NB * .45) + (i < 8 ? beat * .3 : 0)
+        : .025 + .02 * Math.sin(now / 700 + i * .45);
+      barV[i] += (t - barV[i]) * (t > barV[i] ? .55 : .18);
+      caps[i] = barV[i] > caps[i] ? barV[i] : Math.max(0, caps[i] - .008);
+      const v = Math.min(1, barV[i]), h = Math.max(2, v * maxH), x = x0 + i * bw;
+      cx.fillStyle = `rgba(${tint},${Math.min(1, (.35 + .6 * v) * bright).toFixed(3)})`;
+      cx.fillRect(x, base - h, bw - gap, h);
+      cx.fillStyle = `rgba(${tint},${Math.min(1, .08 * bright).toFixed(3)})`; // faint reflection
+      cx.fillRect(x, base + 3, bw - gap, h * .22);
+      cx.fillStyle = `rgba(${tint},${Math.min(1, .9 * bright).toFixed(3)})`; // peak cap
+      cx.fillRect(x, base - Math.min(1, caps[i]) * maxH - 5, bw - gap, 2);
+    }
+  }
+  const audible = () => level > 0 || lv > .01;
+  function loop(ts) {
+    if (!running) return;
+    if (ts - last >= 33) { last = ts; draw(ts); }
+    if (!on || (!wantAnim && !audible())) { running = false; return; }
+    requestAnimationFrame(loop);
+  }
+  const kick = () => { if (on && !running) { running = true; requestAnimationFrame(loop); } };
+  addEventListener('resize', () => { if (on) { resize(); draw(performance.now()); } });
+  return {
+    setEnabled(v) {
+      if (v === on) return;
+      on = v;
+      document.body.classList.toggle('barsfx', v);
+      if (v) { resize(); draw(performance.now()); kick(); } else { running = false; cv.width = cv.height = 0; }
+    },
+    animate(v) { wantAnim = v; if (v) kick(); },
+    setLevel(l) { level = Math.max(0, Math.min(1, +l || 0)); if (level > 0) kick(); },
+    setBars(b) { for (let i = 0; i < NB; i++) barT[i] = +b[i] || 0; lastBars = performance.now(); kick(); },
+    setTint(rgb, b) { tint = rgb; bright = b || 1; if (on && !running) draw(performance.now()); },
+  };
+})();
+window.__ultraBars = barsFx;
+
 THEME = null; applyTheme(cfg());
 
 send('ready');

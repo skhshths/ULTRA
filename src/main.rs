@@ -100,7 +100,7 @@ const BROWSER_ARGS: &str = "--enable-features=msSmartScreenProtection";
 const THEMES: &[&str] = &[
     "mint", "amber", "red", "mono", "ice", "matrix", "violet", "pink", "orange", "cyan", "gold", "lime", "custom",
 ];
-const BG_MODES: &[&str] = &["swirl", "matrix", "stars", "gradient", "bars", "solid", "image", "slideshow"];
+const BG_MODES: &[&str] = &["swirl", "matrix", "stars", "gradient", "solid", "image", "slideshow"];
 /// Largest background image accepted (as a base64 data URL).
 const BG_MAX: usize = 16 * 1024 * 1024;
 
@@ -211,6 +211,8 @@ struct Settings {
     /// Slideshow background: folder of images and seconds per image.
     slidedir: String,
     slidesecs: u32,
+    /// Audio bars layered over whatever background is chosen.
+    bars: bool,
 }
 
 impl Default for Settings {
@@ -241,6 +243,7 @@ impl Default for Settings {
             bmbar: true,
             slidedir: String::new(),
             slidesecs: 60,
+            bars: false,
         }
     }
 }
@@ -1517,7 +1520,7 @@ impl App {
         let level = if self.meter.is_empty() { 0.0 } else { self.meter.peak() };
         let _ = self.ui.evaluate_script(&format!("ultra.audio({level:.3})"));
         // Bars background: real spectrum from ULTRA's own audio (UI falls back to the level).
-        if self.cfg.bgmode == "bars" {
+        if self.cfg.bars {
             if self.spectrum.is_none() {
                 let mut pid = 0u32;
                 unsafe {
@@ -1632,11 +1635,13 @@ impl App {
                     self.cfg.bgcolor = c.to_ascii_lowercase();
                 }
             }
-            "bgmode" => {
-                if let Some(m) = v.as_str().filter(|m| BG_MODES.contains(m)) {
-                    self.cfg.bgmode = m.to_string();
-                }
-            }
+            "bgmode" => match v.as_str() {
+                // "bars" is a layer now, not a background of its own.
+                Some("bars") => self.cfg.bars = true,
+                Some(m) if BG_MODES.contains(&m) => self.cfg.bgmode = m.to_string(),
+                _ => return,
+            },
+            "bars" => self.cfg.bars = v.as_bool().unwrap_or(false),
             "bgdim" => self.cfg.bgdim = v.as_u64().unwrap_or(45).min(90) as u8,
             "swirlcolor" => match v.as_str() {
                 Some(c) if is_hex_color(c) => self.cfg.swirlcolor = c.to_ascii_lowercase(),
@@ -2441,6 +2446,8 @@ fn main() {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
+    // Older settings had "bars" as a background; it is now a layer over the swirl.
+    let cfg = if cfg.bgmode == "bars" { Settings { bgmode: "swirl".into(), bars: true, ..cfg } } else { cfg };
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
