@@ -303,6 +303,8 @@ struct App {
     win_focused: bool,
     timing: Option<(String, Instant)>,
     last_blocked: u64,
+    /// After the window is activated (alt+tab), check where keyboard focus landed.
+    refocus_at: Option<Instant>,
     boot_until: Instant,
     dirty: Cell<bool>,
     visible: bool,
@@ -1434,7 +1436,21 @@ impl App {
         if self.booting {
             d = d.min(self.boot_until);
         }
+        if let Some(t) = self.refocus_at {
+            d = d.min(t);
+        }
         d
+    }
+
+    /// Alt+tab activates the top-level window, which leaves keyboard focus on that bare
+    /// window rather than in any webview. If that's where it is, hand it to the focused pane.
+    /// (A click into a pane has already put focus inside that page, so it's left alone.)
+    fn restore_focus(&self) {
+        use windows::Win32::{Foundation::HWND, UI::Input::KeyboardAndMouse::GetFocus};
+        let f = unsafe { GetFocus() };
+        if f.0.is_null() || f == HWND(self.window.hwnd() as *mut _) {
+            self.focus_active();
+        }
     }
 
     fn set_setting(&mut self, key: &str, v: &Value) {
@@ -2320,6 +2336,7 @@ fn main() {
         win_focused: true,
         timing: None,
         last_blocked: 0,
+        refocus_at: None,
         boot_until: now,
         dirty: Cell::new(false),
         visible: false,
@@ -2396,6 +2413,8 @@ fn main() {
                 WindowEvent::Focused(f) => {
                     app.win_focused = f;
                     app.track();
+                    // Give Windows a moment to settle activation before checking focus.
+                    app.refocus_at = f.then(|| Instant::now() + Duration::from_millis(40));
                 }
                 WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
                     app.note_activity();
@@ -2417,6 +2436,10 @@ fn main() {
                     app.refill_spare();
                 }
                 app.track();
+                if app.refocus_at.is_some_and(|t| now >= t) {
+                    app.refocus_at = None;
+                    app.restore_focus();
+                }
                 if app.booting && now >= app.boot_until {
                     app.command("booted", &Value::Null);
                 }
