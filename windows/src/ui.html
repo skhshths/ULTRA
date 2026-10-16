@@ -470,6 +470,9 @@ body.bmbar #bmbar { display: flex; }
     <div class="desc">letters &amp; numbers jump to the address bar when you aren't in a text field.<br>turn off if a site's single-key shortcuts matter to you.</div></div><div class="sw" id="sw-type"></div></div>
   <div class="row"><div><div class="name">search</div><div class="desc">used when the address bar isn't a url.</div></div>
     <div class="seg" id="seg"><button data-e="duckduckgo">ddg</button><button data-e="google">google</button><button data-e="bing">bing</button><button data-e="brave">brave</button></div></div>
+  <div class="sec">IMPORT</div>
+  <div class="row"><div><div class="name">import from chrome</div><div class="desc" id="imp-desc">copies your Google Chrome bookmarks into ULTRA (they show up in the bookmarks bar).<br>chrome can stay open; nothing is changed in chrome.</div></div>
+    <div class="ctl"><button class="run" id="imp-chrome">import bookmarks</button></div></div>
   <div class="sec">HELP</div>
   <div class="row"><div><div class="name">tutorial</div><div class="desc">show the tour every time ULTRA starts.</div></div>
     <div class="ctl"><button class="run" id="run-tour">run now</button><div class="sw" id="sw-tour"></div></div></div>
@@ -711,6 +714,12 @@ $('#r-audio').onclick = () => toggle('audio', true);
 $('#r-bmbar').onclick = () => toggle('bmbar', true);
 $('#r-bars').onclick = () => toggle('bars', false);
 $('#hist-clear').onclick = () => send('clearhistory');
+$('#imp-chrome').onclick = () => send('importchrome');
+ultra.imported = (msg) => {
+  setText($('#imp-desc'), msg);
+  const b = document.querySelector('#t-import'); if (b) { b.textContent = '✓ done'; b.disabled = true; }
+  const r = document.querySelector('#t-import-res'); if (r) r.textContent = msg;
+};
 $('#r-type').onclick = () => toggle('typeahead', true);
 $('#sw-tour').onclick = (e) => { e.stopPropagation(); toggle('tour', true); };
 $('.step').onclick = (e) => { const d = +e.target.dataset.d; if (d) send('set', ['warm', Math.max(0, Math.min(12, (cfg().warm ?? 3) + d))]); };
@@ -876,6 +885,7 @@ const CMDS = [
   { k: 'sleep all', d: 'put every hidden tab to sleep now', run: () => send('trim') },
   { k: 'bookmark', d: 'bookmark / unbookmark this page (ctrl+d)', run: () => send('bookmark') },
   { k: 'clear history', d: 'forget every page visited', run: () => send('clearhistory') },
+  { k: 'import chrome', d: 'copy your Google Chrome bookmarks into ULTRA', run: () => send('importchrome') },
   { k: 'layout save', a: '<name>', d: "save this workspace's layout and tabs", run: (x) => x && send('layout', ['save', x]) },
   { k: 'layout load', a: '<name>', d: 'open a saved layout in a free workspace', opts: () => S.layouts || [], run: (x) => x && send('layout', ['load', x]) },
   { k: 'layout delete', a: '<name>', d: 'forget a saved layout', opts: () => S.layouts || [], run: (x) => x && send('layout', ['delete', x]) },
@@ -988,6 +998,11 @@ const TOUR = [
   { t: 'welcome to ULTRA', art: MINI,
     b: `a tiling browser that stays light. this tour takes about a minute and every step is skippable.<br><br>
       <kbd>→</kbd> next · <kbd>←</kbd> back · <kbd>esc</kbd> close` },
+  { t: 'coming from chrome?', art: `<pre> chrome ──▶ ULTRA\n\n ★ github\n ★ docs\n ★ news\n ★ …\n\n bookmarks bar</pre>`,
+    b: `bring your bookmarks with you: one click copies them from Google Chrome into ULTRA's bookmarks bar.
+      chrome can stay open, and nothing in chrome is changed.<br><br>
+      <button class="run" id="t-import">import chrome bookmarks</button> <span id="t-import-res" style="color:var(--mid)"></span><br><br>
+      not using chrome? skip this. you can import later from settings.` },
   { t: 'tabs', art: `<pre> ULTRA │ 1 2 │ <b>1 docs</b>  2 mail  <i>3 news</i>\n                ───────\n\n <b>1</b>  focused tab\n 2  loaded, hidden\n <i>3</i>  asleep: ~0 memory</pre>`,
     b: `tabs sit in the bar up top, numbered by slot.<br>
       <kbd>ctrl+t</kbd> new · <kbd>ctrl+w</kbd> close · <kbd>ctrl+1‥9</kbd> jump<br><kbd>ctrl+tab</kbd> cycle · <kbd>ctrl+shift+t</kbd> reopen closed<br><br>
@@ -1126,6 +1141,7 @@ $('#tour').addEventListener('mousemove', (e) => {
 });
 $('#tour').addEventListener('mouseleave', () => { mouse = null; if (tourOn && TOUR[tStep].map) drawMap(); });
 $('#t-next').onclick = () => go(1);
+$('#t-b').addEventListener('click', (e) => { if (e.target.id === 't-import') send('importchrome'); });
 $('#t-back').onclick = () => go(-1);
 $('#t-skip').onclick = closeTour;
 $('#t-opt').onclick = () => toggle('tour', true);

@@ -2457,6 +2457,20 @@ impl App {
                     self.lib.suggest(&q, 8).into_iter().map(|(u, t, b)| json!({ "u": u, "t": t, "b": b })).collect();
                 let _ = self.ui.evaluate_script(&format!("ultra.suggestions({})", json!({ "q": q, "items": items })));
             }
+            "importchrome" => {
+                // Onboarding from Chrome: bookmarks land in the bookmarks bar right away.
+                let msg = match self.lib.import_chrome() {
+                    Ok((0, name)) => format!("nothing new to import from Chrome ({name})"),
+                    Ok((n, name)) => {
+                        self.lib.save(&self.data_dir);
+                        format!("imported {n} bookmark{} from Chrome ({name})", if n == 1 { "" } else { "s" })
+                    }
+                    Err(e) => e,
+                };
+                self.toast(&msg);
+                let _ = self.ui.evaluate_script(&format!("ultra.imported({})", json!(msg)));
+                self.sync();
+            }
             "bookmark" => {
                 let Some(t) = self.tabs.get(self.cur()) else { return };
                 if t.ws == PRIVATE_WS {

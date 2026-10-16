@@ -197,6 +197,39 @@ impl Library {
         }
     }
 
+    /// Onboarding: copy bookmarks from Google Chrome's most recently used profile (bookmarks
+    /// bar first, then the rest). Chrome may stay open; its Bookmarks file is plain JSON.
+    /// Returns how many were added (duplicates are skipped) and the profile's name.
+    pub fn import_chrome(&mut self) -> Result<(usize, String), String> {
+        let base = chrome_dir().ok_or("couldn't find Google Chrome on this computer")?;
+        let state: serde_json::Value = fs::read_to_string(base.join("Local State"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        let profile = state["profile"]["last_used"].as_str().unwrap_or("Default").to_string();
+        let name = state["profile"]["info_cache"][&profile]["name"].as_str().unwrap_or(&profile).to_string();
+        let file = fs::read_to_string(base.join(&profile).join("Bookmarks"))
+            .or_else(|_| fs::read_to_string(base.join("Default").join("Bookmarks")))
+            .map_err(|_| "Chrome has no bookmarks to import yet".to_string())?;
+        let json: serde_json::Value = serde_json::from_str(&file).map_err(|_| "couldn't read Chrome's bookmarks".to_string())?;
+        let mut found = Vec::new();
+        for root in ["bookmark_bar", "other", "synced"] {
+            walk(&json["roots"][root], &mut found);
+        }
+        let t = now();
+        let mut added = 0;
+        for (title, url) in found {
+            if rememberable(&url) && !self.is_bookmarked(&url) {
+                self.bookmarks.push(Bookmark { url, title, added: t });
+                added += 1;
+            }
+        }
+        if added > 0 {
+            self.dirty.set(true);
+        }
+        Ok((added, name))
+    }
+
     pub fn clear_history(&mut self) {
         self.history.clear();
         self.digest = Digest { day: today(), ..Default::default() };
@@ -265,6 +298,32 @@ impl Library {
     }
 }
 
+/// Where Chrome keeps its profiles on this OS.
+fn chrome_dir() -> Option<std::path::PathBuf> {
+    let p = if cfg!(target_os = "macos") {
+        std::path::PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support/Google/Chrome")
+    } else {
+        std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Google/Chrome/User Data")
+    };
+    p.is_dir().then_some(p)
+}
+
+/// Collect (title, url) from a Chrome bookmark folder, depth first, in Chrome's order.
+fn walk(node: &serde_json::Value, out: &mut Vec<(String, String)>) {
+    match node["type"].as_str() {
+        Some("url") => {
+            if let Some(u) = node["url"].as_str() {
+                out.push((node["name"].as_str().unwrap_or("").to_string(), u.to_string()));
+            }
+        }
+        _ => {
+            for c in node["children"].as_array().into_iter().flatten() {
+                walk(c, out);
+            }
+        }
+    }
+}
+
 /// Lets `save` write differently typed lists through one closure.
 mod erased {
     pub trait Json {
@@ -295,6 +354,18 @@ mod tests {
         assert!(l.toggle_bookmark("https://news.ycombinator.com/", "HN"));
         assert!(l.suggest("news", 8)[0].2);
         assert!(!l.toggle_bookmark("https://news.ycombinator.com/", "HN"));
+    }
+
+    #[test]
+    fn chrome_bookmark_tree_flattens_in_order() {
+        let j: serde_json::Value = serde_json::from_str(r#"{"type":"folder","children":[
+            {"type":"url","name":"GitHub","url":"https://github.com/"},
+            {"type":"folder","name":"dev","children":[{"type":"url","name":"Docs","url":"https://docs.rs/"}]},
+            {"type":"url","name":"HN","url":"https://news.ycombinator.com/"}]}"#).unwrap();
+        let mut out = Vec::new();
+        walk(&j, &mut out);
+        let urls: Vec<&str> = out.iter().map(|x| x.1.as_str()).collect();
+        assert_eq!(urls, ["https://github.com/", "https://docs.rs/", "https://news.ycombinator.com/"]);
     }
 
     #[test]
