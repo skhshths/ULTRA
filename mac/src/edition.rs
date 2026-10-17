@@ -11,3 +11,5 @@ pub const TAG: &str = "EXP";
 pub const BUNDLE_ID: &str = "app.ultra.browser.experimental";
 /// The chrome UI in inverted colors (light), to tell the builds apart at a glance.
 pub const INVERT: bool = true;
+/// GitHub repository whose "latest" release this build updates from.
+pub const REPO: &str = "skhshths/ULTRA-experimental";

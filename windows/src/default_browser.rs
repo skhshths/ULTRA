@@ -102,8 +102,13 @@ pub fn is_default() -> bool {
 
 /// Windows' own Default apps page, opened at ULTRA.
 pub fn open_settings() {
-    let uri = format!("ms-settings:defaultapps?registeredAppUser={}", NAME.replace(' ', "%20"));
-    let _ = std::process::Command::new("explorer").arg(uri).spawn();
+    // Through the shell, like a clicked link: handing an ms-settings: link with a query to
+    // explorer.exe can open File Explorer instead of Settings.
+    use windows::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+    let uri = HSTRING::from(format!("ms-settings:defaultapps?registeredAppUser={}", NAME.replace(' ', "%20")));
+    unsafe {
+        ShellExecuteW(None, &HSTRING::from("open"), &uri, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+    }
 }
 
 /// What a link handed to ULTRA by Windows should load: web addresses as they are, local

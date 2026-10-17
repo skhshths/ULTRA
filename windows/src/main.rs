@@ -24,6 +24,7 @@ mod library;
 mod privacy;
 mod slideshow;
 mod spectrum;
+mod updater;
 mod stats;
 
 use std::{
@@ -167,6 +168,10 @@ enum UserEvent {
     DlProgress(u64, i64, i64),
     /// Download `key` changed state (final file path once known).
     DlState(u64, downloads::State, String),
+    /// "Check for updates" finished: state for settings, and the update to install if any.
+    UpdateChecked(Value, Option<updater::Update>),
+    /// An update was downloaded and swapped in (the exe to restart from), or failed.
+    UpdateInstalled(Result<PathBuf, String>),
     /// A ULTRA shortcut caught natively in a page's webview: (slot, message).
     Key(u64, String),
     /// A WebView2 process died: (slot, 0 = the chrome UI; failure kind).
@@ -413,6 +418,8 @@ struct App {
     booting: bool,
     /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
     win_focused: bool,
+    /// A newer build found by "check for updates", ready to install.
+    update: Option<updater::Update>,
     /// Other browsers found on this computer, offered for importing bookmarks.
     browsers: Vec<(&'static str, &'static str)>,
     /// Settings changed and not yet written (saved shortly after the last change).
@@ -1754,6 +1761,7 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            "version": updater::short(updater::COMMIT),
             "browsers": self.browsers,
             "ed": edition::TAG,
             "isdef": self.is_default,
@@ -2977,6 +2985,26 @@ impl App {
                 }
                 self.sync();
             }
+            "update_check" => {
+                let proxy = self.proxy.clone();
+                std::thread::spawn(move || {
+                    let (state, up) = updater::check(edition::REPO);
+                    let _ = proxy.send_event(UserEvent::UpdateChecked(state, up));
+                });
+            }
+            "update_install" => {
+                if let Some(up) = self.update.clone() {
+                    let proxy = self.proxy.clone();
+                    std::thread::spawn(move || {
+                        let _ = proxy.send_event(UserEvent::UpdateInstalled(updater::install(&up)));
+                    });
+                }
+            }
+            "update_page" => {
+                let ws = if self.ws == PRIVATE_WS { self.last_ws } else { self.ws };
+                self.open_in(ws, updater::releases_page(edition::REPO));
+                self.command("settings", &json!(false));
+            }
             "import" | "importchrome" => {
                 // Onboarding from another browser: its bookmarks land in the bookmarks bar.
                 let id = if cmd == "importchrome" { "chrome" } else { arg.as_str().unwrap_or("chrome") };
@@ -3293,6 +3321,23 @@ impl App {
                 self.open_in(ws, url);
             }
             UserEvent::Procs(p) => self.on_procs(p),
+            UserEvent::UpdateChecked(state, up) => {
+                self.update = up;
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({state})"));
+            }
+            UserEvent::UpdateInstalled(Ok(exe)) => {
+                // Hand the session over to the new build: save everything, start it, close.
+                self.save_settings();
+                self.save_session();
+                if updater::restart(&exe) {
+                    *flow = ControlFlow::Exit;
+                } else {
+                    let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "failed", "m": "updated · restart ULTRA to use the new build" })));
+                }
+            }
+            UserEvent::UpdateInstalled(Err(m)) => {
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "failed", "m": m })));
+            }
             UserEvent::Open(u) => self.open_external(&u),
             UserEvent::DlStart(key, slot, url, path, total) => {
                 let private = self.tabs.iter().any(|t| t.slot == slot && t.ws == PRIVATE_WS);
@@ -3431,6 +3476,9 @@ fn main() {
         return;
     }
     let bench_mode = std::env::args().any(|a| a == "--bench");
+    // Just updated: let the previous ULTRA finish closing, then tidy up after it.
+    updater::wait_for_previous();
+    updater::clean_up();
     let data_dir = data_dir();
     let _ = fs::create_dir_all(&data_dir);
     // A link from another app (ULTRA as the default browser), or a plain second launch:
@@ -3577,6 +3625,7 @@ fn main() {
         lib: library::Library::default(),
         booting: false,
         win_focused: true,
+        update: None,
         browsers: library::installed_browsers(),
         settings_save_at: None,
         start_place: None,

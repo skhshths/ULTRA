@@ -548,6 +548,8 @@ html.inv #bgimg, html.inv img { filter: invert(1) hue-rotate(180deg); }
   <div class="sec" id="keys-sec">KEYBOARD SHORTCUTS</div>
   <div class="keylist" id="keylist"></div>
   <div class="sec">HELP</div>
+  <div class="row"><div><div class="name">updates</div><div class="desc"><span id="upd-ver"></span><br><span id="upd-msg">ULTRA updates itself in place: your taskbar pin and shortcuts keep working.</span></div></div>
+    <div class="ctl"><button class="run" id="upd-btn">check for updates</button></div></div>
   <div class="row"><div><div class="name">tutorial</div><div class="desc">the tour shows once, the first time ULTRA starts.<br>switch on to see it every time.</div></div>
     <div class="ctl"><button class="run" id="run-tour">run now</button><div class="sw" id="sw-tour"></div></div></div>
   <div class="ft">saved automatically · esc to close</div>
@@ -671,6 +673,7 @@ window.ultra = {
     if (s.gate) setLock(cfg().haspass ? 'unlock' : 'create'); else if (lockMode && lockMode !== 'change') setLock(null);
     setText($('#priv-pass'), cfg().haspass ? 'change password' : 'set password');
     setHTML($('#imp-list'), importButtons());
+    drawUpd();
     setText($('#edtag'), s.ed || ''); $('#edtag').classList.toggle('on', !!s.ed);
     setText($('#def-btn'), s.isdef ? '✓ ULTRA is default' : 'make default');
     $('#def-btn').disabled = !!s.isdef;
@@ -804,6 +807,24 @@ const importButtons = () => (S.browsers || []).map(([id, n]) => `<button class="
 const startImport = (id) => { importing = id; send('import', id); };
 $('#imp-list').addEventListener('click', (e) => { const b = e.target.closest('[data-imp]'); if (b) startImport(b.dataset.imp); });
 $('#def-btn').onclick = () => send('makedefault');
+// ── updates: check GitHub for a newer build; install it in place (Windows) ──
+let updState = null;
+function drawUpd() {
+  const st = updState || {};
+  setText($('#upd-ver'), S.version ? 'you have build ' + S.version : 'development build');
+  if (st.m) setText($('#upd-msg'), st.m);
+  const label = { checking: 'checking…', installing: 'updating…', available: window.__ultraMac ? 'download update' : 'update now', private: 'open releases' }[st.s] || 'check for updates';
+  setText($('#upd-btn'), label);
+  $('#upd-btn').disabled = st.s === 'checking' || st.s === 'installing';
+}
+ultra.updateState = (st) => { updState = st; drawUpd(); };
+function checkUpdates() { ultra.updateState({ s: 'checking', m: 'asking GitHub…' }); send('update_check'); }
+$('#upd-btn').onclick = () => {
+  const s = (updState || {}).s;
+  if (s === 'available') { ultra.updateState({ s: window.__ultraMac ? 'available' : 'installing', m: window.__ultraMac ? '' : 'downloading the new build… ULTRA restarts by itself once it is in place' }); send('update_install'); }
+  else if (s === 'private') send('update_page');
+  else checkUpdates();
+};
 // ── downloads (ctrl+j): everything downloaded, live progress, open / show in folder ──
 const fmtB = (b) => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : b >= 1e3 ? Math.round(b / 1e3) + ' KB' : b + ' B';
 const ago = (t) => {
@@ -1092,6 +1113,7 @@ const CMDS = [
   { k: 'isolate', a: '[1-9]', d: 'give a workspace its own logins (or share them again)', opts: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], run: (x) => send('isolate', num(x) ? num(x) - 1 : S.ws) },
   { k: 'overview', d: 'every tab at a glance', run: () => send('overview', true) },
   { k: 'downloads', d: 'everything you downloaded', run: () => send('downloads', true) },
+  { k: 'update', d: 'check for a newer ULTRA', run: () => { send('settings', true); checkUpdates(); } },
   { k: 'make default', d: 'open links from other apps in ULTRA', run: () => send('makedefault') },
   { k: 'settings', d: 'open settings', run: () => send('settings', true) },
   { k: 'tour', d: 'run the tutorial', run: () => send('tour', true) },
