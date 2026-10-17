@@ -222,6 +222,8 @@ body.mac.fs #bar { padding-left: 12px; }
 .swatch.on { border-color: var(--fg); }
 .card .ft { padding: 10px 16px; color: #444; font-size: 10px; }
 .row .run { background: none; border: 1px solid #2c2c2c; color: var(--mid); font: inherit; padding: 5px 10px; cursor: default; }
+.imp-list { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; max-width: 270px; }
+.imp-list .none { color: #5c5c5c; font-size: 11px; }
 .row .run:hover { color: var(--acc); border-color: var(--acc-dim); }
 .row .run:disabled { color: var(--acc); border-color: var(--acc-dim); }
 .row .ctl { display: flex; gap: 10px; align-items: center; }
@@ -545,8 +547,8 @@ html.inv #bgimg, html.inv img { filter: invert(1) hue-rotate(180deg); }
   <div class="row"><div><div class="name">default browser</div><div class="desc" id="def-desc">open links from other apps (mail, chat, documents) in ULTRA.<br>macOS asks you to confirm.</div></div>
     <div class="ctl"><button class="run" id="def-btn">make default</button></div></div>
   <div class="sec">IMPORT</div>
-  <div class="row"><div><div class="name">import from chrome</div><div class="desc" id="imp-desc">copies your Google Chrome bookmarks into ULTRA (they show up in the bookmarks bar).<br>chrome can stay open; nothing is changed in chrome.</div></div>
-    <div class="ctl"><button class="run" id="imp-chrome">import bookmarks</button></div></div>
+  <div class="row"><div><div class="name">import bookmarks</div><div class="desc" id="imp-desc">copies another browser's bookmarks into ULTRA (they show up in the bookmarks bar).<br>it can stay open; nothing in it is changed.</div></div>
+    <div class="ctl imp-list" id="imp-list"></div></div>
   <div class="sec" id="keys-sec">KEYBOARD SHORTCUTS</div>
   <div class="keylist" id="keylist"></div>
   <div class="sec">HELP</div>
@@ -673,6 +675,7 @@ window.ultra = {
     document.body.classList.toggle('private', s.ws === 9);
     if (s.gate) setLock(cfg().haspass ? 'unlock' : 'create'); else if (lockMode && lockMode !== 'change') setLock(null);
     setText($('#priv-pass'), cfg().haspass ? 'change password' : 'set password');
+    setHTML($('#imp-list'), importButtons());
     setText($('#edtag'), s.ed || ''); $('#edtag').classList.toggle('on', !!s.ed);
     setText($('#def-btn'), s.isdef ? '✓ ULTRA is default' : 'make default');
     $('#def-btn').disabled = !!s.isdef;
@@ -799,7 +802,13 @@ $('#r-audio').onclick = () => toggle('audio', true);
 $('#r-bmbar').onclick = () => toggle('bmbar', true);
 $('#r-bars').onclick = () => toggle('bars', false);
 $('#hist-clear').onclick = () => send('clearhistory');
-$('#imp-chrome').onclick = () => send('importchrome');
+// Import bookmarks: one button per browser found on this computer (settings and the tour).
+const BROWSER_NAMES = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', vivaldi: 'Vivaldi', opera: 'Opera', firefox: 'Firefox' };
+let importing = null;
+const importButtons = () => (S.browsers || []).map(([id, n]) => `<button class="run" data-imp="${id}">${esc(n)}</button>`).join('')
+  || '<span class="none">no other browsers found</span>';
+const startImport = (id) => { importing = id; send('import', id); };
+$('#imp-list').addEventListener('click', (e) => { const b = e.target.closest('[data-imp]'); if (b) startImport(b.dataset.imp); });
 $('#def-btn').onclick = () => send('makedefault');
 // ── downloads (ctrl+j): everything downloaded, live progress, open / show in folder ──
 const fmtB = (b) => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : b >= 1e3 ? Math.round(b / 1e3) + ' KB' : b + ' B';
@@ -891,7 +900,7 @@ $('#dl-clear').onclick = () => send('dl', ['clear', 0]);
 
 ultra.imported = (msg) => {
   setText($('#imp-desc'), msg);
-  const b = document.querySelector('#t-import'); if (b) { b.textContent = '✓ done'; b.disabled = true; }
+  const b = document.querySelector(`#t-b [data-imp="${importing}"]`); if (b) { b.textContent = '✓ ' + b.textContent.replace(/^✓ /, ''); }
   const r = document.querySelector('#t-import-res'); if (r) r.textContent = msg;
 };
 $('#r-type').onclick = () => toggle('typeahead', true);
@@ -1059,7 +1068,7 @@ const CMDS = [
   { k: 'sleep all', d: 'put every hidden tab to sleep now', run: () => send('trim') },
   { k: 'bookmark', d: 'bookmark / unbookmark this page (cmd+d)', run: () => send('bookmark') },
   { k: 'clear history', d: 'forget every page visited', run: () => send('clearhistory') },
-  { k: 'import chrome', d: 'copy your Google Chrome bookmarks into ULTRA', run: () => send('importchrome') },
+  ...['chrome', 'edge', 'brave', 'vivaldi', 'opera', 'firefox'].map((id) => ({ k: 'import ' + id, d: `copy your ${BROWSER_NAMES[id]} bookmarks into ULTRA`, run: () => startImport(id) })),
   { k: 'shortcuts', d: 'every keyboard shortcut (in settings)', run: () => { send('settings', true); setTimeout(() => $('#keys-sec').scrollIntoView({ block: 'start' }), 60); } },
   { k: 'layout save', a: '<name>', d: "save this workspace's layout and tabs", run: (x) => x && send('layout', ['save', x]) },
   { k: 'layout load', a: '<name>', d: 'open a saved layout in a free workspace', opts: () => S.layouts || [], run: (x) => x && send('layout', ['load', x]) },
@@ -1175,11 +1184,11 @@ const TOUR = [
   { t: 'welcome to ULTRA', art: MINI,
     b: `a tiling browser that stays light. this tour takes about a minute and every step is skippable.<br>it shows once: <kbd>cmd+,</kbd> has every shortcut, help and this tour again whenever you need them.<br><br>
       <kbd>→</kbd> next · <kbd>←</kbd> back · <kbd>esc</kbd> close` },
-  { t: 'coming from chrome?', art: `<pre> chrome ──▶ ULTRA\n\n ★ github\n ★ docs\n ★ news\n ★ …\n\n bookmarks bar</pre>`,
-    b: `bring your bookmarks with you: one click copies them from Google Chrome into ULTRA's bookmarks bar.
-      chrome can stay open, and nothing in chrome is changed.<br><br>
-      <button class="run" id="t-import">import chrome bookmarks</button> <span id="t-import-res" style="color:var(--mid)"></span><br><br>
-      not using chrome? skip this. you can import later from settings.` },
+  { t: 'coming from another browser?', art: `<pre> chrome  ─┐\n edge    ─┤\n firefox ─┼─▶ ULTRA\n brave   ─┤\n …       ─┘\n\n ★ github  ★ docs\n bookmarks bar</pre>`,
+    b: `bring your bookmarks with you: one click copies them from your old browser into ULTRA's bookmarks bar.
+      it can stay open, and nothing in it is changed.<br><br>
+      <span id="t-imp-list"></span> <span id="t-import-res" style="color:var(--mid)"></span><br><br>
+      starting fresh? skip this. you can import later from settings.` },
   { t: 'tabs', art: `<pre> ULTRA │ 1 2 │ <b>1 docs</b>  2 mail  <i>3 news</i>\n                ───────\n\n <b>1</b>  focused tab\n 2  loaded, hidden\n <i>3</i>  asleep: ~0 memory</pre>`,
     b: `tabs sit in the bar up top, numbered by slot.<br>
       <kbd>cmd+t</kbd> new · <kbd>cmd+w</kbd> close · <kbd>cmd+1‥9</kbd> jump<br><kbd>ctrl+tab</kbd> cycle · <kbd>cmd+shift+t</kbd> reopen closed<br><br>
@@ -1255,6 +1264,7 @@ function drawTour() {
   setText($('#t-st'), `${String(tStep + 1).padStart(2, '0')} / ${TOUR.length}`);
   setText($('#t-h'), st.t);
   setHTML($('#t-b'), st.b);
+  const til = document.querySelector('#t-imp-list'); if (til) setHTML(til, importButtons());
   const tr = $('#t-try');
   tr.style.display = st.try ? '' : 'none';
   setText(tr, st.try || '');
@@ -1318,7 +1328,7 @@ $('#tour').addEventListener('mousemove', (e) => {
 });
 $('#tour').addEventListener('mouseleave', () => { mouse = null; if (tourOn && TOUR[tStep].map) drawMap(); });
 $('#t-next').onclick = () => go(1);
-$('#t-b').addEventListener('click', (e) => { if (e.target.id === 't-import') send('importchrome'); });
+$('#t-b').addEventListener('click', (e) => { const b = e.target.closest('[data-imp]'); if (b) startImport(b.dataset.imp); });
 $('#t-back').onclick = () => go(-1);
 $('#t-skip').onclick = closeTour;
 $('#t-opt').onclick = () => toggle('tour', true);
