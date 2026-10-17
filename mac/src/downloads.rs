@@ -81,7 +81,7 @@ impl Downloads {
         }
         let kept: Vec<&Download> = self.list.iter().filter(|d| !d.private).collect();
         if let Ok(j) = serde_json::to_string(&kept) {
-            let _ = fs::write(dir.join("downloads.json"), j);
+            let _ = crate::library::write_atomic(&dir.join("downloads.json"), j);
         }
     }
 

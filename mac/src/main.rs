@@ -1454,7 +1454,7 @@ impl App {
             cur_ws: if self.ws == PRIVATE_WS { 0 } else { self.ws },
         };
         if let Ok(j) = serde_json::to_string(&s) {
-            let _ = fs::write(self.data_dir.join("session.json"), j);
+            let _ = library::write_atomic(&self.data_dir.join("session.json"), j);
         }
         self.lib.save(&self.data_dir);
         self.dls.save(&self.data_dir);
@@ -1462,7 +1462,7 @@ impl App {
 
     fn save_settings(&self) {
         if let Ok(j) = serde_json::to_string_pretty(&self.cfg) {
-            let _ = fs::write(self.data_dir.join("settings.json"), j);
+            let _ = library::write_atomic(&self.data_dir.join("settings.json"), j);
         }
     }
 
@@ -1834,7 +1834,7 @@ impl App {
 
     fn save_layouts(&self) {
         if let Ok(j) = serde_json::to_string_pretty(&self.layouts) {
-            let _ = fs::write(self.data_dir.join("layouts.json"), j);
+            let _ = library::write_atomic(&self.data_dir.join("layouts.json"), j);
         }
     }
 
@@ -2109,7 +2109,7 @@ impl App {
 
     fn save_zaps(&self) {
         if let Ok(j) = serde_json::to_string_pretty(&self.zaps) {
-            let _ = fs::write(self.data_dir.join("zaps.json"), j);
+            let _ = library::write_atomic(&self.data_dir.join("zaps.json"), j);
         }
     }
 
@@ -2364,7 +2364,7 @@ impl App {
             "bgimage" => {
                 // A picked image arrives as a data URL; keep it on disk and switch to it.
                 if let Some(d) = arg.as_str().filter(|d| valid_bg_image(d)) {
-                    let _ = fs::write(self.data_dir.join("background.dataurl"), d);
+                    let _ = library::write_atomic(&self.data_dir.join("background.dataurl"), d);
                     self.cfg.bgmode = "image".into();
                     self.save_settings();
                     self.send_bg_image();
@@ -2578,6 +2578,89 @@ impl App {
         }
     }
 
+    /// A message from a page's webview: a shortcut caught from a real keypress (`native`), or
+    /// something the page's script posted.
+    fn page_msg(&mut self, slot: u64, msg: String, native: bool) {
+        // Pages are untrusted: a page's script can only send the page protocol (url changes,
+        // focus, type-to-search, glance links, zaps, notices), and only from a tab on screen.
+        // ULTRA's shortcuts are accepted only when `native`: caught from a real keypress.
+        let Some(i) = self.idx_slot(slot) else { return };
+        let id = self.tabs[i].id;
+        if msg == "url" {
+            // Never trust a url reported by the page itself (address bar spoofing):
+            // ask WebView2 for the real one.
+            if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
+                if !u.is_empty() && u != self.tabs[i].url {
+                    self.tabs[i].url = u;
+                    self.remember(i);
+                    self.sync();
+                }
+            }
+            return;
+        }
+        let (i, id) = if self.glance == Some(id) {
+            // Inside the glance: esc / ctrl+w close it, ctrl/cmd+enter keeps it as a split, a
+            // glance-click replaces it; any other ULTRA shortcut closes it and acts on the layout.
+            match msg.as_str() {
+                "esc" => return self.glance_cmd("close"),
+                "close" if native => return self.glance_cmd("close"),
+                "keep" => return self.glance_cmd("split"),
+                "reader" | "pip" | "zap" if native => return self.command(&msg, &Value::Null),
+                "pip:none" | "pip:fail" | "reader:none" => return self.page_notice(&msg),
+                m if m == "focus" || m.starts_with("type:") => return,
+                _ => {}
+            }
+            if let Some(u) = msg.strip_prefix("glance:") {
+                let ws = self.tabs[i].ws;
+                return self.open_glance(u, ws);
+            }
+            if let Some(sel) = msg.strip_prefix("zap:") {
+                return self.add_zap(i, sel);
+            }
+            if !native {
+                return;
+            }
+            self.glance_cmd("close");
+            match self.idx(self.focus) {
+                Some(f) => (f, self.focus),
+                None => return,
+            }
+        } else {
+            (i, id)
+        };
+        if !self.shown.iter().any(|(x, _)| *x == id) {
+            return;
+        }
+        if id != self.focus {
+            self.set_focus(id);
+        }
+        if let Some(u) = msg.strip_prefix("glance:") {
+            let ws = self.tabs[i].ws;
+            self.open_glance(u, ws);
+            return;
+        }
+        if let Some(sel) = msg.strip_prefix("zap:") {
+            self.add_zap(i, sel);
+            return;
+        }
+        if msg == "pip:none" || msg == "pip:fail" || msg == "reader:none" {
+            self.page_notice(&msg);
+            return;
+        }
+        if let Some(c) = msg.strip_prefix("type:") {
+            let mut it = c.chars();
+            if let (Some(ch), None) = (it.next(), it.next()) {
+                if self.cfg.typeahead && ch.is_alphanumeric() {
+                    self.command("type", &json!(c));
+                }
+            }
+            return;
+        }
+        if native {
+            self.shortcut_cmd(&msg);
+        }
+    }
+
     fn on_event(&mut self, ev: UserEvent, flow: &mut ControlFlow) {
         match ev {
             UserEvent::Ui(msg) => {
@@ -2590,116 +2673,9 @@ impl App {
                 }
                 self.command(cmd, &v["arg"]);
             }
-            UserEvent::Content(slot, msg) => {
-                // Pages are untrusted: only a fixed set of shortcut commands is accepted,
-                // and only from a tab that is on screen.
-                let Some(i) = self.idx_slot(slot) else { return };
-                let id = self.tabs[i].id;
-                if msg == "url" {
-                    // Never trust a url reported by the page itself (address bar spoofing):
-                    // ask WebView2 for the real one.
-                    if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
-                        if !u.is_empty() && u != self.tabs[i].url {
-                            self.tabs[i].url = u;
-                            self.remember(i);
-                            self.sync();
-                        }
-                    }
-                    return;
-                }
-                let (i, id) = if self.glance == Some(id) {
-                    // Inside the glance: esc / ctrl+w close it, ctrl/cmd+enter keeps it as a split, a
-                    // glance-click replaces it; any other ULTRA shortcut closes it and acts on the layout.
-                    match msg.as_str() {
-                        "esc" | "close" => return self.glance_cmd("close"),
-                        "keep" => return self.glance_cmd("split"),
-                        "reader" | "pip" | "zap" => return self.command(&msg, &Value::Null),
-                        "pip:none" | "pip:fail" | "reader:none" => return self.page_notice(&msg),
-                        m if m == "focus" || m.starts_with("type:") => return,
-                        _ => {}
-                    }
-                    if let Some(u) = msg.strip_prefix("glance:") {
-                        let ws = self.tabs[i].ws;
-                        return self.open_glance(u, ws);
-                    }
-                    if let Some(sel) = msg.strip_prefix("zap:") {
-                        return self.add_zap(i, sel);
-                    }
-                    self.glance_cmd("close");
-                    match self.idx(self.focus) {
-                        Some(f) => (f, self.focus),
-                        None => return,
-                    }
-                } else {
-                    (i, id)
-                };
-                if !self.shown.iter().any(|(x, _)| *x == id) {
-                    return;
-                }
-                if id != self.focus {
-                    self.set_focus(id);
-                }
-                if let Some(u) = msg.strip_prefix("glance:") {
-                    let ws = self.tabs[i].ws;
-                    self.open_glance(u, ws);
-                    return;
-                }
-                if let Some(sel) = msg.strip_prefix("zap:") {
-                    self.add_zap(i, sel);
-                    return;
-                }
-                if msg == "pip:none" || msg == "pip:fail" || msg == "reader:none" {
-                    self.page_notice(&msg);
-                    return;
-                }
-                let digit = |p: &str| msg.strip_prefix(p).and_then(|k| k.parse::<u64>().ok()).filter(|k| (1..=9).contains(k));
-                if let Some(k) = digit("tab:") {
-                    if k == 9 {
-                        self.command("last", &Value::Null);
-                    } else {
-                        self.command("slot", &json!(k - 1));
-                    }
-                    return;
-                }
-                if let Some(k) = digit("mv:") {
-                    self.command("mv", &json!(k - 1));
-                    return;
-                }
-                if msg == "ws:0" {
-                    self.command("ws", &json!(PRIVATE_WS));
-                    return;
-                }
-                if let Some(k) = digit("ws:") {
-                    self.command("ws", &json!(k - 1));
-                    return;
-                }
-                if let Some(k) = digit("tows:") {
-                    self.command("tows", &json!(k - 1));
-                    return;
-                }
-                if let Some(c) = msg.strip_prefix("type:") {
-                    let mut it = c.chars();
-                    if let (Some(ch), None) = (it.next(), it.next()) {
-                        if self.cfg.typeahead && ch.is_alphanumeric() {
-                            self.command("type", &json!(c));
-                        }
-                    }
-                    return;
-                }
-                if let Some(d) = msg.strip_prefix("dir:") {
-                    if matches!(d, "l" | "r" | "u" | "d") {
-                        self.focus_dir(d);
-                    }
-                    return;
-                }
-                match msg.as_str() {
-                    "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
-                    | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" => {
-                        self.command(&msg, &Value::Null)
-                    }
-                    _ => {}
-                }
-            }
+            // A message the page's own script posted (untrusted: only the page protocol is accepted;
+            // shortcuts caught natively arrive through on_native).
+            UserEvent::Content(slot, msg) => self.page_msg(slot, msg, false),
             UserEvent::Title(slot, title) => {
                 if let Some(i) = self.idx_slot(slot) {
                     if self.tabs[i].ws != PRIVATE_WS {
@@ -2808,7 +2784,7 @@ impl App {
         match self.tabs[i].view.as_ref() {
             Some(_) => {
                 let slot = self.tabs[i].slot;
-                self.on_event(UserEvent::Content(slot, msg), &mut ControlFlow::Poll);
+                self.page_msg(slot, msg, true);
             }
             // A home pane (no webview): run it as a shortcut from the chrome.
             None => self.shortcut_cmd(&msg),

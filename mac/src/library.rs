@@ -76,6 +76,19 @@ fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// Save a file so that a crash or power cut mid-write can never leave it half written: the
+/// data goes to a temporary file, is flushed to disk, and then replaces the old file in one step.
+pub fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = path.with_extension("tmp");
+    {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(data.as_ref())?;
+        f.sync_all()?;
+    }
+    fs::rename(&tmp, path)
+}
+
 fn read<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
     fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
@@ -103,7 +116,7 @@ impl Library {
         }
         let write = |name: &str, v: &dyn erased::Json| {
             if let Some(j) = v.json() {
-                let _ = fs::write(dir.join(name), j);
+                let _ = write_atomic(&dir.join(name), j);
             }
         };
         write("history.json", &self.history);
@@ -345,6 +358,18 @@ mod erased {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_write_replaces_and_leaves_no_temp() {
+        let dir = std::env::temp_dir().join(format!("ultra-atomic-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let f = dir.join("session.json");
+        write_atomic(&f, "one").unwrap();
+        write_atomic(&f, "two").unwrap();
+        assert_eq!(fs::read_to_string(&f).unwrap(), "two");
+        assert!(!dir.join("session.tmp").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn suggestions_rank_and_filter() {
