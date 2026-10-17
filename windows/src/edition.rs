@@ -9,3 +9,5 @@ pub const DATA_DIR: &str = "Ultra";
 pub const TAG: &str = "";
 /// Registry name of ULTRA's "web page" file type (default browser).
 pub const PROGID: &str = "ULTRAHTML";
+/// The chrome UI in inverted colors (light), to tell the builds apart at a glance.
+pub const INVERT: bool = false;
