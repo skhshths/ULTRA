@@ -130,6 +130,16 @@ const SPARES: usize = 2;
 /// Must be identical for every webview so they all share one WebView2 environment.
 /// SmartScreen (phishing/malware protection) is deliberately left on.
 const BROWSER_ARGS: &str = "--enable-features=msSmartScreenProtection";
+
+/// The engine flags, plus a DevTools port when the developer sets ULTRA_DEVTOOLS_PORT (used to
+/// drive ULTRA from test scripts). Computed once so every webview gets the identical string.
+fn browser_args() -> &'static str {
+    static ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ARGS.get_or_init(|| match std::env::var("ULTRA_DEVTOOLS_PORT").ok().and_then(|p| p.parse::<u16>().ok()) {
+        Some(port) => format!("{BROWSER_ARGS} --remote-debugging-port={port}"),
+        None => BROWSER_ARGS.to_string(),
+    })
+}
 const THEMES: &[&str] = &[
     "mint", "amber", "red", "mono", "ice", "matrix", "violet", "pink", "orange", "cyan", "gold", "lime", "custom",
 ];
@@ -902,7 +912,7 @@ impl App {
             .with_devtools(true)
             // Private tabs use WebView2's InPrivate profile: nothing reaches disk.
             .with_incognito(private)
-            .with_additional_browser_args(BROWSER_ARGS)
+            .with_additional_browser_args(browser_args())
             .with_initialization_script_for_main_only(typeahead_js(self.cfg.typeahead), true)
             .with_initialization_script_for_main_only(declutter_js(self.cfg.declutter), true)
             .with_initialization_script_for_main_only(CONTENT_JS, true)
@@ -3305,7 +3315,7 @@ fn main() {
         })
         .with_background_color((20, 20, 20, 255))
         .with_default_context_menus(false)
-        .with_additional_browser_args(BROWSER_ARGS)
+        .with_additional_browser_args(browser_args())
         // The chrome UI never navigates anywhere; refuse anything that tries.
         .with_navigation_handler(|u| u.starts_with("about:") || u.starts_with("data:"))
         .with_ipc_handler(move |r| {
