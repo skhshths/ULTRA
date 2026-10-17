@@ -14,8 +14,7 @@ use windows::Win32::{
 };
 use windows_core::{HSTRING, PCWSTR};
 
-const PROGID: &str = "ULTRAHTML";
-const CLIENT: &str = r"Software\Clients\StartMenuInternet\ULTRA";
+use crate::edition::{NAME, PROGID};
 
 /// Set one string value (`None` = the key's default value), creating the key if needed.
 fn set(key: &str, name: Option<&str>, value: &str) -> bool {
@@ -58,25 +57,26 @@ pub fn register(exe: &Path) -> bool {
     let exe = exe.to_string_lossy();
     let open = format!("\"{exe}\" \"%1\"");
     let icon = format!("\"{exe}\",0");
-    let caps = format!(r"{CLIENT}\Capabilities");
+    let client = format!(r"Software\Clients\StartMenuInternet\{NAME}");
+    let caps = format!(r"{client}\Capabilities");
     let progid = format!(r"Software\Classes\{PROGID}");
     let ok = [
-        set(&progid, None, "ULTRA web page"),
-        set(&progid, Some("FriendlyTypeName"), "ULTRA web page"),
+        set(&progid, None, &format!("{NAME} web page")),
+        set(&progid, Some("FriendlyTypeName"), &format!("{NAME} web page")),
         set(&format!(r"{progid}\DefaultIcon"), None, &icon),
         set(&format!(r"{progid}\shell\open\command"), None, &open),
-        set(CLIENT, None, "ULTRA"),
-        set(&format!(r"{CLIENT}\DefaultIcon"), None, &icon),
-        set(&format!(r"{CLIENT}\shell\open\command"), None, &format!("\"{exe}\"")),
-        set(&caps, Some("ApplicationName"), "ULTRA"),
+        set(&client, None, NAME),
+        set(&format!(r"{client}\DefaultIcon"), None, &icon),
+        set(&format!(r"{client}\shell\open\command"), None, &format!("\"{exe}\"")),
+        set(&caps, Some("ApplicationName"), NAME),
         set(&caps, Some("ApplicationDescription"), "A fast, minimal, tiling web browser."),
         set(&caps, Some("ApplicationIcon"), &icon),
-        set(&format!(r"{caps}\StartMenu"), Some("StartMenuInternet"), "ULTRA"),
+        set(&format!(r"{caps}\StartMenu"), Some("StartMenuInternet"), NAME),
         set(&format!(r"{caps}\URLAssociations"), Some("http"), PROGID),
         set(&format!(r"{caps}\URLAssociations"), Some("https"), PROGID),
         set(&format!(r"{caps}\FileAssociations"), Some(".htm"), PROGID),
         set(&format!(r"{caps}\FileAssociations"), Some(".html"), PROGID),
-        set(r"Software\RegisteredApplications", Some("ULTRA"), &caps),
+        set(r"Software\RegisteredApplications", Some(NAME), &caps),
     ]
     .iter()
     .all(|&b| b);
@@ -102,7 +102,8 @@ pub fn is_default() -> bool {
 
 /// Windows' own Default apps page, opened at ULTRA.
 pub fn open_settings() {
-    let _ = std::process::Command::new("explorer").arg("ms-settings:defaultapps?registeredAppUser=ULTRA").spawn();
+    let uri = format!("ms-settings:defaultapps?registeredAppUser={}", NAME.replace(' ', "%20"));
+    let _ = std::process::Command::new("explorer").arg(uri).spawn();
 }
 
 /// What a link handed to ULTRA by Windows should load: web addresses as they are, local

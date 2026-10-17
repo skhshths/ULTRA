@@ -1,0 +1,4 @@
+# Each branch keeps its own identity (public vs experimental) when the other is merged in.
+# Needs once per clone:  git config merge.ours.driver true
+windows/src/edition.rs merge=ours
+mac/src/edition.rs merge=ours

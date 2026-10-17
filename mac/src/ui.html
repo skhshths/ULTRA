@@ -130,6 +130,9 @@ input::selection { background: var(--acc-sel); }
 .sp.v { cursor: col-resize; } .sp.h { cursor: row-resize; }
 .sp:hover, .sp.drag { background: color-mix(in srgb, var(--acc) 18%, transparent); }
 #panes.anim .sp { display: none; }
+body.sizing, body.sizing * { user-select: none !important; }
+body.sizing-v, body.sizing-v * { cursor: col-resize !important; }
+body.sizing-h, body.sizing-h * { cursor: row-resize !important; }
 
 /* overlays covering the content area */
 .ovl { position: fixed; left: calc(var(--gap) + 1px); top: calc(var(--top) + 1px); right: calc(var(--gap) + 1px);
@@ -313,6 +316,9 @@ input[type=range] { accent-color: var(--acc); width: 140px; }
 :root { --priv: #ff4d6d; }
 .wsb.priv { color: var(--priv); border-color: color-mix(in srgb, var(--priv) 35%, transparent); }
 .wsb.priv.on { color: var(--bg); background: var(--priv); border-color: var(--priv); }
+/* which build this is (experimental): set from Rust's edition file */
+#edtag { display: none; color: var(--acc); border: 1px solid var(--acc-dim); font-size: 9px; font-weight: 700; padding: 1px 4px; letter-spacing: .12em; margin-left: -4px; }
+#edtag.on { display: inline; }
 .privtag { display: none; color: var(--bg); background: var(--priv); font-size: 9px; font-weight: 700; padding: 2px 4px; letter-spacing: .12em; }
 body.private .privtag { display: inline; }
 body.private #bar { box-shadow: inset 0 -1px 0 var(--priv); }
@@ -451,7 +457,7 @@ body.bmbar #bmbar { display: flex; }
 <body>
 <div id="bgimg"></div><canvas id="bg"></canvas><canvas id="barsfx"></canvas>
 <div id="bar">
-  <span class="logo">ULTRA</span><span class="spd">SPEED</span><span class="privtag">PRIVATE</span><span class="sep">│</span>
+  <span class="logo">ULTRA</span><span id="edtag"></span><span class="spd">SPEED</span><span class="privtag">PRIVATE</span><span class="sep">│</span>
   <div id="wsbar"></div><span class="sep">│</span>
   <div id="navb"><span id="nback" class="off" title="back">‹</span><span id="nfwd" class="off" title="forward">›</span></div><span class="sep">│</span>
   <div id="tabs"></div><div id="plus" title="new tab (cmd+t)">+</div>
@@ -660,6 +666,7 @@ window.ultra = {
     document.body.classList.toggle('private', s.ws === 9);
     if (s.gate) setLock(cfg().haspass ? 'unlock' : 'create'); else if (lockMode && lockMode !== 'change') setLock(null);
     setText($('#priv-pass'), cfg().haspass ? 'change password' : 'set password');
+    setText($('#edtag'), s.ed || ''); $('#edtag').classList.toggle('on', !!s.ed);
     setText($('#def-btn'), s.isdef ? '✓ ULTRA is default' : 'make default');
     $('#def-btn').disabled = !!s.isdef;
     const cur = s.tabs[s.a] || { s: 'home', u: '' };
@@ -1493,15 +1500,20 @@ function renderPanes() {
     for (const el of [e.pf, e.hp, e.ph]) if (el) el.classList.add('gone');
     later(() => { for (const el of [e.pf, e.hp, e.ph]) if (el) el.remove(); }, 200);
   }
+  // Dividers are kept per split path and only moved, so the one being dragged survives the
+  // re-render each drag step causes (recreating it would drop the drag mid-slide).
   const sig = JSON.stringify(S.splits);
   if (sig !== splitSig) {
     splitSig = sig;
-    panesEl.querySelectorAll('.sp').forEach((x) => x.remove());
+    const keep = new Set();
     for (const sp of S.splits) {
-      const d = document.createElement('div');
-      d.className = 'sp ' + (sp.v ? 'v' : 'h'); d.dataset.p = sp.path; place(d, sp.gap);
-      panesEl.appendChild(d);
+      const key = (sp.v ? 'v' : 'h') + sp.path;
+      keep.add(key);
+      let d = panesEl.querySelector(`.sp[data-k="${key}"]`);
+      if (!d) { d = document.createElement('div'); d.className = 'sp ' + (sp.v ? 'v' : 'h'); d.dataset.k = key; panesEl.appendChild(d); }
+      d.dataset.p = sp.path; place(d, sp.gap);
     }
+    panesEl.querySelectorAll('.sp').forEach((x) => { if (!keep.has(x.dataset.k)) x.remove(); });
   }
   panesEl.classList.toggle('anim', S.panes.length > 1 && S.splits.length === 0);
   applyPendingFocus();
@@ -1522,17 +1534,22 @@ panesEl.addEventListener('pointerdown', (e) => {
   const hp = e.target.closest('.hp');
   if (hp) send('focuspane', +hp.dataset.id);
   const sp = e.target.closest('.sp');
-  if (!sp) return;
+  if (!sp || e.button !== 0) return;
   const info = S.splits.find((x) => x.path === sp.dataset.p); if (!info) return;
+  e.preventDefault(); // a drag, never a text selection
   sp.setPointerCapture(e.pointerId); sp.classList.add('drag');
+  document.body.classList.add('sizing', info.v ? 'sizing-v' : 'sizing-h');
   let pending = null, raf = 0;
   const move = (ev) => {
     const r = info.parent;
     pending = info.v ? (ev.clientX - r.x - 3) / (r.w - 6) : (ev.clientY - r.y - 3) / (r.h - 6);
     if (!raf) raf = requestAnimationFrame(() => { raf = 0; send('ratio', [info.path, Math.min(.9, Math.max(.1, pending))]); });
   };
-  const up = () => { sp.removeEventListener('pointermove', move); sp.removeEventListener('pointerup', up); sp.classList.remove('drag'); };
-  sp.addEventListener('pointermove', move); sp.addEventListener('pointerup', up);
+  const up = () => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+    sp.classList.remove('drag'); document.body.classList.remove('sizing', 'sizing-v', 'sizing-h');
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
 });
 panesEl.addEventListener('keydown', (e) => {
   const q = e.target.closest('.hp input'); if (!q) return;

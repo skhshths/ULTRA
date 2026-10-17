@@ -56,7 +56,7 @@ jobs:
         with:
           workspaces: mac
       - run: sh tools/bundle.sh universal
-      - run: ditto -c -k --keepParent target/ULTRA.app ../ULTRA-macos.zip
+      - run: ditto -c -k --keepParent target/*.app ../ULTRA-macos.zip
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -90,6 +90,6 @@ jobs:
             --notes "Newest build of ULTRA, from commit ${GITHUB_SHA::7}.
 
           - **Windows 10/11:** download \`ULTRA-windows-x64.exe\` and run it. If SmartScreen appears, click *More info → Run anyway*.
-          - **macOS 11+ (early preview):** download \`ULTRA-macos.zip\`, drag ULTRA.app to Applications, then right-click → Open the first time.
+          - **macOS 11+ (early preview):** download \`ULTRA-macos.zip\`, drag the app to Applications, then right-click → Open the first time.
 
           Experimental build: for invited testers only. See the README for help getting started."

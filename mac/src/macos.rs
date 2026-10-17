@@ -440,8 +440,8 @@ extern "C" {
     fn CFRelease(cf: *const std::ffi::c_void);
 }
 
-/// Must match CFBundleIdentifier in bundle/Info.plist.
-const BUNDLE_ID: &str = "app.ultra.browser";
+/// tools/bundle.sh writes the same id into the app's Info.plist.
+use crate::edition::BUNDLE_ID;
 
 /// NSString is toll-free bridged to CFString.
 fn cf(s: &NSString) -> *const std::ffi::c_void {

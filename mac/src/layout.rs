@@ -172,6 +172,36 @@ impl Node {
         }
     }
 
+    /// Where leaf `id` sits: the leaves of the subtree beside it, the split's direction and
+    /// ratio, and whether `id` came first. Enough to put a closed tab back in the same spot.
+    pub fn place_of(&self, id: u64) -> Option<(Vec<u64>, bool, f64, bool)> {
+        let Node::Split { v, r, a, b } = self else { return None };
+        let other = if a.is_leaf(id) { Some((b, true)) } else if b.is_leaf(id) { Some((a, false)) } else { None };
+        if let Some((other, first)) = other {
+            let mut leaves = Vec::new();
+            other.leaves(&mut leaves);
+            return Some((leaves, *v, *r, first));
+        }
+        a.place_of(id).or_else(|| b.place_of(id))
+    }
+
+    /// Undo of `remove`: wrap the subtree whose leaves are exactly `leaves` in a split with
+    /// `new` beside it, as recorded by `place_of`.
+    pub fn restore(&mut self, leaves: &[u64], new: u64, v: bool, r: f64, new_first: bool) -> bool {
+        let mut mine = Vec::new();
+        self.leaves(&mut mine);
+        if mine == leaves {
+            let old = std::mem::replace(self, Node::Leaf(0));
+            let (a, b) = if new_first { (Node::Leaf(new), old) } else { (old, Node::Leaf(new)) };
+            *self = Node::Split { v, r, a: Box::new(a), b: Box::new(b) };
+            return true;
+        }
+        match self {
+            Node::Leaf(_) => false,
+            Node::Split { a, b, .. } => a.restore(leaves, new, v, r, new_first) || b.restore(leaves, new, v, r, new_first),
+        }
+    }
+
     pub fn map(&self, f: &impl Fn(u64) -> Option<u64>) -> Option<Node> {
         match self {
             Node::Leaf(x) => f(*x).map(Node::Leaf),
@@ -204,5 +234,30 @@ mod tests {
         assert!(n.remove(1));
         assert!(n.is_leaf(2));
         assert!(!n.remove(2));
+    }
+
+    #[test]
+    fn closed_leaf_goes_back_where_it_was() {
+        // 1 | (2 over 3), then 3 is closed and reopened as 9.
+        let mut n = Node::Leaf(1);
+        n.split(1, 2, true, false);
+        n.split(2, 3, false, false);
+        n.set_ratio("b", 0.3);
+        let before = format!("{n:?}");
+        let (sib, v, r, first) = n.place_of(3).unwrap();
+        assert_eq!((sib.clone(), v, r, first), (vec![2], false, 0.3, false));
+        n.remove(3);
+        assert!(n.restore(&sib, 9, v, r, first));
+        assert_eq!(format!("{n:?}"), before.replace("Leaf(3)", "Leaf(9)"));
+        // A leaf beside a whole subtree: closing 1 and restoring wraps the subtree again.
+        let (sib, v, r, first) = n.place_of(1).unwrap();
+        assert_eq!(sib, vec![2, 9]);
+        n.remove(1);
+        assert!(n.restore(&sib, 7, v, r, first));
+        let mut l = Vec::new();
+        n.leaves(&mut l);
+        assert_eq!(l, vec![7, 2, 9]);
+        // Layout changed since: no exact match.
+        assert!(!n.restore(&[5, 6], 8, true, 0.5, true));
     }
 }

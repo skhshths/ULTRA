@@ -14,6 +14,7 @@
 mod audio;
 mod blocker;
 mod downloads;
+mod edition;
 mod layout;
 mod library;
 mod macos;
@@ -138,6 +139,16 @@ enum UserEvent {
     DownloadStarted(u64, String, String),
     /// A download ended: (url, final path, ok).
     DownloadDone(String, Option<String>, bool),
+}
+
+/// A closed tab, remembered so ctrl+shift+t can put it back: its page, workspace, place in
+/// the tab strip, and (if it was tiled) the spot in the layout from `Node::place_of`.
+struct Closed {
+    url: String,
+    title: String,
+    ws: usize,
+    at: usize,
+    place: Option<(Vec<u64>, bool, f64, bool)>,
 }
 
 struct Tab {
@@ -322,7 +333,8 @@ struct App {
     slide: Option<f64>,
     next_id: u64,
     next_slot: u64,
-    closed: Vec<(String, String)>,
+    /// Recently closed tabs, newest last (ctrl+shift+t brings them back where they were).
+    closed: Vec<Closed>,
     cfg: Settings,
     overlay: bool,
     /// Tutorial open: pages stay hidden while the user practises on the live layout.
@@ -400,10 +412,26 @@ struct App {
 /// ~/Library/Application Support/Ultra. (Cookies, sign-ins and site data live in WebKit's
 /// own store for the app, as WKWebView keeps them.)
 fn data_dir() -> PathBuf {
-    std::env::var_os("HOME")
+    let base = std::env::var_os("HOME")
         .map(|h| PathBuf::from(h).join("Library/Application Support"))
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Ultra")
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = base.join(edition::DATA_DIR);
+    if edition::DATA_DIR != "Ultra" {
+        seed_from(&base.join("Ultra"), &dir);
+    }
+    dir
+}
+
+/// A build with its own data folder (experimental) starts from a copy of the regular ULTRA's
+/// settings, bookmarks and history, so it feels like home. Open tabs and sign-ins stay separate.
+fn seed_from(from: &std::path::Path, to: &std::path::Path) {
+    if to.exists() || !from.exists() {
+        return;
+    }
+    let _ = fs::create_dir_all(to);
+    for f in ["settings.json", "bookmarks.json", "history.json", "commands.json", "layouts.json", "zaps.json"] {
+        let _ = fs::copy(from.join(f), to.join(f));
+    }
 }
 
 /// Turn whatever was typed into the address bar into a URL.
@@ -1119,6 +1147,36 @@ impl App {
         }
     }
 
+    /// Ctrl+Shift+T: the most recently closed tab, back in its workspace, its place in the tab
+    /// strip and, when the panes around it are still there, its old pane (same side, same size).
+    fn reopen(&mut self) {
+        let Some(c) = self.closed.pop() else {
+            self.toast("no closed tabs to bring back");
+            return;
+        };
+        self.drop_glance(None);
+        let switched = c.ws != self.ws;
+        if switched {
+            self.enter_ws(c.ws);
+        }
+        let id = self.push_tab(c.at, c.url, c.title);
+        self.zoom = None;
+        self.overlay = false;
+        let placed = c.place.as_ref().is_some_and(|(near, v, r, first)| {
+            self.root.restore(near, id, *v, *r, *first)
+                // The panes around it changed: split the first one still showing, same side.
+                || near.iter().any(|&n| self.root.split(n, id, *v, *first))
+        });
+        if placed {
+            self.set_focus(id);
+            self.apply_layout(true);
+            self.focus_active();
+        } else if let Some(i) = self.idx(id) {
+            // It was the only pane, or hidden: show it in the focused pane, as before.
+            self.activate(i);
+        }
+    }
+
     fn close_tab(&mut self, i: usize) {
         let Some((id, ws)) = self.tabs.get(i).map(|t| (t.id, t.ws)) else { return };
         if self.glance == Some(id) {
@@ -1126,6 +1184,7 @@ impl App {
             return;
         }
         let tiled = !self.root.is_leaf(id) && self.root.contains(id);
+        let place = if tiled { self.root.place_of(id) } else { None };
         if self.zoom == Some(id) {
             self.zoom = None;
         }
@@ -1158,7 +1217,7 @@ impl App {
         let i = self.idx(id).unwrap_or(i);
         let t = self.tabs.remove(i);
         if t.url != HOME && t.ws != PRIVATE_WS {
-            self.closed.push((t.url, t.title));
+            self.closed.push(Closed { url: t.url, title: t.title, ws: t.ws, at: i, place });
             if self.closed.len() > 32 {
                 self.closed.remove(0);
             }
@@ -1423,6 +1482,7 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            "ed": edition::TAG,
             "isdef": self.is_default,
             // Private-workspace downloads are only listed while it is unlocked.
             "dl": self.dls.view(!self.locked),
@@ -2300,11 +2360,7 @@ impl App {
                     }
                 }
             }
-            "reopen" => {
-                if let Some((u, t)) = self.closed.pop() {
-                    self.new_tab(u, t, true);
-                }
-            }
+            "reopen" => self.reopen(),
             "go" => {
                 // Either "query" (focused pane) or [tab id, "query"] from a home pane.
                 let (i, q) = match arg {
@@ -3009,7 +3065,7 @@ fn main() {
     // The chrome draws the whole window; macOS keeps its own window buttons (over the top
     // bar), resizable edges, rounded corners and shadow.
     let window = WindowBuilder::new()
-        .with_title("ULTRA")
+        .with_title(edition::NAME)
         .with_visible(false)
         .with_focused(!bench_mode)
         .with_titlebar_transparent(true)

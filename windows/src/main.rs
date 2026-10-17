@@ -16,6 +16,7 @@
 mod audio;
 mod blocker;
 mod default_browser;
+mod edition;
 mod downloads;
 mod instance;
 mod layout;
@@ -68,6 +69,8 @@ use wry::{
 };
 
 const BAR: f64 = 34.0;
+/// How long the audio-bars helper keeps running after the sound stops.
+const BARS_LINGER: Duration = Duration::from_secs(30);
 /// Height of the bookmarks bar under the top bar (when shown).
 const BMBAR: f64 = 26.0;
 /// Height of the one-time "support us" strip under the bars.
@@ -156,6 +159,16 @@ enum UserEvent {
     Failed(u64, i32),
     /// A link handed over by another app (or a second launch): URL, or empty to come forward.
     Open(String),
+}
+
+/// A closed tab, remembered so ctrl+shift+t can put it back: its page, workspace, place in
+/// the tab strip, and (if it was tiled) the spot in the layout from `Node::place_of`.
+struct Closed {
+    url: String,
+    title: String,
+    ws: usize,
+    at: usize,
+    place: Option<(Vec<u64>, bool, f64, bool)>,
 }
 
 struct Tab {
@@ -340,7 +353,8 @@ struct App {
     slide: Option<f64>,
     next_id: u64,
     next_slot: u64,
-    closed: Vec<(String, String)>,
+    /// Recently closed tabs, newest last (ctrl+shift+t brings them back where they were).
+    closed: Vec<Closed>,
     cfg: Settings,
     overlay: bool,
     /// Tutorial open: pages stay hidden while the user practises on the live layout.
@@ -392,6 +406,8 @@ struct App {
     audio_on: bool,
     /// Real audio bars (process-loopback capture), alive only while needed.
     spectrum: Option<spectrum::Spectrum>,
+    /// When a tab last played sound (the bars helper lingers a while after).
+    last_sound: Instant,
     /// Slideshow: images in the folder, position, next change, a load in flight.
     slides: Vec<PathBuf>,
     slide_idx: usize,
@@ -415,13 +431,28 @@ fn data_dir() -> PathBuf {
     let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    let dir = base.join("Ultra");
+    let dir = base.join(edition::DATA_DIR);
     // One-time migration from the browser's old name keeps sessions and sign-ins.
     let old = base.join("Zenith");
     if !dir.exists() && old.exists() {
         let _ = fs::rename(&old, &dir);
     }
+    if edition::DATA_DIR != "Ultra" {
+        seed_from(&base.join("Ultra"), &dir);
+    }
     dir
+}
+
+/// A build with its own data folder (experimental) starts from a copy of the regular ULTRA's
+/// settings, bookmarks and history, so it feels like home. Open tabs and sign-ins stay separate.
+fn seed_from(from: &std::path::Path, to: &std::path::Path) {
+    if to.exists() || !from.exists() {
+        return;
+    }
+    let _ = fs::create_dir_all(to);
+    for f in ["settings.json", "bookmarks.json", "history.json", "commands.json", "layouts.json", "zaps.json"] {
+        let _ = fs::copy(from.join(f), to.join(f));
+    }
 }
 
 /// Turn whatever was typed into the address bar into a URL.
@@ -1290,6 +1321,36 @@ impl App {
         }
     }
 
+    /// Ctrl+Shift+T: the most recently closed tab, back in its workspace, its place in the tab
+    /// strip and, when the panes around it are still there, its old pane (same side, same size).
+    fn reopen(&mut self) {
+        let Some(c) = self.closed.pop() else {
+            self.toast("no closed tabs to bring back");
+            return;
+        };
+        self.drop_glance(None);
+        let switched = c.ws != self.ws;
+        if switched {
+            self.enter_ws(c.ws);
+        }
+        let id = self.push_tab(c.at, c.url, c.title);
+        self.zoom = None;
+        self.overlay = false;
+        let placed = c.place.as_ref().is_some_and(|(near, v, r, first)| {
+            self.root.restore(near, id, *v, *r, *first)
+                // The panes around it changed: split the first one still showing, same side.
+                || near.iter().any(|&n| self.root.split(n, id, *v, *first))
+        });
+        if placed {
+            self.set_focus(id);
+            self.apply_layout(true);
+            self.focus_active();
+        } else if let Some(i) = self.idx(id) {
+            // It was the only pane, or hidden: show it in the focused pane, as before.
+            self.activate(i);
+        }
+    }
+
     fn close_tab(&mut self, i: usize) {
         let Some((id, ws)) = self.tabs.get(i).map(|t| (t.id, t.ws)) else { return };
         if self.glance == Some(id) {
@@ -1297,6 +1358,7 @@ impl App {
             return;
         }
         let tiled = !self.root.is_leaf(id) && self.root.contains(id);
+        let place = if tiled { self.root.place_of(id) } else { None };
         if self.zoom == Some(id) {
             self.zoom = None;
         }
@@ -1329,7 +1391,7 @@ impl App {
         let i = self.idx(id).unwrap_or(i);
         let t = self.tabs.remove(i);
         if t.url != HOME && t.ws != PRIVATE_WS {
-            self.closed.push((t.url, t.title));
+            self.closed.push(Closed { url: t.url, title: t.title, ws: t.ws, at: i, place });
             if self.closed.len() > 32 {
                 self.closed.remove(0);
             }
@@ -1598,6 +1660,7 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            "ed": edition::TAG,
             "isdef": self.is_default,
             // Private-workspace downloads are only listed while it is unlocked.
             "dl": self.dls.view(!self.locked),
@@ -1736,7 +1799,10 @@ impl App {
         let enabled = self.cfg.audio && !self.cfg.ultraspeed && self.visible;
         let playing = enabled && self.tabs.iter().any(|t| t.view.as_ref().is_some_and(playing_audio));
         if !playing {
-            self.spectrum = None;
+            // Keep the capture helper through pauses, ads and buffering; stop it once quiet.
+            if now.duration_since(self.last_sound) > BARS_LINGER {
+                self.spectrum = None;
+            }
             if self.audio_on {
                 self.audio_on = false;
                 let _ = self.ui.evaluate_script("ultra.audio(0)");
@@ -1757,6 +1823,7 @@ impl App {
             self.meter.refresh(&self.engine_pids);
         }
         self.audio_on = true;
+        self.last_sound = now;
         let level = if self.meter.is_empty() { 0.0 } else { self.meter.peak() };
         let _ = self.ui.evaluate_script(&format!("ultra.audio({level:.3})"));
         // Bars background: real spectrum from ULTRA's own audio (UI falls back to the level).
@@ -2517,11 +2584,7 @@ impl App {
                     }
                 }
             }
-            "reopen" => {
-                if let Some((u, t)) = self.closed.pop() {
-                    self.new_tab(u, t, true);
-                }
-            }
+            "reopen" => self.reopen(),
             "go" => {
                 // Either "query" (focused pane) or [tab id, "query"] from a home pane.
                 let (i, q) = match arg {
@@ -3155,6 +3218,12 @@ fn bench(app: &mut App) {
 }
 
 fn main() {
+    // The audio-bars capture helper (see spectrum.rs): no window, no UI, just band levels.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pid) = args.iter().position(|a| a == "--bars-helper").and_then(|i| args.get(i + 1)?.parse().ok()) {
+        spectrum::run_helper(pid);
+        return;
+    }
     let bench_mode = std::env::args().any(|a| a == "--bench");
     let data_dir = data_dir();
     let _ = fs::create_dir_all(&data_dir);
@@ -3191,7 +3260,7 @@ fn main() {
     }
     // Hidden until the chrome has painted, so there is no white flash on startup.
     let window = WindowBuilder::new()
-        .with_title("ULTRA")
+        .with_title(edition::NAME)
         .with_decorations(false)
         .with_visible(false)
         .with_focused(!bench_mode)
@@ -3281,6 +3350,7 @@ fn main() {
         audio_at: now,
         audio_on: false,
         spectrum: None,
+        last_sound: Instant::now(),
         slides: Vec::new(),
         slide_idx: 0,
         slide_at: now,
