@@ -10,6 +10,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 edition() { sed -n "s/^pub const $1: &str = \"\(.*\)\";/\1/p" src/edition.rs; }
+edition_bool() { sed -n "s/^pub const $1: bool = \(.*\);/\1/p" src/edition.rs; }
 NAME=$(edition NAME)
 BUNDLE_ID=$(edition BUNDLE_ID)
 APP="target/$NAME.app"
@@ -32,7 +33,10 @@ cp "$BIN" "$APP/Contents/MacOS/ultra"
 cp bundle/Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName \"$NAME\"" -c "Set :CFBundleDisplayName \"$NAME\"" \
     -c "Set :CFBundleIdentifier $BUNDLE_ID" "$APP/Contents/Info.plist"
-cp assets/ultra.icns "$APP/Contents/Resources/ultra.icns"
+# The inverted-colors edition (experimental) wears the inverted icon too.
+ICON=assets/ultra.icns
+[ "$(edition_bool INVERT)" = "true" ] && ICON=assets/ultra-inv.icns
+cp "$ICON" "$APP/Contents/Resources/ultra.icns"
 codesign --force --sign - "$APP"
 
 echo "built $APP"

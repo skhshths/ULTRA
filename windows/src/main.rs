@@ -1404,17 +1404,22 @@ impl App {
 
     /// Ctrl+Shift+N / Ctrl+Shift+E: place a tab in the pane under the cursor,
     /// splitting it in the most useful direction.
-    fn place_at_cursor(&mut self, id: u64) {
-        self.zoom = None;
+    /// The pane a cursor shortcut acts on, its rect and the point used to pick a side.
+    /// Cursor outside every pane: the focused pane, toward its far side.
+    fn cursor_target(&self) -> (u64, R, f64, f64) {
         let panes = self.panes();
         let hit = self.cursor().and_then(|(px, py)| {
             panes.iter().find(|(_, r)| r.contains(px, py)).map(|&(t, r)| (t, r, px, py))
         });
-        // Cursor outside every pane: split the focused pane toward its far side.
-        let (target, r, px, py) = hit.unwrap_or_else(|| {
+        hit.unwrap_or_else(|| {
             let r = self.pane_of(self.focus).unwrap_or(self.area());
             (self.focus, r, r.x + r.w * 0.95, r.y + r.h * 0.5)
-        });
+        })
+    }
+
+    fn place_at_cursor(&mut self, id: u64) {
+        self.zoom = None;
+        let (target, r, px, py) = self.cursor_target();
         if target == id {
             self.activate(self.idx(id).unwrap_or(0));
             return;
@@ -2539,8 +2544,18 @@ impl App {
                 }
             }
             "mvnew" => {
-                let id = self.push_tab(n, HOME.into(), String::new());
-                self.place_at_cursor(id);
+                // Only when the pane under the cursor can actually split: on a full board a new
+                // blank tab would just push a page out of view (and pile up hidden tabs).
+                // (Judged on the unzoomed layout, which is where the new pane will go.)
+                let zoom = self.zoom.take();
+                let (_, r, px, py) = self.cursor_target();
+                self.zoom = zoom;
+                if pick_split(r, px, py).is_none() {
+                    self.toast("no room for another pane here · close one (ctrl+shift+w) or zoom (ctrl+shift+f)");
+                } else {
+                    let id = self.push_tab(n, HOME.into(), String::new());
+                    self.place_at_cursor(id);
+                }
             }
             "splitdir" => {
                 let url = arg[1].as_str().filter(|u| !u.trim().is_empty());
@@ -2963,6 +2978,9 @@ impl App {
                 if self.cfg.tour && !self.tour_offered {
                     self.tour_offered = true;
                     self.command("tour", &json!(true));
+                    // Shown once: after this it only runs from settings (or if switched back on).
+                    self.cfg.tour = false;
+                    self.save_settings();
                 }
             }
             _ => {}
@@ -3277,8 +3295,9 @@ fn main() {
         .with_html(UI_HTML)
         // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
         .with_initialization_script(format!(
-            "window.__ultraCfg = {};",
-            ui_cfg(&cfg)
+            "window.__ultraCfg = {}; window.__ultraInvert = {};",
+            ui_cfg(&cfg),
+            edition::INVERT
         ))
         .with_bounds(Rect {
             position: LogicalPosition::new(0.0, 0.0).into(),

@@ -34,7 +34,7 @@ jobs:
         with:
           workspaces: windows
       - run: cargo build --release
-      - run: copy target\release\ultra.exe ..\ULTRA-windows-x64.exe
+      - run: copy target\release\ultra-exp.exe ..\ULTRA-windows-x64.exe
         shell: cmd
       - uses: actions/upload-artifact@v4
         with:

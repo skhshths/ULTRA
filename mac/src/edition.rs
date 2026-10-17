@@ -9,3 +9,5 @@ pub const DATA_DIR: &str = "Ultra Experimental";
 pub const TAG: &str = "EXP";
 /// Must stay unique per build so macOS treats them as two apps.
 pub const BUNDLE_ID: &str = "app.ultra.browser.experimental";
+/// The chrome UI in inverted colors (light), to tell the builds apart at a glance.
+pub const INVERT: bool = true;

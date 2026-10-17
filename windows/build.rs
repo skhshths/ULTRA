@@ -1,5 +1,6 @@
-//! Embeds assets/ultra.ico as the exe icon (resource group 1) without needing rc.exe:
-//! the .ico is converted into a binary .res file that link.exe accepts directly.
+//! Embeds the exe icon (resource group 1) without needing rc.exe: the .ico is converted into
+//! a binary .res file that link.exe accepts directly. The inverted-colors edition (experimental,
+//! see src/edition.rs) gets assets/ultra-inv.ico, everything else assets/ultra.ico.
 
 use std::{env, fs, path::PathBuf};
 
@@ -23,11 +24,15 @@ fn push_resource(out: &mut Vec<u8>, kind: u16, id: u16, flags: u16, data: &[u8])
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=assets/ultra.ico");
+    for f in ["assets/ultra.ico", "assets/ultra-inv.ico", "src/edition.rs"] {
+        println!("cargo:rerun-if-changed={f}");
+    }
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
-    let ico = fs::read("assets/ultra.ico").expect("assets/ultra.ico");
+    let inverted = fs::read_to_string("src/edition.rs").is_ok_and(|s| s.contains("pub const INVERT: bool = true;"));
+    let file = if inverted { "assets/ultra-inv.ico" } else { "assets/ultra.ico" };
+    let ico = fs::read(file).expect(file);
     let u16_at = |o: usize| u16::from_le_bytes([ico[o], ico[o + 1]]);
     let u32_at = |o: usize| u32::from_le_bytes([ico[o], ico[o + 1], ico[o + 2], ico[o + 3]]);
     let count = u16_at(4) as usize;

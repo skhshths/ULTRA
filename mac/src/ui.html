@@ -107,6 +107,7 @@ input::selection { background: var(--acc-sel); }
 .hp.show { opacity: 1; }
 .hp pre { color: #d6d6d6; font: 13px/1.05 Consolas, "Cascadia Mono", monospace;
   text-shadow: 0 0 18px color-mix(in srgb, var(--acc) 15%, transparent); }
+.hp .hphint { color: #4a4a4a; font-size: 10px; letter-spacing: .08em; }
 .hp .mini { color: #d6d6d6; letter-spacing: .6em; font-weight: 700; font-size: 15px; }
 .hp input { width: min(560px, 90%); height: 34px; background: rgba(12,12,12,.85); border: 1px solid #2c2c2c; color: var(--fg);
   font: 13px Consolas, monospace; padding: 0 12px; outline: 0; transition: border-color var(--fast); }
@@ -451,6 +452,10 @@ body.bmbar #bmbar { display: flex; }
 .dlft span { color: var(--dim); transition: color var(--fast); }
 .dlft span:hover { color: var(--acc); }
 
+/* inverted colors (experimental build): the whole chrome flips to light, hues kept; pictures flip back */
+html.inv { filter: invert(1) hue-rotate(180deg); }
+html.inv #bgimg, html.inv img { filter: invert(1) hue-rotate(180deg); }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation: none !important; } }
 </style>
 </head>
@@ -545,7 +550,7 @@ body.bmbar #bmbar { display: flex; }
   <div class="sec" id="keys-sec">KEYBOARD SHORTCUTS</div>
   <div class="keylist" id="keylist"></div>
   <div class="sec">HELP</div>
-  <div class="row"><div><div class="name">tutorial</div><div class="desc">show the tour every time ULTRA starts.</div></div>
+  <div class="row"><div><div class="name">tutorial</div><div class="desc">the tour shows once, the first time ULTRA starts.<br>switch on to see it every time.</div></div>
     <div class="ctl"><button class="run" id="run-tour">run now</button><div class="sw" id="sw-tour"></div></div></div>
   <div class="ft">saved automatically · esc to close</div>
 </div></div>
@@ -589,6 +594,8 @@ const $ = (s) => document.querySelector(s);
 const send = (cmd, arg) => { try { window.ipc.postMessage(JSON.stringify({ cmd, arg })); } catch (_) {} };
 const CFG0 = window.__ultraCfg || {};
 let S = { tabs: [], a: 0, panes: [], splits: [], live: 0, ws: 0, wss: [0], ps: {}, cfg: CFG0 };
+// The experimental build wears inverted colors (light chrome) so the two builds can't be mixed up.
+if (window.__ultraInvert) document.documentElement.classList.add('inv');
 let ovOn = false, cfgOn = false, palOn = false, dlOn = false, ovSel = 0, ovList = [], splitSig = '', pendingFocus = null, lastWs = 0;
 let SPEED = !!CFG0.ultraspeed;
 document.body.classList.toggle('speed', SPEED);
@@ -1166,7 +1173,7 @@ const MINI = `<pre><b>██╗   ██╗</b>
 const paneSig = (s) => JSON.stringify(s.panes.map((p) => p.id));
 const TOUR = [
   { t: 'welcome to ULTRA', art: MINI,
-    b: `a tiling browser that stays light. this tour takes about a minute and every step is skippable.<br><br>
+    b: `a tiling browser that stays light. this tour takes about a minute and every step is skippable.<br>it shows once: <kbd>cmd+,</kbd> has every shortcut, help and this tour again whenever you need them.<br><br>
       <kbd>→</kbd> next · <kbd>←</kbd> back · <kbd>esc</kbd> close` },
   { t: 'coming from chrome?', art: `<pre> chrome ──▶ ULTRA\n\n ★ github\n ★ docs\n ★ news\n ★ …\n\n bookmarks bar</pre>`,
     b: `bring your bookmarks with you: one click copies them from Google Chrome into ULTRA's bookmarks bar.
@@ -1181,7 +1188,7 @@ const TOUR = [
     b: `point at any side of the window and press <kbd>cmd+shift+e</kbd>.<br>ULTRA splits the pane under your cursor toward the nearest edge and opens a blank tab there.`,
     check: (a, b) => b.panes.length > a.panes.length },
   { t: 'split again', map: true, try: 'point near the bottom of a pane and press cmd+shift+e.',
-    b: `every pane can split again. wide panes prefer side-by-side, tall ones stack.<br>if a split would be too cramped, the tab swaps in instead.`,
+    b: `every pane can split again. wide panes prefer side-by-side, tall ones stack.<br>when a pane is too small to split, ULTRA tells you instead of cramming another one in.`,
     check: (a, b) => b.panes.length > a.panes.length },
   { t: 'pull a tab in', map: true, try: 'point at a pane and press cmd+shift+1.',
     b: `<kbd>cmd+shift+1‥9</kbd> pulls that tab into the pane under your cursor, splitting it the same smart way.`,
@@ -1215,7 +1222,7 @@ const TOUR = [
     b: `<kbd>cmd+,</kbd> opens settings: six themes, scanlines, pane stats, ad blocking and more. <span class="acc">ULTRASPEED</span> turns off every effect: 100% speed, 0% looks.<br>
       you can re-run this tour from settings any time.` },
   { t: "you're set", art: MINI, last: true,
-    b: `that's everything. go split some panes.<br><br>want this tour gone for good? switch off <b>show on startup</b> below.` },
+    b: `that's everything. go split some panes.<br><br>forgot a key? <kbd>cmd+,</kbd> opens settings with <b>every keyboard shortcut</b> and help, and can run this tour again.` },
 ];
 let tourOn = false, tStep = 0, tBase = null, tDone = false, tTimer = 0, mouse = null, mmRaf = 0;
 const seen = new Set();
@@ -1437,7 +1444,7 @@ function homeContent(e, id, big, tall) {
   const keep = e.hp.querySelector('input');
   const val = keep ? keep.value : '';
   e.hp.innerHTML = `${big ? $('#logo').innerHTML : '<div class="mini">ULTRA</div>'}` +
-    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big && tall ? '<div class="digest"></div>' : ''}`;
+    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big && tall ? '<div class="digest"></div>' : ''}${big ? '<div class="hphint"><kbd>cmd+,</kbd> every shortcut &amp; help</div>' : ''}`;
   const q = e.hp.querySelector('input'); q.value = val;
   e.big = big + ':' + tall;
 }
