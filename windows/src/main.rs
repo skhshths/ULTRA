@@ -66,6 +66,8 @@ use wry::{
 };
 
 const BAR: f64 = 34.0;
+/// How long the audio-bars helper keeps running after the sound stops.
+const BARS_LINGER: Duration = Duration::from_secs(30);
 /// Height of the bookmarks bar under the top bar (when shown).
 const BMBAR: f64 = 26.0;
 /// Height of the title strip above a glance preview.
@@ -372,6 +374,8 @@ struct App {
     audio_on: bool,
     /// Real audio bars (process-loopback capture), alive only while needed.
     spectrum: Option<spectrum::Spectrum>,
+    /// When a tab last played sound (the bars helper lingers a while after).
+    last_sound: Instant,
     /// Slideshow: images in the folder, position, next change, a load in flight.
     slides: Vec<PathBuf>,
     slide_idx: usize,
@@ -1708,7 +1712,10 @@ impl App {
         let enabled = self.cfg.audio && !self.cfg.ultraspeed && self.visible;
         let playing = enabled && self.tabs.iter().any(|t| t.view.as_ref().is_some_and(playing_audio));
         if !playing {
-            self.spectrum = None;
+            // Keep the capture helper through pauses, ads and buffering; stop it once quiet.
+            if now.duration_since(self.last_sound) > BARS_LINGER {
+                self.spectrum = None;
+            }
             if self.audio_on {
                 self.audio_on = false;
                 let _ = self.ui.evaluate_script("ultra.audio(0)");
@@ -1729,6 +1736,7 @@ impl App {
             self.meter.refresh(&self.engine_pids);
         }
         self.audio_on = true;
+        self.last_sound = now;
         let level = if self.meter.is_empty() { 0.0 } else { self.meter.peak() };
         let _ = self.ui.evaluate_script(&format!("ultra.audio({level:.3})"));
         // Bars background: real spectrum from ULTRA's own audio (UI falls back to the level).
@@ -3075,6 +3083,12 @@ fn bench(app: &mut App) {
 }
 
 fn main() {
+    // The audio-bars capture helper (see spectrum.rs): no window, no UI, just band levels.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pid) = args.iter().position(|a| a == "--bars-helper").and_then(|i| args.get(i + 1)?.parse().ok()) {
+        spectrum::run_helper(pid);
+        return;
+    }
     let bench_mode = std::env::args().any(|a| a == "--bench");
     let data_dir = data_dir();
     let _ = fs::create_dir_all(&data_dir);
@@ -3177,6 +3191,7 @@ fn main() {
         audio_at: now,
         audio_on: false,
         spectrum: None,
+        last_sound: Instant::now(),
         slides: Vec::new(),
         slide_idx: 0,
         slide_at: now,

@@ -1,14 +1,18 @@
 //! Audio bars: captures *only ULTRA's own audio* (WASAPI process loopback on the WebView2
 //! process tree; other apps and the microphone are never touched), runs an FFT and keeps
-//! ~40 smoothed, log-spaced band levels. Samples live only in memory on a background
-//! thread that runs while the bars background is shown and a tab is playing sound.
+//! ~40 smoothed, log-spaced band levels. Samples live only in memory.
+//!
+//! The capture runs in a small helper process (`ultra.exe --bars-helper <pid>`) that prints
+//! band levels to a pipe. Windows' process-loopback activation can corrupt the heap of the
+//! process that calls it, which used to crash all of ULTRA; now only the helper can die, and
+//! the bars quietly fall back to the overall sound level.
 
 use std::{
+    io::{BufRead, BufReader, Write},
     mem::ManuallyDrop,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
-    },
+    os::windows::process::CommandExt,
+    process::{Child, Command, Stdio},
+    sync::{mpsc, Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -42,20 +46,44 @@ const RATE: u32 = 48_000;
 const N: usize = 2048;
 
 pub struct Spectrum {
-    running: Arc<AtomicBool>,
+    child: Option<Child>,
     bands: Arc<Mutex<Option<Vec<f32>>>>,
 }
 
 impl Spectrum {
-    /// Start capturing the audio of process `pid` and everything it spawned.
+    /// Start capturing the audio of process `pid` and everything it spawned (in the helper).
     pub fn start(pid: u32) -> Self {
-        let running = Arc::new(AtomicBool::new(true));
         let bands = Arc::new(Mutex::new(None));
-        let (r, b) = (running.clone(), bands.clone());
-        std::thread::spawn(move || {
-            let _ = capture(pid, &r, &b);
+        let child = std::env::current_exe().ok().and_then(|exe| {
+            Command::new(exe)
+                .args(["--bars-helper", &pid.to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .spawn()
+                .ok()
         });
-        Spectrum { running, bands }
+        let mut child = child;
+        if let Some(out) = child.as_mut().and_then(|c| c.stdout.take()) {
+            let b = bands.clone();
+            std::thread::spawn(move || {
+                for line in BufReader::new(out).lines() {
+                    let Ok(line) = line else { break };
+                    let v: Vec<f32> = line.split(' ').filter_map(|x| x.parse().ok()).collect();
+                    if v.len() == BANDS {
+                        if let Ok(mut o) = b.lock() {
+                            *o = Some(v);
+                        }
+                    }
+                }
+                // Helper gone (stopped, or crashed): the UI falls back to the level meter.
+                if let Ok(mut o) = b.lock() {
+                    *o = None;
+                }
+            });
+        }
+        Spectrum { child, bands }
     }
 
     /// Latest band levels (0..1), or None if capture isn't (yet) working.
@@ -66,9 +94,34 @@ impl Spectrum {
 
 impl Drop for Spectrum {
     fn drop(&mut self) {
-        // The thread notices within ~100 ms, stops the stream and exits.
-        self.running.store(false, Ordering::Relaxed);
+        if let Some(mut c) = self.child.take() {
+            let _ = c.kill();
+            // Reap it off the UI thread.
+            std::thread::spawn(move || {
+                let _ = c.wait();
+            });
+        }
     }
+}
+
+/// The helper process: capture `pid`'s audio and print one line of band levels per update
+/// until ULTRA closes the pipe (or stops existing).
+pub fn run_helper(pid: u32) {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+    }
+    let mut out = std::io::stdout().lock();
+    let _ = capture(pid, &mut |bands: &[f32]| {
+        let line: Vec<String> = bands.iter().map(|v| format!("{v:.2}")).collect();
+        if writeln!(out, "{}", line.join(" ")).and_then(|_| out.flush()).is_err() {
+            // ULTRA is gone. Leave without tearing the stream down: that teardown is where
+            // Windows corrupts the heap, and the OS frees everything anyway.
+            std::process::exit(0);
+        }
+        true
+    });
+    // Capture couldn't start (no audio device, older Windows): nothing to report.
+    std::process::exit(0);
 }
 
 #[implement(IActivateAudioInterfaceCompletionHandler, IAgileObject)]
@@ -83,9 +136,9 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for Activated_Impl {
 
 impl IAgileObject_Impl for Activated_Impl {}
 
-fn capture(pid: u32, running: &AtomicBool, out: &Mutex<Option<Vec<f32>>>) -> windows::core::Result<()> {
+/// Capture and analyse until `emit` returns false (the pipe to ULTRA is gone).
+fn capture(pid: u32, emit: &mut dyn FnMut(&[f32]) -> bool) -> windows::core::Result<()> {
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let mut params = AUDIOCLIENT_ACTIVATION_PARAMS {
             ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
             Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
@@ -147,7 +200,7 @@ fn capture(pid: u32, running: &AtomicBool, out: &Mutex<Option<Vec<f32>>>) -> win
         let mut pos = 0usize;
         let mut smooth = vec![0f32; BANDS];
         let mut last = Instant::now();
-        while running.load(Ordering::Relaxed) {
+        loop {
             WaitForSingleObject(ev, 100);
             loop {
                 let n = cap.GetNextPacketSize().unwrap_or(0);
@@ -173,12 +226,15 @@ fn capture(pid: u32, running: &AtomicBool, out: &Mutex<Option<Vec<f32>>>) -> win
                     // Fast rise, slow fall: the classic bouncing-bar feel.
                     *s = if r > *s { *s + (r - *s) * 0.7 } else { *s * 0.82 + r * 0.18 };
                 }
-                if let Ok(mut o) = out.lock() {
-                    *o = Some(smooth.clone());
+                if !emit(&smooth) {
+                    break;
                 }
             }
         }
         let _ = client.Stop();
+        // Release the stream before its event: the audio engine may still signal it until then.
+        drop(cap);
+        drop(client);
         let _ = CloseHandle(ev);
     }
     Ok(())
