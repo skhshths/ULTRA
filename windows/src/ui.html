@@ -827,7 +827,7 @@ $('#def-btn').onclick = () => send('makedefault');
 let updState = null;
 function drawUpd() {
   const st = updState || {};
-  setText($('#upd-ver'), S.version ? 'you have build ' + S.version : 'development build');
+  setText($('#upd-ver'), S.version ? 'you have ' + S.version : 'development build');
   if (st.m) setText($('#upd-msg'), st.m);
   const label = { checking: 'checking…', installing: 'updating…', available: window.__ultraMac ? 'download update' : 'update now', private: 'open releases' }[st.s] || 'check for updates';
   setText($('#upd-btn'), label);

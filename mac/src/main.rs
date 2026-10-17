@@ -1572,7 +1572,7 @@ impl App {
             "max": self.window.is_maximized(),
             // New-tab shortcuts (or the most visited sites until there are some).
             "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>(), "auto": sc_auto },
-            "version": updater::short(updater::COMMIT),
+            "version": updater::version(),
             "browsers": self.browsers,
             "ed": edition::TAG,
             "isdef": self.is_default,
