@@ -1541,6 +1541,7 @@ impl App {
         wss.dedup();
         let ps: HashMap<String, [f64; 2]> =
             self.pane_stats.iter().map(|(id, (m, c))| (id.to_string(), [*m, *c])).collect();
+        let (sc_list, sc_auto) = self.lib.shortcuts_view();
         let state = json!({
             "tabs": tabs,
             "a": self.cur(),
@@ -1569,6 +1570,8 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            // New-tab shortcuts (or the most visited sites until there are some).
+            "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>(), "auto": sc_auto },
             "version": updater::short(updater::COMMIT),
             "browsers": self.browsers,
             "ed": edition::TAG,
@@ -2693,15 +2696,78 @@ impl App {
                 self.open_in(ws, updater::releases_page(edition::REPO));
                 self.command("settings", &json!(false));
             }
+            "scadd" => {
+                // A shortcut on the new-tab page: the address given, or the page in front of you.
+                let (url, title) = match arg.as_str().filter(|u| !u.trim().is_empty()) {
+                    Some(u) => (resolve(u, &self.cfg.search), String::new()),
+                    None => self.tabs.get(self.cur()).map(|t| (t.url.clone(), t.title.clone())).unwrap_or_default(),
+                };
+                let private = self.tabs.get(self.cur()).is_some_and(|t| t.ws == PRIVATE_WS) && arg.is_null();
+                if private {
+                    self.toast("private pages aren't added as shortcuts");
+                } else if url.contains("duckduckgo.com/?q=") || url.contains("/search?q=") {
+                    self.toast("that isn't a web address · try something like github.com");
+                } else if self.lib.add_shortcut(&url, &title) {
+                    self.lib.save(&self.data_dir);
+                    self.toast(&format!("added {} to your shortcuts", library::host(&url).unwrap_or_default()));
+                } else if self.lib.shortcuts.len() >= 12 {
+                    self.toast("shortcuts are full · remove one first");
+                } else {
+                    self.toast("already in your shortcuts, or not a web page");
+                }
+                self.sync();
+            }
+            "scrm" => {
+                if let Some(u) = arg.as_str() {
+                    self.lib.remove_shortcut(u);
+                    self.lib.save(&self.data_dir);
+                    self.sync();
+                }
+            }
             "import" | "importchrome" => {
                 // Onboarding from another browser: its bookmarks land in the bookmarks bar.
                 let id = if cmd == "importchrome" { "chrome" } else { arg.as_str().unwrap_or("chrome") };
                 let name = library::browser_name(id);
+                let plural = |n: usize, w: &str| format!("{n} {w}{}", if n == 1 { "" } else { "s" });
                 let msg = match self.lib.import_from(id) {
-                    Ok((0, profile)) => format!("nothing new to import from {name} ({profile})"),
-                    Ok((n, profile)) => {
+                    Ok(got) => {
+                        let mut parts = Vec::new();
+                        if got.bookmarks > 0 {
+                            parts.push(plural(got.bookmarks, "bookmark"));
+                        }
+                        if got.shortcuts > 0 {
+                            parts.push(plural(got.shortcuts, "shortcut"));
+                        }
+                        if got.history > 0 {
+                            parts.push(format!("{} of history", plural(got.history, "page")));
+                        }
+                        // Its open tabs: asleep in the first empty workspace, so nothing loads
+                        // until you look and the current layout is left alone.
+                        // (Tabs already open in ULTRA, e.g. from an earlier import, aren't opened again.)
+                        let mut tabs = got.tabs;
+                        tabs.retain(|(_, u)| !self.tabs.iter().any(|t| &t.url == u));
+                        let free = (0..PRIVATE_WS).find(|&w| w != self.ws && !self.tabs.iter().any(|t| t.ws == w) && self.stash[w].is_none());
+                        if let (false, Some(w)) = (tabs.is_empty(), free) {
+                            let n = tabs.len().min(40);
+                            for (title, url) in tabs.into_iter().take(40) {
+                                let tid = self.push_tab(self.tabs.len(), url, title);
+                                if let Some(i) = self.idx(tid) {
+                                    self.tabs[i].ws = w;
+                                }
+                            }
+                            parts.push(format!("{} (in workspace {})", plural(n, "open tab"), w + 1));
+                        }
+                        if let Some(e) = got.search.filter(|e| *e != self.cfg.search) {
+                            self.cfg.search = e.to_string();
+                            self.save_settings();
+                            parts.push(format!("search engine: {e}"));
+                        }
                         self.lib.save(&self.data_dir);
-                        format!("imported {n} bookmark{} from {name} ({profile})", if n == 1 { "" } else { "s" })
+                        if parts.is_empty() {
+                            format!("nothing new to import from {name} ({})", got.label)
+                        } else {
+                            format!("from {name} ({}): {}", got.label, parts.join(", "))
+                        }
                     }
                     Err(e) => e,
                 };

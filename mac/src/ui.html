@@ -458,6 +458,22 @@ body.bmbar #bmbar { display: flex; }
 html.inv { filter: invert(1) hue-rotate(180deg); }
 html.inv #bgimg, html.inv img { filter: invert(1) hue-rotate(180deg); }
 
+/* new-tab shortcuts: tiles under the search box */
+.hp .scs { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; max-width: min(660px, 94%); }
+.sct { position: relative; width: 86px; padding: 11px 4px 9px; display: flex; flex-direction: column; align-items: center; gap: 7px;
+  border: 1px solid #262626; background: rgba(12,12,12,.72); color: var(--mid); font-size: 10px; transition: border-color var(--fast), color var(--fast); }
+.sct b { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--acc-dim); color: var(--acc); font-size: 13px; font-weight: 700; }
+.sct span { max-width: 78px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sct:hover { border-color: var(--acc-dim); color: var(--fg); }
+.sct .scx { position: absolute; top: 2px; right: 5px; font-style: normal; color: var(--dim); display: none; }
+.sct:hover .scx { display: block; }
+.sct .scx:hover { color: var(--bad); }
+.sct.add b { border-style: dashed; color: var(--dim); }
+.sct.add:hover b { color: var(--acc); }
+.scs .scin { width: 230px; height: 30px; align-self: center; background: rgba(12,12,12,.85); border: 1px solid var(--acc-dim); color: var(--fg);
+  font: 12px Consolas, monospace; padding: 0 10px; outline: 0; }
+.scs .auto { width: 100%; text-align: center; color: #4a4a4a; font-size: 10px; letter-spacing: .08em; }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation: none !important; } }
 </style>
 </head>
@@ -547,7 +563,7 @@ html.inv #bgimg, html.inv img { filter: invert(1) hue-rotate(180deg); }
   <div class="row"><div><div class="name">default browser</div><div class="desc" id="def-desc">open links from other apps (mail, chat, documents) in ULTRA.<br>macOS asks you to confirm.</div></div>
     <div class="ctl"><button class="run" id="def-btn">make default</button></div></div>
   <div class="sec">IMPORT</div>
-  <div class="row"><div><div class="name">import bookmarks</div><div class="desc" id="imp-desc">copies another browser's bookmarks into ULTRA (they show up in the bookmarks bar).<br>it can stay open; nothing in it is changed.</div></div>
+  <div class="row"><div><div class="name">import from another browser</div><div class="desc" id="imp-desc">brings over everything it can: bookmarks, new-tab shortcuts, history, open tabs (asleep, in a free workspace) and your search engine.<br>it can stay open; nothing in it is changed. passwords and sign-ins stay where they are.</div></div>
     <div class="ctl imp-list" id="imp-list"></div></div>
   <div class="sec" id="keys-sec">KEYBOARD SHORTCUTS</div>
   <div class="keylist" id="keylist"></div>
@@ -1089,7 +1105,8 @@ const CMDS = [
   { k: 'sleep all', d: 'put every hidden tab to sleep now', run: () => send('trim') },
   { k: 'bookmark', d: 'bookmark / unbookmark this page (cmd+d)', run: () => send('bookmark') },
   { k: 'clear history', d: 'forget every page visited', run: () => send('clearhistory') },
-  ...['chrome', 'edge', 'brave', 'vivaldi', 'opera', 'firefox'].map((id) => ({ k: 'import ' + id, d: `copy your ${BROWSER_NAMES[id]} bookmarks into ULTRA`, run: () => startImport(id) })),
+  ...['chrome', 'edge', 'brave', 'vivaldi', 'opera', 'firefox'].map((id) => ({ k: 'import ' + id, d: `bring over bookmarks, shortcuts, history and tabs from ${BROWSER_NAMES[id]}`, run: () => startImport(id) })),
+  { k: 'add shortcut', d: 'pin this page to the new-tab page', run: () => send('scadd', null) },
   { k: 'shortcuts', d: 'every keyboard shortcut (in settings)', run: () => { send('settings', true); setTimeout(() => $('#keys-sec').scrollIntoView({ block: 'start' }), 60); } },
   { k: 'layout save', a: '<name>', d: "save this workspace's layout and tabs", run: (x) => x && send('layout', ['save', x]) },
   { k: 'layout load', a: '<name>', d: 'open a saved layout in a free workspace', opts: () => S.layouts || [], run: (x) => x && send('layout', ['load', x]) },
@@ -1207,7 +1224,7 @@ const TOUR = [
     b: `a tiling browser that stays light. this tour takes about a minute and every step is skippable.<br>it shows once: <kbd>cmd+,</kbd> has every shortcut, help and this tour again whenever you need them.<br><br>
       <kbd>→</kbd> next · <kbd>←</kbd> back · <kbd>esc</kbd> close` },
   { t: 'coming from another browser?', art: `<pre> chrome  ─┐\n edge    ─┤\n firefox ─┼─▶ ULTRA\n brave   ─┤\n …       ─┘\n\n ★ github  ★ docs\n bookmarks bar</pre>`,
-    b: `bring your bookmarks with you: one click copies them from your old browser into ULTRA's bookmarks bar.
+    b: `one click brings over your bookmarks, new-tab shortcuts, history, open tabs and search engine from your old browser.
       it can stay open, and nothing in it is changed.<br><br>
       <span id="t-imp-list"></span> <span id="t-import-res" style="color:var(--mid)"></span><br><br>
       starting fresh? skip this. you can import later from settings.` },
@@ -1476,7 +1493,7 @@ function homeContent(e, id, big, tall) {
   const keep = e.hp.querySelector('input');
   const val = keep ? keep.value : '';
   e.hp.innerHTML = `${big ? $('#logo').innerHTML : '<div class="mini">ULTRA</div>'}` +
-    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big && tall ? '<div class="digest"></div>' : ''}${big ? '<div class="hphint"><kbd>cmd+,</kbd> every shortcut &amp; help</div>' : ''}`;
+    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big ? '<div class="scs"></div>' : ''}${big && tall ? '<div class="digest"></div>' : ''}${big ? '<div class="hphint"><kbd>cmd+,</kbd> every shortcut &amp; help</div>' : ''}`;
   const q = e.hp.querySelector('input'); q.value = val;
   e.big = big + ':' + tall;
 }
@@ -1528,6 +1545,8 @@ function renderPanes() {
       if (e.big !== big + ':' + tall) homeContent(e, p.id, big, tall);
       const dg = e.hp.querySelector('.digest');
       if (dg) setHTML(dg, digestHTML(t.w === 9));
+      const sc = e.hp.querySelector('.scs');
+      if (sc && !sc.querySelector('.scin')) setHTML(sc, shortcutsHTML());
     } else if (e.hp) {
       e.hp.remove(); e.hp = null; e.big = null;
     }
@@ -1567,6 +1586,35 @@ function applyPendingFocus() {
   if (q) { q.focus(); pendingFocus = null; }
 }
 
+// ── new-tab shortcuts ──
+function shortcutsHTML() {
+  const sc = S.sc || { list: [] }, list = sc.list || [];
+  const tile = (x) => {
+    const h = host(x.u), letter = (x.t || h || '?').replace(/^www\./, '').charAt(0).toUpperCase();
+    return `<div class="sct" data-u="${esc(x.u)}" title="${esc(x.u)}"><b>${esc(letter)}</b><span>${esc(x.t || h)}</span>` +
+      (sc.auto ? '' : `<i class="scx" data-rm="${esc(x.u)}" title="remove">×</i>`) + '</div>';
+  };
+  const add = list.length < 12 || sc.auto ? '<div class="sct add" title="add a shortcut"><b>+</b><span>add</span></div>' : '';
+  return list.map(tile).join('') + add + (sc.auto && list.length ? '<div class="auto">your most visited sites · add your own with +</div>' : '');
+}
+panesEl.addEventListener('click', (e) => {
+  const scs = e.target.closest('.scs'); if (!scs) return;
+  const rm = e.target.closest('[data-rm]');
+  if (rm) { send('scrm', rm.dataset.rm); return; }
+  const id = +scs.closest('.hp').dataset.id;
+  if (e.target.closest('.sct.add')) {
+    scs.innerHTML = '<input class="scin" placeholder="site address, then enter" spellcheck="false" autocomplete="off">';
+    const q = scs.querySelector('.scin'); q.focus();
+    q.addEventListener('keydown', (k) => {
+      if (k.key === 'Enter' && q.value.trim()) { send('scadd', q.value.trim()); q.remove(); k.preventDefault(); }
+      else if (k.key === 'Escape') { q.remove(); setHTML(scs, shortcutsHTML()); }
+    });
+    q.addEventListener('blur', () => setTimeout(() => { if (!scs.querySelector('.scin:focus')) setHTML(scs, shortcutsHTML()); }, 100));
+    return;
+  }
+  const tile = e.target.closest('.sct[data-u]');
+  if (tile) send('go', [id, tile.dataset.u]);
+});
 panesEl.addEventListener('pointerdown', (e) => {
   const act = e.target.closest('[data-act]');
   if (act) { send(act.dataset.act, +act.dataset.id); return; }
