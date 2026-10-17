@@ -41,17 +41,6 @@ The download links in the README use `releases/latest/download/<file>`, so they 
 newest build. Neither build is code-signed: Windows SmartScreen and macOS Gatekeeper show a
 warning on first launch, which the README explains how to get past.
 
-## Support prompt (maintainers)
-
-On the fifth launch only, a slim "buy us a coffee" strip appears under the top bar a few
-seconds after startup (never over a page, the tutorial or an open panel). The launch count is
-`launches` in `settings.json`.
-
-The button's destination is `SUPPORT_URL`, near the top of `windows/src/main.rs` and
-`mac/src/main.rs`. Set it to your tip page (PayPal.Me, Venmo business profile, Ko-fi or Buy Me a
-Coffee) and push; the next release picks it up. While it's empty, every choice just closes the
-strip.
-
 ## Icons
 
 `tools/make_icon.py` in each folder regenerates the icon (needs Python with Pillow).

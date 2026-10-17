@@ -41,9 +41,3 @@ The exe lands in `target/release/ultra.exe`. Requires the Microsoft Edge WebView
 (preinstalled on Windows 11). Settings, session and sign-ins live in `%LOCALAPPDATA%\Ultra`.
 
 `tools/make_icon.py` regenerates `assets/ultra.ico` (needs Pillow); `build.rs` embeds it.
-
-## Support prompt
-
-On the fifth launch only, a slim "buy us a coffee" strip offers a way to support ULTRA. Dismiss it and it never comes back.
-
-(Maintainers: where the button points is set in `SUPPORT_URL`; see [BUILDING.md](../BUILDING.md#support-prompt-maintainers).)

@@ -68,15 +68,6 @@ use wry::{
 const BAR: f64 = 34.0;
 /// Height of the bookmarks bar under the top bar (when shown).
 const BMBAR: f64 = 26.0;
-/// Height of the one-time "support us" strip under the bars.
-const COFFEE_BAR: f64 = 30.0;
-/// The support prompt appears on this launch (and only this one).
-const COFFEE_LAUNCH: u32 = 5;
-/// ...this long after the window is up, so it never competes with startup.
-const COFFEE_DELAY: Duration = Duration::from_secs(4);
-/// Where "buy us a coffee" goes: paste your tip page (PayPal.Me, Venmo, Ko-fi, Buy Me a Coffee...).
-/// Empty: the button just closes the strip.
-const SUPPORT_URL: &str = "";
 /// Height of the title strip above a glance preview.
 const GLANCE_HDR: f64 = 26.0;
 /// Largest memory cap accepted (MB).
@@ -247,8 +238,6 @@ struct Settings {
     slidesecs: u32,
     /// Audio bars layered over whatever background is chosen.
     bars: bool,
-    /// How many times ULTRA has been started (drives the one-time support prompt).
-    launches: u32,
     /// Memory ceiling in MB (0 = off): past it, the least recently used hidden tabs are put to sleep.
     memcap: u32,
     /// Workspaces that keep their own cookies and sign-ins.
@@ -286,7 +275,6 @@ impl Default for Settings {
             slidedir: String::new(),
             slidesecs: 60,
             bars: false,
-            launches: 0,
             memcap: 0,
             isolated: Vec::new(),
             declutter: true,
@@ -391,9 +379,6 @@ struct App {
     slide_loading: bool,
     boot_until: Instant,
     dirty: Cell<bool>,
-    /// Support strip: when it is due to appear, and whether it is showing.
-    coffee_at: Option<Instant>,
-    coffee: bool,
     /// Tab shown as a floating preview over the layout (ctrl/cmd+shift+click a link).
     glance: Option<u64>,
     /// Elements hidden per site with the zap picker: host -> CSS selectors.
@@ -776,7 +761,7 @@ impl App {
 
     fn area(&self) -> R {
         let (w, h) = self.logical_size();
-        let top = BAR + if self.cfg.bmbar { BMBAR } else { 0.0 } + if self.coffee { COFFEE_BAR } else { 0.0 };
+        let top = BAR + if self.cfg.bmbar { BMBAR } else { 0.0 };
         R { x: GAP, y: top, w: (w - 2.0 * GAP).max(1.0), h: (h - top - GAP).max(1.0) }
     }
 
@@ -1584,7 +1569,6 @@ impl App {
             "digest": self.lib.digest_view(),
             "bms": self.lib.bookmarks.iter().map(|b| json!({ "u": b.url, "t": b.title })).collect::<Vec<_>>(),
             "tour": self.tour,
-            "coffee": self.coffee,
             "glance": self.glance.and_then(|g| self.idx(g)).map(|i| {
                 let t = &self.tabs[i];
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
@@ -1708,9 +1692,6 @@ impl App {
         }
         if let Some(t) = self.refocus_at {
             d = d.min(t);
-        }
-        if let Some(t) = self.coffee_at {
-            d = d.min(t.max(now + Duration::from_millis(250)));
         }
         if self.slideshow_on() {
             d = d.min(self.slide_at);
@@ -2791,18 +2772,6 @@ impl App {
             }
             "min" => self.window.set_minimized(true),
             "max" => self.window.set_maximized(!self.window.is_maximized()),
-            "coffee" => {
-                if self.coffee {
-                    self.coffee = false;
-                    self.apply_layout(true);
-                    self.focus_active();
-                }
-                // "buy us a coffee" opens the tip page once SUPPORT_URL is filled in.
-                if arg.as_str() == Some("yes") && !SUPPORT_URL.is_empty() {
-                    let ws = if self.ws == PRIVATE_WS { 0 } else { self.ws };
-                    self.open_in(ws, SUPPORT_URL.to_string());
-                }
-            }
             "glance" => {
                 let how = arg.as_str().unwrap_or("close").to_string();
                 self.glance_cmd(&how);
@@ -2849,9 +2818,6 @@ impl App {
                 }
             }
             "ready" => {
-                if self.cfg.launches == COFFEE_LAUNCH && self.coffee_at.is_none() && !self.coffee {
-                    self.coffee_at = Some(Instant::now() + COFFEE_DELAY);
-                }
                 self.send_bg_image();
                 if self.slideshow_on() {
                     self.next_slide(Instant::now());
@@ -3117,13 +3083,7 @@ fn main() {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     // Older settings had "bars" as a background; it is now a layer over the swirl.
-    let mut cfg = if cfg.bgmode == "bars" { Settings { bgmode: "swirl".into(), bars: true, ..cfg } } else { cfg };
-    if !bench_mode {
-        cfg.launches = cfg.launches.saturating_add(1);
-        if let Ok(j) = serde_json::to_string_pretty(&cfg) {
-            let _ = fs::write(data_dir.join("settings.json"), j);
-        }
-    }
+    let cfg = if cfg.bgmode == "bars" { Settings { bgmode: "swirl".into(), bars: true, ..cfg } } else { cfg };
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
@@ -3223,8 +3183,6 @@ fn main() {
         slide_loading: false,
         boot_until: now,
         dirty: Cell::new(false),
-        coffee_at: None,
-        coffee: false,
         glance: None,
         zaps: BTreeMap::new(),
         visible: false,
@@ -3351,12 +3309,6 @@ fn main() {
                 if app.refocus_at.is_some_and(|t| now >= t) {
                     app.refocus_at = None;
                     app.restore_focus();
-                }
-                // The support strip waits until nothing else is on screen (boot, tour, panels, lock).
-                if app.coffee_at.is_some_and(|t| now >= t) && !app.booting && !app.tour && !app.overlay && !app.gate() {
-                    app.coffee_at = None;
-                    app.coffee = true;
-                    app.apply_layout(true);
                 }
                 if app.booting && now >= app.boot_until {
                     app.command("booted", &Value::Null);
