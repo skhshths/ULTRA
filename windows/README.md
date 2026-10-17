@@ -40,4 +40,5 @@ cargo build --release
 The exe lands in `target/release/ultra.exe`. Requires the Microsoft Edge WebView2 Runtime
 (preinstalled on Windows 11). Settings, session and sign-ins live in `%LOCALAPPDATA%\Ultra`.
 
-`tools/make_icon.py` regenerates `assets/ultra.ico` (needs Pillow); `build.rs` embeds it.
+`../tools/make_icon.py` regenerates `assets/ultra.ico` and `ultra-inv.ico` (needs Pillow); `build.rs` embeds the one
+matching `src/edition.rs`.

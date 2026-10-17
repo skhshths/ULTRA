@@ -44,8 +44,8 @@ Use the `.app` for everyday use. macOS ties permission prompts (camera, micropho
 visuals) to an app's bundle and `Info.plist`; a bare `cargo run` binary borrows your terminal's
 permissions instead.
 
-`tools/make_icon.py` regenerates `assets/ultra.icns` and `assets/ultra.png` (needs Pillow:
-`pip3 install pillow`). It draws the same mark as the Windows icon.
+`../tools/make_icon.py` regenerates `assets/ultra.icns`, `ultra-inv.icns` and the PNGs for both
+platforms (needs Pillow: `pip3 install pillow`). `tools/bundle.sh` picks the one matching `src/edition.rs`.
 
 ### Benchmark mode
 

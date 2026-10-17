@@ -43,7 +43,8 @@ warning on first launch, which the README explains how to get past.
 
 ## Icons
 
-`tools/make_icon.py` in each folder regenerates the icon (needs Python with Pillow).
+`tools/make_icon.py` (at the top of the repo) regenerates both platforms' icons, normal and inverted
+(needs Python with Pillow). The inverted one is used by the experimental edition.
 `windows/build.rs` embeds `windows/assets/ultra.ico` into the exe; `mac/tools/bundle.sh` copies
 `mac/assets/ultra.icns` into the app bundle.
 
