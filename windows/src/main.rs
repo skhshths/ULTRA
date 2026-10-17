@@ -165,6 +165,8 @@ enum UserEvent {
     DlProgress(u64, i64, i64),
     /// Download `key` changed state (final file path once known).
     DlState(u64, downloads::State, String),
+    /// A ULTRA shortcut caught natively in a page's webview: (slot, message).
+    Key(u64, String),
     /// A WebView2 process died: (slot, 0 = the chrome UI; failure kind).
     Failed(u64, i32),
     /// A link handed over by another app (or a second launch): URL, or empty to come forward.
@@ -771,7 +773,7 @@ fn watch_keys(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
             if st.WasKeyDown.as_bool() && vk != 0x09 {
                 return Ok(());
             }
-            let _ = proxy.send_event(UserEvent::Content(slot, msg));
+            let _ = proxy.send_event(UserEvent::Key(slot, msg));
         }
         Ok(())
     }));
@@ -1730,7 +1732,7 @@ impl App {
             cur_ws: if self.ws == PRIVATE_WS { 0 } else { self.ws },
         };
         if let Ok(j) = serde_json::to_string(&s) {
-            let _ = fs::write(self.data_dir.join("session.json"), j);
+            let _ = library::write_atomic(&self.data_dir.join("session.json"), j);
         }
         self.lib.save(&self.data_dir);
         self.dls.save(&self.data_dir);
@@ -1738,7 +1740,7 @@ impl App {
 
     fn save_settings(&self) {
         if let Ok(j) = serde_json::to_string_pretty(&self.cfg) {
-            let _ = fs::write(self.data_dir.join("settings.json"), j);
+            let _ = library::write_atomic(&self.data_dir.join("settings.json"), j);
         }
     }
 
@@ -2141,7 +2143,7 @@ impl App {
 
     fn save_layouts(&self) {
         if let Ok(j) = serde_json::to_string_pretty(&self.layouts) {
-            let _ = fs::write(self.data_dir.join("layouts.json"), j);
+            let _ = library::write_atomic(&self.data_dir.join("layouts.json"), j);
         }
     }
 
@@ -2274,8 +2276,16 @@ impl App {
             relaunch();
             return;
         }
+        if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE {
+            // A page busy for a few seconds is not dead: reloading it would throw away whatever
+            // the user typed. Say so and let them decide; it often recovers on its own.
+            if let Some(i) = self.idx_slot(slot).filter(|&i| self.shown.iter().any(|(x, _)| *x == self.tabs[i].id)) {
+                let name = library::host(&self.tabs[i].url).unwrap_or_else(|| "this page".into());
+                self.toast(&format!("{name} isn't responding · wait, or press ctrl+r to reload it"));
+            }
+            return;
+        }
         let renderer = kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
-            || kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE
             || kind == COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED;
         if !renderer {
             return; // GPU/utility processes are restarted by WebView2 itself.
@@ -2452,7 +2462,7 @@ impl App {
 
     fn save_zaps(&self) {
         if let Ok(j) = serde_json::to_string_pretty(&self.zaps) {
-            let _ = fs::write(self.data_dir.join("zaps.json"), j);
+            let _ = library::write_atomic(&self.data_dir.join("zaps.json"), j);
         }
     }
 
@@ -2692,7 +2702,7 @@ impl App {
             "bgimage" => {
                 // A picked image arrives as a data URL; keep it on disk and switch to it.
                 if let Some(d) = arg.as_str().filter(|d| valid_bg_image(d)) {
-                    let _ = fs::write(self.data_dir.join("background.dataurl"), d);
+                    let _ = library::write_atomic(&self.data_dir.join("background.dataurl"), d);
                     self.cfg.bgmode = "image".into();
                     self.save_settings();
                     self.send_bg_image();
@@ -2997,6 +3007,80 @@ impl App {
         }
     }
 
+    /// A message from a page's webview: a shortcut caught from a real keypress (`native`), or
+    /// something the page's script posted.
+    fn page_msg(&mut self, slot: u64, msg: String, native: bool) {
+        // Pages are untrusted: a page's script can only send the page protocol (url changes,
+        // focus, type-to-search, glance links, zaps, notices), and only from a tab on screen.
+        // ULTRA's shortcuts are accepted only when `native`: caught from a real keypress.
+        let Some(i) = self.idx_slot(slot) else { return };
+        let id = self.tabs[i].id;
+        if msg == "url" {
+            // Never trust a url reported by the page itself (address bar spoofing):
+            // ask WebView2 for the real one.
+            if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
+                if !u.is_empty() && u != self.tabs[i].url {
+                    self.tabs[i].url = u;
+                    self.remember(i);
+                    self.sync();
+                }
+            }
+            return;
+        }
+        let (i, id) = if self.glance == Some(id) {
+            // Inside the glance: esc / ctrl+w close it, ctrl/cmd+enter keeps it as a split, a
+            // glance-click replaces it; any other ULTRA shortcut closes it and acts on the layout.
+            match msg.as_str() {
+                "esc" => return self.glance_cmd("close"),
+                "close" if native => return self.glance_cmd("close"),
+                "keep" => return self.glance_cmd("split"),
+                "reader" | "pip" | "zap" if native => return self.command(&msg, &Value::Null),
+                "pip:none" | "pip:fail" | "reader:none" => return self.page_notice(&msg),
+                m if m == "focus" || m.starts_with("type:") => return,
+                _ => {}
+            }
+            if let Some(u) = msg.strip_prefix("glance:") {
+                let ws = self.tabs[i].ws;
+                return self.open_glance(u, ws);
+            }
+            if let Some(sel) = msg.strip_prefix("zap:") {
+                return self.add_zap(i, sel);
+            }
+            if !native {
+                return;
+            }
+            self.glance_cmd("close");
+            match self.idx(self.focus) {
+                Some(f) => (f, self.focus),
+                None => return,
+            }
+        } else {
+            (i, id)
+        };
+        if !self.shown.iter().any(|(x, _)| *x == id) {
+            return;
+        }
+        if id != self.focus {
+            self.set_focus(id);
+        }
+        if let Some(u) = msg.strip_prefix("glance:") {
+            let ws = self.tabs[i].ws;
+            self.open_glance(u, ws);
+            return;
+        }
+        if let Some(sel) = msg.strip_prefix("zap:") {
+            self.add_zap(i, sel);
+            return;
+        }
+        if msg == "pip:none" || msg == "pip:fail" || msg == "reader:none" {
+            self.page_notice(&msg);
+            return;
+        }
+        if native || msg.starts_with("type:") {
+            self.shortcut_msg(&msg);
+        }
+    }
+
     fn on_event(&mut self, ev: UserEvent, flow: &mut ControlFlow) {
         match ev {
             UserEvent::Ui(msg) => {
@@ -3009,70 +3093,10 @@ impl App {
                 }
                 self.command(cmd, &v["arg"]);
             }
-            UserEvent::Content(slot, msg) => {
-                // Pages are untrusted: only a fixed set of shortcut commands is accepted,
-                // and only from a tab that is on screen.
-                let Some(i) = self.idx_slot(slot) else { return };
-                let id = self.tabs[i].id;
-                if msg == "url" {
-                    // Never trust a url reported by the page itself (address bar spoofing):
-                    // ask WebView2 for the real one.
-                    if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
-                        if !u.is_empty() && u != self.tabs[i].url {
-                            self.tabs[i].url = u;
-                            self.remember(i);
-                            self.sync();
-                        }
-                    }
-                    return;
-                }
-                let (i, id) = if self.glance == Some(id) {
-                    // Inside the glance: esc / ctrl+w close it, ctrl/cmd+enter keeps it as a split, a
-                    // glance-click replaces it; any other ULTRA shortcut closes it and acts on the layout.
-                    match msg.as_str() {
-                        "esc" | "close" => return self.glance_cmd("close"),
-                        "keep" => return self.glance_cmd("split"),
-                        "reader" | "pip" | "zap" => return self.command(&msg, &Value::Null),
-                        "pip:none" | "pip:fail" | "reader:none" => return self.page_notice(&msg),
-                        m if m == "focus" || m.starts_with("type:") => return,
-                        _ => {}
-                    }
-                    if let Some(u) = msg.strip_prefix("glance:") {
-                        let ws = self.tabs[i].ws;
-                        return self.open_glance(u, ws);
-                    }
-                    if let Some(sel) = msg.strip_prefix("zap:") {
-                        return self.add_zap(i, sel);
-                    }
-                    self.glance_cmd("close");
-                    match self.idx(self.focus) {
-                        Some(f) => (f, self.focus),
-                        None => return,
-                    }
-                } else {
-                    (i, id)
-                };
-                if !self.shown.iter().any(|(x, _)| *x == id) {
-                    return;
-                }
-                if id != self.focus {
-                    self.set_focus(id);
-                }
-                if let Some(u) = msg.strip_prefix("glance:") {
-                    let ws = self.tabs[i].ws;
-                    self.open_glance(u, ws);
-                    return;
-                }
-                if let Some(sel) = msg.strip_prefix("zap:") {
-                    self.add_zap(i, sel);
-                    return;
-                }
-                if msg == "pip:none" || msg == "pip:fail" || msg == "reader:none" {
-                    self.page_notice(&msg);
-                    return;
-                }
-                self.shortcut_msg(&msg);
-            }
+            // A shortcut caught natively in a page's webview (a real keypress), or a message the
+            // page's own script posted (untrusted: only the page protocol is accepted from it).
+            UserEvent::Key(slot, msg) => self.page_msg(slot, msg, true),
+            UserEvent::Content(slot, msg) => self.page_msg(slot, msg, false),
             UserEvent::Title(slot, title) => {
                 if let Some(i) = self.idx_slot(slot) {
                     if self.tabs[i].ws != PRIVATE_WS {
@@ -3271,7 +3295,7 @@ fn main() {
     if !bench_mode {
         cfg.launches = cfg.launches.saturating_add(1);
         if let Ok(j) = serde_json::to_string_pretty(&cfg) {
-            let _ = fs::write(data_dir.join("settings.json"), j);
+            let _ = library::write_atomic(&data_dir.join("settings.json"), j);
         }
     }
 
