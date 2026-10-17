@@ -69,6 +69,8 @@ use wry::{
 };
 
 const BAR: f64 = 34.0;
+/// Settings are written this long after the last change.
+const SETTINGS_SAVE_DELAY: Duration = Duration::from_millis(500);
 /// How long the audio-bars helper keeps running after the sound stops.
 const BARS_LINGER: Duration = Duration::from_secs(30);
 /// Height of the bookmarks bar under the top bar (when shown).
@@ -411,6 +413,8 @@ struct App {
     booting: bool,
     /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
     win_focused: bool,
+    /// Settings changed and not yet written (saved shortly after the last change).
+    settings_save_at: Option<Instant>,
     /// Saved window placement, applied when the window first shows.
     start_place: Option<WinState>,
     /// The regular workspace shown before the current one (links land there while private is locked).
@@ -461,9 +465,10 @@ fn data_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     let dir = base.join(edition::DATA_DIR);
-    // One-time migration from the browser's old name keeps sessions and sign-ins.
+    // One-time migration from the browser's old name keeps sessions and sign-ins (for the
+    // regular build only: the experimental one must not take them over).
     let old = base.join("Zenith");
-    if !dir.exists() && old.exists() {
+    if edition::DATA_DIR == "Ultra" && !dir.exists() && old.exists() {
         let _ = fs::rename(&old, &dir);
     }
     if edition::DATA_DIR != "Ultra" {
@@ -1174,7 +1179,7 @@ impl App {
         }
         // Put the least-recently-used hidden tabs to sleep until we're under budget,
         // never cutting off a tab that is playing audio.
-        while self.live_count() > self.cfg.warm + self.shown.len() {
+        while self.live_count() > self.cfg.warm + self.shown.len() + usize::from(glance.is_some()) {
             let victim = self
                 .tabs
                 .iter()
@@ -1908,6 +1913,9 @@ impl App {
         if let Some(t) = self.refocus_at {
             d = d.min(t);
         }
+        if let Some(t) = self.settings_save_at {
+            d = d.min(t);
+        }
         if let Some(t) = self.coffee_at {
             d = d.min(t.max(now + Duration::from_millis(250)));
         }
@@ -2099,8 +2107,14 @@ impl App {
             "swirlbright" => self.cfg.swirlbright = v.as_u64().unwrap_or(100).clamp(30, 300) as u16,
             _ => return,
         }
-        self.save_settings();
-        self.apply_layout(false);
+        // Save once the changes settle (dragging a slider sends many), and relayout only for the
+        // settings that move or size panes; everything else is just redrawn.
+        self.settings_save_at = Some(Instant::now() + SETTINGS_SAVE_DELAY);
+        if matches!(key, "bmbar" | "stats" | "ultraspeed" | "warm") {
+            self.apply_layout(false);
+        } else {
+            self.sync();
+        }
     }
 
     /// Hand the saved background image (if any) to the chrome UI, once.
@@ -2134,7 +2148,6 @@ impl App {
         let _ = self.ui.evaluate_script(&format!("ultra.toast({})", json!(msg)));
     }
 
-    /// Open a url as a new tab in workspace `ws` (in the background if that isn't the current one).
     /// A link from another app: a new tab in front of the user, and the window brought forward.
     /// An empty link (ULTRA started again) only brings the window forward.
     fn open_external(&mut self, url: &str) {
@@ -2153,6 +2166,7 @@ impl App {
         self.window.set_focus();
     }
 
+    /// Open a url as a new tab in workspace `ws` (in the background if that isn't the current one).
     fn open_in(&mut self, ws: usize, url: String) {
         if ws == self.ws {
             self.new_tab(url, String::new(), true);
@@ -2207,6 +2221,16 @@ impl App {
 
     /// Close every private tab; their InPrivate data dies with the webviews.
     fn wipe_private(&mut self) {
+        for id in self.dls.forget_private() {
+            if let Some(key) = self.dl_keys.iter().find(|(_, v)| **v == id).map(|(k, _)| *k) {
+                self.dl_keys.remove(&key);
+                if let Some(op) = DL_OPS.with(|m| m.borrow_mut().remove(&key)) {
+                    unsafe {
+                        let _ = op.Cancel();
+                    }
+                }
+            }
+        }
         self.tabs.retain(|t| t.ws != PRIVATE_WS);
         self.stash[PRIVATE_WS] = None;
         if self.ws == PRIVATE_WS {
@@ -3548,6 +3572,7 @@ fn main() {
         lib: library::Library::default(),
         booting: false,
         win_focused: true,
+        settings_save_at: None,
         start_place: None,
         last_ws: 0,
         pending_open: None,
@@ -3651,6 +3676,9 @@ fn main() {
             }
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => {
+                    if app.settings_save_at.take().is_some() {
+                        app.save_settings();
+                    }
                     app.save_session();
                     *flow = ControlFlow::Exit;
                 }
@@ -3707,6 +3735,10 @@ fn main() {
                 if app.refocus_at.is_some_and(|t| now >= t) {
                     app.refocus_at = None;
                     app.restore_focus();
+                }
+                if app.settings_save_at.is_some_and(|t| now >= t) {
+                    app.settings_save_at = None;
+                    app.save_settings();
                 }
                 // The support strip waits until nothing else is on screen (boot, tour, panels, lock).
                 if app.coffee_at.is_some_and(|t| now >= t) && !app.booting && !app.tour && !app.overlay && !app.gate() {

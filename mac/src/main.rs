@@ -50,6 +50,8 @@ use wry::{
 };
 
 const BAR: f64 = 34.0;
+/// Settings are written this long after the last change.
+const SETTINGS_SAVE_DELAY: Duration = Duration::from_millis(500);
 /// Where macOS's window buttons sit, centred in the top bar (the chrome leaves room for them).
 const TRAFFIC_LIGHTS: (f64, f64) = (13.0, 17.0);
 /// Height of the bookmarks bar under the top bar (when shown).
@@ -380,6 +382,8 @@ struct App {
     booting: bool,
     /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
     win_focused: bool,
+    /// Settings changed and not yet written (saved shortly after the last change).
+    settings_save_at: Option<Instant>,
     /// Last normal (not maximized or minimized) window bounds, saved with the session.
     win_normal: Option<WinState>,
     /// The regular workspace shown before the current one (links land there while private is locked).
@@ -988,7 +992,7 @@ impl App {
         }
         // Put the least-recently-used hidden tabs to sleep until we're under budget,
         // never cutting off a tab that is playing audio.
-        while self.live_count() > self.cfg.warm + self.shown.len() {
+        while self.live_count() > self.cfg.warm + self.shown.len() + usize::from(glance.is_some()) {
             let victim = self
                 .tabs
                 .iter()
@@ -1691,6 +1695,9 @@ impl App {
         if let Some(t) = self.refocus_at {
             d = d.min(t);
         }
+        if let Some(t) = self.settings_save_at {
+            d = d.min(t);
+        }
         if let Some(t) = self.coffee_at {
             d = d.min(t.max(now + Duration::from_millis(250)));
         }
@@ -1865,8 +1872,14 @@ impl App {
             "swirlbright" => self.cfg.swirlbright = v.as_u64().unwrap_or(100).clamp(30, 300) as u16,
             _ => return,
         }
-        self.save_settings();
-        self.apply_layout(false);
+        // Save once the changes settle (dragging a slider sends many), and relayout only for the
+        // settings that move or size panes; everything else is just redrawn.
+        self.settings_save_at = Some(Instant::now() + SETTINGS_SAVE_DELAY);
+        if matches!(key, "bmbar" | "stats" | "ultraspeed" | "warm") {
+            self.apply_layout(false);
+        } else {
+            self.sync();
+        }
     }
 
     /// Hand the saved background image (if any) to the chrome UI, once.
@@ -1900,7 +1913,6 @@ impl App {
         let _ = self.ui.evaluate_script(&format!("ultra.toast({})", json!(msg)));
     }
 
-    /// Open a url as a new tab in workspace `ws` (in the background if that isn't the current one).
     /// A link from another app: a new tab in front of the user, and the window brought forward.
     fn open_external(&mut self, url: &str) {
         if !self.ui_ready {
@@ -1922,6 +1934,7 @@ impl App {
         self.window.set_focus();
     }
 
+    /// Open a url as a new tab in workspace `ws` (in the background if that isn't the current one).
     fn open_in(&mut self, ws: usize, url: String) {
         if ws == self.ws {
             self.new_tab(url, String::new(), true);
@@ -1976,6 +1989,7 @@ impl App {
 
     /// Close every private tab; their InPrivate data dies with the webviews.
     fn wipe_private(&mut self) {
+        self.dls.forget_private();
         self.tabs.retain(|t| t.ws != PRIVATE_WS);
         // Its cookies and storage go with the store once the last private page is gone.
         self.private_store = None;
@@ -3280,6 +3294,7 @@ fn main() {
         lib: library::Library::default(),
         booting: false,
         win_focused: true,
+        settings_save_at: None,
         win_normal: None,
         last_ws: 0,
         pending_open: Vec::new(),
@@ -3392,6 +3407,9 @@ fn main() {
             Event::LoopDestroyed => app.save_session(),
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => {
+                    if app.settings_save_at.take().is_some() {
+                        app.save_settings();
+                    }
                     app.save_session();
                     *flow = ControlFlow::Exit;
                 }
@@ -3437,6 +3455,10 @@ fn main() {
                 if app.refocus_at.is_some_and(|t| now >= t) {
                     app.refocus_at = None;
                     app.restore_focus();
+                }
+                if app.settings_save_at.is_some_and(|t| now >= t) {
+                    app.settings_save_at = None;
+                    app.save_settings();
                 }
                 // The support strip waits until nothing else is on screen (boot, tour, panels, lock).
                 if app.coffee_at.is_some_and(|t| now >= t) && !app.booting && !app.tour && !app.overlay && !app.gate() {
