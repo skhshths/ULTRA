@@ -68,7 +68,7 @@ jobs:
         run: |
           gh release delete latest --yes --cleanup-tag || true
           gh release create latest ULTRA-windows-x64.exe ULTRA-macos.zip \
-            --title "ULTRA (latest build)" \
+            --title "ULTRA experimental (latest build)" \
             --target "$GITHUB_SHA" \
             --latest \
             --notes "Newest build of ULTRA, from commit ${GITHUB_SHA::7}.
@@ -76,4 +76,4 @@ jobs:
           - **Windows 10/11:** download \`ULTRA-windows-x64.exe\` and run it. If SmartScreen appears, click *More info → Run anyway*.
           - **macOS 11+ (early preview):** download \`ULTRA-macos.zip\`, drag ULTRA.app to Applications, then right-click → Open the first time.
 
-          See the [README](https://github.com/skhshths/ULTRA#readme) for help getting started."
+          Experimental build: for invited testers only. See the README for help getting started."

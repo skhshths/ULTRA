@@ -1,4 +1,8 @@
-# ULTRA
+# ULTRA (experimental)
+
+> **Private build.** This is the experimental version of ULTRA, shared only with invited GitHub
+> accounts. Features here may be unfinished. Please don't share the downloads. The public
+> version lives at [skhshths/ULTRA](https://github.com/skhshths/ULTRA).
 
 **A fast, minimal, tiling web browser.** Split your screen into panes like a tiling window
 manager, keep dozens of tabs open without your computer slowing down, and browse ad- and
@@ -8,10 +12,10 @@ tracker-free.
 
 | | |
 |---|---|
-| **Windows 10 / 11** | **[Download ULTRA for Windows (.exe)](https://github.com/skhshths/ULTRA/releases/latest/download/ULTRA-windows-x64.exe)** |
-| **macOS 11+** (Apple silicon & Intel) — *early preview* | **[Download ULTRA for Mac (.zip)](https://github.com/skhshths/ULTRA/releases/latest/download/ULTRA-macos.zip)** |
+| **Windows 10 / 11** | **[Download ULTRA for Windows (.exe)](https://github.com/skhshths/ULTRA-experimental/releases/latest/download/ULTRA-windows-x64.exe)** |
+| **macOS 11+** (Apple silicon & Intel) — *early preview* | **[Download ULTRA for Mac (.zip)](https://github.com/skhshths/ULTRA-experimental/releases/latest/download/ULTRA-macos.zip)** |
 
-Always the newest build: these links point at the [latest release](https://github.com/skhshths/ULTRA/releases/latest),
+Always the newest build: these links point at the [latest release](https://github.com/skhshths/ULTRA-experimental/releases/latest),
 which is rebuilt automatically every time ULTRA is updated.
 
 ### Windows: first launch
@@ -34,7 +38,7 @@ which is rebuilt automatically every time ULTRA is updated.
    `xattr -dr com.apple.quarantine /Applications/ULTRA.app`, then open it again.
 
 The Mac version is new and less tested than the Windows one. If something doesn't work,
-please [open an issue](https://github.com/skhshths/ULTRA/issues).
+please [open an issue](https://github.com/skhshths/ULTRA-experimental/issues).
 
 ## Coming from Chrome?
 
@@ -105,6 +109,6 @@ is sent anywhere. Settings → Privacy → **clear history** forgets your histor
 
 ## Help and feedback
 
-Found a bug or have an idea? [Open an issue](https://github.com/skhshths/ULTRA/issues).
+Found a bug or have an idea? [Open an issue](https://github.com/skhshths/ULTRA-experimental/issues).
 
 Want to build ULTRA yourself or change it? See [BUILDING.md](BUILDING.md).
