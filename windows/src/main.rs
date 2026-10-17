@@ -15,6 +15,7 @@
 
 mod audio;
 mod blocker;
+mod downloads;
 mod layout;
 mod library;
 mod privacy;
@@ -44,7 +45,10 @@ use tao::{
 use webview2_com::{
     AddScriptToExecuteOnDocumentCreatedCompletedHandler,
     Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2_13, ICoreWebView2_3, ICoreWebView2_8, COREWEBVIEW2_KEY_EVENT_KIND,
+        ICoreWebView2DownloadOperation, ICoreWebView2_13, ICoreWebView2_3, ICoreWebView2_4, ICoreWebView2_8,
+        COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON, COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_CANCELED,
+        COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_PAUSED, COREWEBVIEW2_DOWNLOAD_STATE,
+        COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED, COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS, COREWEBVIEW2_KEY_EVENT_KIND,
         COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN, COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN,
         COREWEBVIEW2_PHYSICAL_KEY_STATUS, COREWEBVIEW2_PROCESS_FAILED_KIND,
         COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
@@ -52,7 +56,8 @@ use webview2_com::{
         COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
         COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
     },
-    AcceleratorKeyPressedEventHandler, ProcessFailedEventHandler, TrySuspendCompletedHandler,
+    take_pwstr, AcceleratorKeyPressedEventHandler, BytesReceivedChangedEventHandler, DownloadStartingEventHandler,
+    ProcessFailedEventHandler, StateChangedEventHandler, TrySuspendCompletedHandler,
 };
 use windows_core::{Interface, BOOL, HSTRING};
 use wry::{
@@ -139,8 +144,12 @@ enum UserEvent {
     Heap(u64, String),
     /// Next slideshow image, loaded off-thread: (data url, file name).
     Slide(String, String),
-    /// Find-in-page result from the focused page.
-    Found(bool),
+    /// A download began in a page: (key, slot, url, file path, total bytes or 0).
+    DlStart(u64, u64, String, String, i64),
+    /// Bytes so far / total for download `key`.
+    DlProgress(u64, i64, i64),
+    /// Download `key` changed state (final file path once known).
+    DlState(u64, downloads::State, String),
     /// A WebView2 process died: (slot, 0 = the chrome UI; failure kind).
     Failed(u64, i32),
 }
@@ -363,8 +372,9 @@ struct App {
     last_blocked: u64,
     /// After the window is activated (alt+tab), check where keyboard focus landed.
     refocus_at: Option<Instant>,
-    /// Last text searched with ctrl+f.
-    find_text: String,
+    /// The downloads panel's list, and download key (see `watch_downloads`) -> list id.
+    dls: downloads::Downloads,
+    dl_keys: HashMap<u64, u64>,
     /// Audio-reactive visuals: mixer meters for the WebView2 process tree.
     meter: audio::Meter,
     engine_pids: HashSet<u32>,
@@ -545,6 +555,73 @@ fn watch_failures(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
     }
 }
 
+thread_local! {
+    /// Downloads in flight, by key: kept so the downloads panel can pause, resume and cancel them.
+    /// WebView2 raises download events on the UI thread, the same one the event loop runs on.
+    static DL_OPS: std::cell::RefCell<HashMap<u64, ICoreWebView2DownloadOperation>> = Default::default();
+}
+static DL_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// ULTRA's own downloads list instead of WebView2's download bubble: every download a page
+/// starts is reported (start, progress, end) and kept controllable from the downloads panel.
+fn watch_downloads(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
+    let Ok(wv4) = v.webview().cast::<ICoreWebView2_4>() else { return };
+    let h = DownloadStartingEventHandler::create(Box::new(move |_, args| {
+        let Some(a) = args else { return Ok(()) };
+        unsafe {
+            a.SetHandled(true)?; // no WebView2 download bubble
+            let op = a.DownloadOperation()?;
+            let key = DL_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let (mut uri, mut path, mut total) = (windows_core::PWSTR::null(), windows_core::PWSTR::null(), 0i64);
+            op.Uri(&mut uri)?;
+            a.ResultFilePath(&mut path)?;
+            let _ = op.TotalBytesToReceive(&mut total);
+            let _ = proxy.send_event(UserEvent::DlStart(key, slot, take_pwstr(uri), take_pwstr(path), total));
+            let p = proxy.clone();
+            let bytes = BytesReceivedChangedEventHandler::create(Box::new(move |op, _| {
+                if let Some(op) = op {
+                    let (mut got, mut total) = (0i64, 0i64);
+                    let _ = op.BytesReceived(&mut got);
+                    let _ = op.TotalBytesToReceive(&mut total);
+                    let _ = p.send_event(UserEvent::DlProgress(key, got, total));
+                }
+                Ok(())
+            }));
+            let p = proxy.clone();
+            let state = StateChangedEventHandler::create(Box::new(move |op, _| {
+                let Some(op) = op else { return Ok(()) };
+                let (mut st, mut why) = (COREWEBVIEW2_DOWNLOAD_STATE::default(), COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON::default());
+                op.State(&mut st)?;
+                let _ = op.InterruptReason(&mut why);
+                let s = if st == COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS {
+                    downloads::State::Active
+                } else if st == COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED {
+                    downloads::State::Done
+                } else if why == COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_PAUSED {
+                    downloads::State::Paused
+                } else if why == COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_CANCELED {
+                    downloads::State::Cancelled
+                } else {
+                    downloads::State::Failed
+                };
+                let mut path = windows_core::PWSTR::null();
+                let path = if op.ResultFilePath(&mut path).is_ok() { take_pwstr(path) } else { String::new() };
+                let _ = p.send_event(UserEvent::DlState(key, s, path));
+                Ok(())
+            }));
+            let mut t = 0i64;
+            let _ = op.add_BytesReceivedChanged(&bytes, &mut t);
+            let _ = op.add_StateChanged(&state, &mut t);
+            DL_OPS.with(|m| m.borrow_mut().insert(key, op));
+        }
+        Ok(())
+    }));
+    let mut token = 0i64;
+    unsafe {
+        let _ = wv4.add_DownloadStarting(&h, &mut token);
+    }
+}
+
 /// Virtual-key code for the keys ULTRA's shortcuts use (letters, digits, arrows, tab, comma).
 fn window_vk(k: tao::keyboard::KeyCode) -> Option<u32> {
     use tao::keyboard::KeyCode as K;
@@ -609,7 +686,8 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('W')) => "closeat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
         (false, true, None, Some('R')) => "blankat".into(),
-        (false, false, None, Some('F')) => "find".into(),
+        (false, false, None, Some('F')) => "focusurl".into(),
+        (false, false, None, Some('J')) => "downloads".into(),
         (false, false, None, Some('T')) => "new".into(),
         (false, false, None, Some('W')) => "close".into(),
         (false, false, None, Some('L')) => "focusurl".into(),
@@ -813,6 +891,7 @@ impl App {
             Ok(v) => {
                 watch_failures(&v, self.proxy.clone(), slot);
                 watch_keys(&v, self.proxy.clone(), slot);
+                watch_downloads(&v, self.proxy.clone(), slot);
                 blocker::install(&v, self.blocked.clone());
                 if self.cfg.block {
                     blocker::set_filters(&v, true);
@@ -1511,6 +1590,8 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            // Private-workspace downloads are only listed while it is unlocked.
+            "dl": self.dls.view(!self.locked),
             // Back/forward buttons: whether the focused tab's own history allows each way.
             "nav": self.tabs.get(self.cur()).and_then(|t| t.view.as_ref()).map(|v| {
                 [v.can_go_back().unwrap_or(false), v.can_go_forward().unwrap_or(false)]
@@ -1565,6 +1646,7 @@ impl App {
             let _ = fs::write(self.data_dir.join("session.json"), j);
         }
         self.lib.save(&self.data_dir);
+        self.dls.save(&self.data_dir);
     }
 
     fn save_settings(&self) {
@@ -2073,7 +2155,7 @@ impl App {
             }
             match msg {
                 "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
-                | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "find" => {
+                | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" => {
                     self.command(msg, &Value::Null)
                 }
                 _ => {}
@@ -2462,7 +2544,7 @@ impl App {
                 let _ = self.ui.focus();
                 let _ = self.ui.evaluate_script("ultra.focusUrl()");
             }
-            "overview" | "settings" | "palette" | "urlpanel" => {
+            "overview" | "settings" | "palette" | "urlpanel" | "downloads" => {
                 // These panels cover the content area, so pages are hidden while open.
                 let on = arg.as_bool().unwrap_or(!self.overlay);
                 self.overlay = on;
@@ -2579,31 +2661,45 @@ impl App {
                     self.navigate(i, HOME);
                 }
             }
-            "find" => {
-                // ULTRA's find (no WebView2 popup): the address bar becomes a find box.
-                if self.tabs.get(self.cur()).is_some_and(|t| t.view.is_some()) {
-                    let _ = self.ui.focus();
-                    let _ = self.ui.evaluate_script(&format!("ultra.find({})", json!(self.find_text)));
-                } else {
-                    self.toast("nothing to find in here");
+            "dl" => {
+                // The downloads panel's buttons: [action, download id].
+                let (act, id) = (arg[0].as_str().unwrap_or(""), arg[1].as_u64().unwrap_or(0));
+                let op = self.dl_keys.iter().find(|(_, v)| **v == id).and_then(|(k, _)| DL_OPS.with(|m| m.borrow().get(k).cloned()));
+                match act {
+                    "open" => {
+                        if let Some(p) = self.dls.path_of(id) {
+                            downloads::open(&p);
+                        }
+                    }
+                    "reveal" => {
+                        if let Some(p) = self.dls.path_of(id) {
+                            downloads::reveal(&p);
+                        }
+                    }
+                    "folder" => downloads::open(&downloads::folder().to_string_lossy()),
+                    "cancel" | "pause" | "resume" => {
+                        if let Some(op) = op {
+                            unsafe {
+                                let _ = match act {
+                                    "cancel" => op.Cancel(),
+                                    "pause" => op.Pause(),
+                                    _ => op.Resume(),
+                                };
+                            }
+                        }
+                    }
+                    "remove" => {
+                        if let Some(op) = op {
+                            unsafe {
+                                let _ = op.Cancel();
+                            }
+                        }
+                        self.dls.remove(id);
+                    }
+                    "clear" => self.dls.clear(),
+                    _ => {}
                 }
-            }
-            "findtext" => {
-                let (text, back) = (arg[0].as_str().unwrap_or("").to_string(), arg[1].as_bool().unwrap_or(false));
-                self.find_text = text.clone();
-                if let (false, Some(v)) = (text.is_empty(), self.tabs.get(self.cur()).and_then(|t| t.view.as_ref())) {
-                    let proxy = self.proxy.clone();
-                    let js = format!("window.find({}, false, {back}, true)", json!(text));
-                    let _ = v.evaluate_script_with_callback(&js, move |r| {
-                        let _ = proxy.send_event(UserEvent::Found(r.trim() == "true"));
-                    });
-                }
-            }
-            "findclose" => {
-                self.with_active(|v| {
-                    let _ = v.evaluate_script("getSelection().removeAllRanges()");
-                });
-                self.focus_active();
+                self.sync();
             }
             "importchrome" => {
                 // Onboarding from Chrome: bookmarks land in the bookmarks bar right away.
@@ -2892,8 +2988,36 @@ impl App {
                 self.open_in(ws, url);
             }
             UserEvent::Procs(p) => self.on_procs(p),
-            UserEvent::Found(f) => {
-                let _ = self.ui.evaluate_script(&format!("ultra.found({f})"));
+            UserEvent::DlStart(key, slot, url, path, total) => {
+                let private = self.tabs.iter().any(|t| t.slot == slot && t.ws == PRIVATE_WS);
+                let id = self.dls.start(&url, &path, total, private);
+                self.dl_keys.insert(key, id);
+                self.toast(&format!("downloading {} · ctrl+j for downloads", downloads::file_name(&path)));
+                self.sync();
+            }
+            UserEvent::DlProgress(key, got, total) => {
+                if let Some(&id) = self.dl_keys.get(&key) {
+                    if self.dls.progress(id, got, total) {
+                        self.sync();
+                    }
+                }
+            }
+            UserEvent::DlState(key, state, path) => {
+                if let Some(&id) = self.dl_keys.get(&key) {
+                    self.dls.set_state(id, state, Some(&path));
+                    let name = self.dls.list.iter().find(|d| d.id == id).map(|d| d.name.clone()).unwrap_or_default();
+                    match state {
+                        downloads::State::Done => self.toast(&format!("downloaded {name} · ctrl+j for downloads")),
+                        downloads::State::Failed => self.toast(&format!("download failed: {name}")),
+                        _ => {}
+                    }
+                    if !matches!(state, downloads::State::Active | downloads::State::Paused) {
+                        self.dl_keys.remove(&key);
+                        DL_OPS.with(|m| m.borrow_mut().remove(&key));
+                    }
+                    self.dls.save(&self.data_dir);
+                    self.sync();
+                }
             }
             UserEvent::Slide(data, name) => {
                 self.slide_loading = false;
@@ -3084,7 +3208,8 @@ fn main() {
         timing: None,
         last_blocked: 0,
         refocus_at: None,
-        find_text: String::new(),
+        dls: downloads::Downloads::default(),
+        dl_keys: HashMap::new(),
         meter: audio::Meter::default(),
         engine_pids: HashSet::new(),
         pids_dirty: false,
@@ -3126,6 +3251,7 @@ fn main() {
     app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
     app.lib = library::Library::load(&app.data_dir);
+    app.dls = downloads::Downloads::load(&app.data_dir);
     app.booting = app.cfg.boot && !app.cfg.ultraspeed;
     app.boot_until = Instant::now() + Duration::from_secs(4);
     app.zaps = fs::read_to_string(app.data_dir.join("zaps.json"))
@@ -3280,7 +3406,8 @@ mod tests {
         // ctrl+alt+p is left to the page script (it needs the key press as a user gesture).
         assert_eq!(shortcut(k('P'), true, false, true), None);
         assert_eq!(shortcut(k('R'), true, true, false).as_deref(), Some("blankat"));
-        assert_eq!(shortcut(k('F'), true, false, false).as_deref(), Some("find"));
+        assert_eq!(shortcut(k('F'), true, false, false).as_deref(), Some("focusurl"));
+        assert_eq!(shortcut(k('J'), true, false, false).as_deref(), Some("downloads"));
         // Not ours: plain keys, ctrl+c, ctrl+r (reload) pass through.
         assert_eq!(shortcut(k('T'), false, false, false), None);
         assert_eq!(shortcut(k('C'), true, false, false), None);

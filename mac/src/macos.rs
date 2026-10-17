@@ -3,7 +3,7 @@
 //! - Shortcuts in every frame: one local NSEvent monitor sees each key before any page
 //!   (WebView2's AcceleratorKeyPressed did this per webview).
 //! - Browser accelerators WebView2 handles inside pages (reload, back/forward, page zoom,
-//!   find, print, devtools, mouse back/forward buttons) are routed to the pane by hand.
+//!   print, devtools, mouse back/forward buttons) are routed to the pane by hand.
 //! - An application menu, without which ⌘C/⌘V/⌘Z/⌘A do nothing in a WKWebView.
 //! - Probes for "is this page playing audio" and "which process renders it".
 
@@ -136,8 +136,6 @@ pub fn mac_shortcut(vk: u32, cmd: bool, ctrl: bool, shift: bool, opt: bool) -> O
             (_, Some('I')) if cmd && opt => "devtools",
             (_, Some('R')) if plain => "reload",
             (_, Some('R')) if cmd && shift && !opt => "reader", // Safari's reader key
-            (_, Some('F')) if plain => "find",
-            (_, Some('G')) if cmd && !opt => if shift { "findprev" } else { "findnext" },
             (_, Some('P')) if plain => "print",
             (VK_LBRACKET, _) if plain => "back",
             (VK_RBRACKET, _) if plain => "fwd",
@@ -291,20 +289,6 @@ pub fn zoom(v: &WebView, how: &str) {
         _ => 1.0,
     };
     unsafe { w.setPageZoom(next) };
-}
-
-/// Find in page; `done(found)` runs on the main thread.
-pub fn find(v: &WebView, text: &str, backwards: bool, done: impl Fn(bool) + 'static) {
-    let Some(mtm) = MainThreadMarker::new() else { return };
-    let w = v.webview();
-    let cfg = unsafe { objc2_web_kit::WKFindConfiguration::new(mtm) };
-    unsafe {
-        cfg.setBackwards(backwards);
-        cfg.setWraps(true);
-        cfg.setCaseSensitive(false);
-    }
-    let block = RcBlock::new(move |r: NonNull<objc2_web_kit::WKFindResult>| done(unsafe { r.as_ref().matchFound() }));
-    unsafe { w.findString_withConfiguration_completionHandler(&NSString::from_str(text), Some(&cfg), &block) };
 }
 
 /// Separate persistent data stores per workspace need macOS 14 (`WKWebsiteDataStore(forIdentifier:)`).

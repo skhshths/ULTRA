@@ -17,7 +17,7 @@ the same Rust libraries ([wry](https://github.com/tauri-apps/wry) and [tao](http
 
 | What | Version | Why |
 |---|---|---|
-| macOS | 11 Big Sur or newer | WKWebView find-in-page and page zoom APIs |
+| macOS | 11 Big Sur or newer | WKWebView page zoom APIs |
 | macOS (optional) | 14.2 Sonoma or newer | Audio-reactive visuals and audio bars (Core Audio process taps). On older systems everything else works and those visuals stay still. |
 | Rust | stable, 1.80+ | Install from <https://rustup.rs> |
 | Xcode Command Line Tools | any recent | Linker and `codesign`: `xcode-select --install` |
@@ -90,7 +90,8 @@ The help text inside the app (tutorial, settings, tooltips) uses the Mac names.
 | Bookmark / settings | ctrl+d / ctrl+, | ⌘D / ⌘, |
 | Back / forward | alt+← / alt+→ | ⌘[ / ⌘], mouse buttons 4/5, two-finger swipe |
 | Reload | ctrl+r, F5 | ⌘R, F5 |
-| Find in page | ctrl+f | ⌘F (the address bar becomes the find box: Enter = next, ⇧Enter = previous, Esc = done), ⌘G / ⌘⇧G |
+| Search or go to a site | ctrl+l / ctrl+f | ⌘L / ⌘F |
+| Downloads panel | ctrl+j | ⌘J |
 | Page zoom | ctrl+= / ctrl+- / ctrl+0 | ⌘= / ⌘- / ⌘0, or pinch |
 | Print / developer tools | ctrl+p / F12 | ⌘P / ⌘⌥I or F12 |
 | Copy, paste, undo, select all | ctrl+c/v/z/a | ⌘C/V/Z/A |
@@ -114,7 +115,7 @@ video players, ad iframes, PDFs, and sites that swallow keys. On Windows that is
 | Page engine | WebView2 (Chromium/Edge) | WKWebView (WebKit/Safari) |
 | Window | Borderless, ULTRA draws ─ □ ✕ and resize grips | Native window: traffic-light buttons sit over the left of ULTRA's top bar; resize from the edges; rounded corners, shadow, full screen |
 | Shortcuts in every frame | `AcceleratorKeyPressed` per webview | One `NSEvent` local monitor for the window |
-| Browser keys inside pages (reload, back, zoom, find, print, devtools) | Built into WebView2 | Routed to the pane by ULTRA |
+| Browser keys inside pages (reload, back, zoom, print, devtools) | Built into WebView2 | Routed to the pane by ULTRA |
 | Copy/paste | Built in | App menu bar with an Edit menu (WKWebView has no copy/paste without one) |
 | Sleeping hidden tabs | `TrySuspend` + memory level "low" | WebKit suspends hidden pages by itself (`inactiveSchedulingPolicy = suspend`); ULTRA's warm-tab budget and 10-minute sleep work the same |
 | Tab playing audio (never put to sleep) | `IsDocumentPlayingAudio` | WebKit's `_isPlayingAudio` flag, the one Safari's tab speaker uses |
@@ -127,7 +128,7 @@ video players, ad iframes, PDFs, and sites that swallow keys. On Windows that is
 | Audio-reactive visuals | Windows mixer peak meter (no permission needed) | Core Audio process tap on ULTRA's own processes (macOS asks once for **System Audio Recording**) |
 | Audio bars | WASAPI process loopback + FFT | The same tap + the same FFT |
 | Crash recovery | Renderer crash → reload, twice → sleep; engine crash → relaunch | Page process crash → reload, twice → sleep; WebKit restarts its shared processes itself, so no relaunch is needed |
-| Downloads | Saved to Downloads, numbered instead of overwriting; download bubble | Saved to ~/Downloads, numbered the same way; ULTRA shows a notice when each starts and finishes |
+| Downloads | Saved to Downloads; ULTRA's downloads panel with live progress, pause, resume and cancel | Saved to ~/Downloads, numbered instead of overwriting; the same downloads panel, without byte progress or pause (wry reports only start and finish) |
 | Slideshow folder picker | Windows folder dialog | Native folder picker as a sheet on the window |
 | Phishing protection | SmartScreen | WebKit's fraudulent-website warnings (Safe Browsing) |
 | Separate logins per workspace | A separate WebView2 profile per workspace | A separate persistent WebKit data store per workspace (`WKWebsiteDataStore(forIdentifier:)`, **macOS 14+**; on older systems the setting says so and stays off) |
@@ -190,7 +191,7 @@ build and report anything that is off:
 2. Drag the window by an empty part of the top bar; double-click it to zoom.
 3. ⌘T, ⌘W, ⌘1, ⌘⇧E, ⌘⌥2 with the focus inside a web page *and* in the address bar.
 4. ⌘C / ⌘V in a page's text field.
-5. ⌘F on a page, type, Enter / ⇧Enter, Esc.
+5. Download a file: the ↓ appears in the top bar; ⌘J lists it with open / show in Finder.
 6. Play a YouTube video with "audio reactive" on: accept the permission prompt and the
    background should pulse.
 7. Settings → pane stats on: each pane header should show MB and CPU.
@@ -202,15 +203,15 @@ build and report anything that is off:
 | File | What it does |
 |---|---|
 | `src/main.rs` | The app: tabs, tiling, workspaces, sleeping, session, settings, commands. Same structure as the Windows `main.rs`; platform calls swapped. |
-| `src/macos.rs` | macOS glue: key/mouse monitor and shortcut mapping, menu bar, audio and process probes, page setup, zoom, find, Dock icon. |
+| `src/macos.rs` | macOS glue: key/mouse monitor and shortcut mapping, menu bar, audio and process probes, page setup, zoom, Dock icon. |
 | `src/blocker.rs` | Ad/tracker domain list → WebKit content-rule list; blocked-request counter. |
 | `src/audio.rs` | Core Audio process tap (level meter + samples for the bars). |
 | `src/spectrum.rs` | FFT and band smoothing for the audio bars (no platform code). |
 | `src/stats.rs` | Finds ULTRA's WebKit processes; memory and CPU per process. |
 | `src/privacy.rs` | Password hashing, idle time, screen-capture hiding. |
 | `src/slideshow.rs` | Folder picker sheet; loading images for the slideshow background. |
-| `src/layout.rs`, `src/library.rs` | Tiling tree; history, bookmarks, daily digest (shared with Windows). |
-| `src/ui.html`, `src/content.js` | The chrome UI and the script injected into pages (Mac labels, find box). |
+| `src/layout.rs`, `src/library.rs`, `src/downloads.rs` | Tiling tree; history, bookmarks, daily digest; the downloads list (shared with Windows). |
+| `src/ui.html`, `src/content.js` | The chrome UI and the script injected into pages (Mac labels). |
 | `src/reader.js` | Reader view (shared with Windows). |
 | `bundle/Info.plist`, `tools/bundle.sh` | App bundle metadata and the script that builds `ULTRA.app`. |
 

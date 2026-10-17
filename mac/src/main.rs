@@ -13,6 +13,7 @@
 
 mod audio;
 mod blocker;
+mod downloads;
 mod layout;
 mod library;
 mod macos;
@@ -133,11 +134,10 @@ enum UserEvent {
     Folder(Option<String>),
     /// The ad-blocking rules finished compiling.
     RulesReady,
-    /// Find-in-page result.
-    Found(bool),
-    /// A download started (file name in ~/Downloads) or finished (ok).
-    DownloadStarted(String),
-    DownloadDone(bool),
+    /// A download started: (slot, url, file path in ~/Downloads).
+    DownloadStarted(u64, String, String),
+    /// A download ended: (url, final path, ok).
+    DownloadDone(String, Option<String>, bool),
 }
 
 struct Tab {
@@ -386,8 +386,8 @@ struct App {
     /// Native key/mouse monitor and the menu's action target (kept alive with the app).
     _input: Option<Retained<objc2::runtime::AnyObject>>,
     _menu: Option<Retained<macos::MenuTarget>>,
-    /// Last search typed into find-in-page.
-    find_text: String,
+    /// The downloads panel's list.
+    dls: downloads::Downloads,
 }
 
 /// ~/Library/Application Support/Ultra. (Cookies, sign-ins and site data live in WebKit's
@@ -539,6 +539,8 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('W')) => "closeat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
         (false, true, None, Some('R')) => "blankat".into(),
+        (false, false, None, Some('F')) => "focusurl".into(),
+        (false, false, None, Some('J')) => "downloads".into(),
         (false, false, None, Some('T')) => "new".into(),
         (false, false, None, Some('W')) => "close".into(),
         (false, false, None, Some('L')) => "focusurl".into(),
@@ -708,15 +710,15 @@ impl App {
             .with_on_web_content_process_terminate_handler(move || {
                 let _ = p5.send_event(UserEvent::Failed(slot));
             })
-            // Downloads go to ~/Downloads, numbered instead of overwriting (as WebView2 does);
-            // the chrome says when one starts and ends, in place of WebView2's download bubble.
-            .with_download_started_handler(move |_, path| {
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                let _ = p6.send_event(UserEvent::DownloadStarted(name));
+            // Downloads go to ~/Downloads, numbered instead of overwriting (as WebView2 does),
+            // and are listed in ULTRA's downloads panel (cmd+j).
+            .with_download_started_handler(move |url, path| {
+                let _ = p6.send_event(UserEvent::DownloadStarted(slot, url, path.to_string_lossy().into_owned()));
                 true
             })
-            .with_download_completed_handler(move |_, _, ok| {
-                let _ = p7.send_event(UserEvent::DownloadDone(ok));
+            .with_download_completed_handler(move |url, path, ok| {
+                let path = path.map(|p| p.to_string_lossy().into_owned());
+                let _ = p7.send_event(UserEvent::DownloadDone(url, path, ok));
             })
             .build_as_child(&self.window);
         match res {
@@ -1413,6 +1415,8 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            // Private-workspace downloads are only listed while it is unlocked.
+            "dl": self.dls.view(!self.locked),
             // Back/forward buttons: whether the focused tab's own history allows each way.
             "nav": self.tabs.get(self.cur()).and_then(|t| t.view.as_ref()).map(|v| {
                 [v.can_go_back().unwrap_or(false), v.can_go_forward().unwrap_or(false)]
@@ -1469,6 +1473,7 @@ impl App {
             let _ = fs::write(self.data_dir.join("session.json"), j);
         }
         self.lib.save(&self.data_dir);
+        self.dls.save(&self.data_dir);
     }
 
     fn save_settings(&self) {
@@ -1945,12 +1950,7 @@ impl App {
 
     /// Browser keys WebView2 handles inside a page on Windows, done by hand for WKWebView.
     fn page_key(&mut self, i: usize, msg: &str) {
-        let Some(v) = self.tabs.get(i).and_then(|t| t.view.as_ref()) else {
-            if msg == "find" {
-                self.toast("nothing to find in here");
-            }
-            return;
-        };
+        let Some(v) = self.tabs.get(i).and_then(|t| t.view.as_ref()) else { return };
         match msg {
             "back" => {
                 let _ = v.go_back();
@@ -1966,29 +1966,7 @@ impl App {
                 let _ = v.print();
             }
             "zoomin" | "zoomout" | "zoomreset" => macos::zoom(v, msg),
-            "find" => {
-                let _ = self.ui.focus();
-                let _ = self.ui.evaluate_script(&format!("ultra.find({})", json!(self.find_text)));
-            }
-            "findnext" | "findprev" => {
-                let text = self.find_text.clone();
-                self.find(&text, msg == "findprev");
-            }
             _ => {}
-        }
-    }
-
-    /// Find-in-page in the focused pane; the chrome's find box shows whether it matched.
-    fn find(&mut self, text: &str, backwards: bool) {
-        self.find_text = text.to_string();
-        if text.is_empty() {
-            return;
-        }
-        if let Some(v) = self.page() {
-            let proxy = self.proxy.clone();
-            macos::find(v, text, backwards, move |found| {
-                let _ = proxy.send_event(UserEvent::Found(found));
-            });
         }
     }
 
@@ -2324,13 +2302,27 @@ impl App {
                 let _ = v.reload();
             }),
             "devtools" => self.with_active(|v| v.open_devtools()),
-            // Find in page (⌘F): the chrome's address bar turns into the find box.
-            "find" => self.page_key(cur, "find"),
-            "findtext" => {
-                let text = arg[0].as_str().unwrap_or("").to_string();
-                self.find(&text, arg[1].as_bool().unwrap_or(false));
+            "dl" => {
+                // The downloads panel's buttons: [action, download id].
+                let (act, id) = (arg[0].as_str().unwrap_or(""), arg[1].as_u64().unwrap_or(0));
+                match act {
+                    "open" => {
+                        if let Some(p) = self.dls.path_of(id) {
+                            downloads::open(&p);
+                        }
+                    }
+                    "reveal" => {
+                        if let Some(p) = self.dls.path_of(id) {
+                            downloads::reveal(&p);
+                        }
+                    }
+                    "folder" => downloads::open(&downloads::folder().to_string_lossy()),
+                    "remove" => self.dls.remove(id),
+                    "clear" => self.dls.clear(),
+                    _ => {}
+                }
+                self.sync();
             }
-            "findclose" => self.focus_active(),
             "sleep" => {
                 if let Some(i) = arg.as_u64().map(|v| v as usize) {
                     if i < n && !self.root.contains(self.tabs[i].id) {
@@ -2353,7 +2345,7 @@ impl App {
                 let _ = self.ui.focus();
                 let _ = self.ui.evaluate_script("ultra.focusUrl()");
             }
-            "overview" | "settings" | "palette" | "urlpanel" => {
+            "overview" | "settings" | "palette" | "urlpanel" | "downloads" => {
                 // These panels cover the content area, so pages are hidden while open.
                 let on = arg.as_bool().unwrap_or(!self.overlay);
                 self.overlay = on;
@@ -2736,7 +2728,7 @@ impl App {
                 }
                 match msg.as_str() {
                     "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
-                    | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" => {
+                    | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" => {
                         self.command(&msg, &Value::Null)
                     }
                     _ => {}
@@ -2805,11 +2797,24 @@ impl App {
                     blocker::set_filters(view, self.cfg.block);
                 }
             }
-            UserEvent::Found(found) => {
-                let _ = self.ui.evaluate_script(&format!("ultra.found({found})"));
+            UserEvent::DownloadStarted(slot, url, path) => {
+                let private = self.tabs.iter().any(|t| t.slot == slot && t.ws == PRIVATE_WS);
+                self.dls.start(&url, &path, 0, private);
+                self.toast(&format!("downloading {} · cmd+j for downloads", downloads::file_name(&path)));
+                self.sync();
             }
-            UserEvent::DownloadStarted(name) => self.toast(&format!("downloading {name} to Downloads")),
-            UserEvent::DownloadDone(ok) => self.toast(if ok { "download finished · in your Downloads folder" } else { "download failed" }),
+            UserEvent::DownloadDone(url, path, ok) => {
+                // wry reports the end by url: it belongs to the newest running download of that url.
+                let id = self.dls.list.iter().find(|d| d.url == url && d.state == downloads::State::Active).map(|d| d.id);
+                if let Some(id) = id {
+                    let state = if ok { downloads::State::Done } else { downloads::State::Failed };
+                    self.dls.set_state(id, state, path.as_deref());
+                    let name = self.dls.list.iter().find(|d| d.id == id).map(|d| d.name.clone()).unwrap_or_default();
+                    self.toast(&if ok { format!("downloaded {name} · cmd+j for downloads") } else { format!("download failed: {name}") });
+                    self.dls.save(&self.data_dir);
+                    self.sync();
+                }
+            }
         }
     }
 
@@ -2825,7 +2830,7 @@ impl App {
         let Some(i) = i else { return };
         if matches!(
             msg.as_str(),
-            "back" | "fwd" | "reload" | "devtools" | "print" | "zoomin" | "zoomout" | "zoomreset" | "find" | "findnext" | "findprev"
+            "back" | "fwd" | "reload" | "devtools" | "print" | "zoomin" | "zoomout" | "zoomreset"
         ) {
             let id = self.tabs[i].id;
             if id != self.focus && self.shown.iter().any(|(x, _)| *x == id) {
@@ -2866,7 +2871,7 @@ impl App {
         } else if matches!(
             msg,
             "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat"
-                | "zoom" | "lock" | "bookmark" | "reader" | "blankat"
+                | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads"
         ) {
             self.command(msg, &Value::Null);
         }
@@ -3083,7 +3088,7 @@ fn main() {
         next_tick: now + TICK,
         _input: input,
         _menu: menu,
-        find_text: String::new(),
+        dls: downloads::Downloads::default(),
     };
 
     if bench_mode {
@@ -3105,6 +3110,7 @@ fn main() {
     app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
     app.lib = library::Library::load(&app.data_dir);
+    app.dls = downloads::Downloads::load(&app.data_dir);
     app.booting = app.cfg.boot && !app.cfg.ultraspeed;
     app.boot_until = Instant::now() + Duration::from_secs(4);
     app.zaps = fs::read_to_string(app.data_dir.join("zaps.json"))
@@ -3247,9 +3253,11 @@ mod tests {
         assert_eq!(shortcut(0x78, false, false, false).as_deref(), Some("reader"));
         // ctrl+alt+p is left to the page script (it needs the key press as a user gesture).
         assert_eq!(shortcut(k('P'), true, false, true), None);
-        // Not ours: plain keys, ctrl+c, ctrl+f (page find) pass through.
+        // cmd+f goes to the address bar (search or go), cmd+j opens downloads.
+        assert_eq!(shortcut(k('F'), true, false, false).as_deref(), Some("focusurl"));
+        assert_eq!(shortcut(k('J'), true, false, false).as_deref(), Some("downloads"));
+        // Not ours: plain keys, ctrl+c pass through.
         assert_eq!(shortcut(k('T'), false, false, false), None);
         assert_eq!(shortcut(k('C'), true, false, false), None);
-        assert_eq!(shortcut(k('F'), true, false, false), None);
     }
 }

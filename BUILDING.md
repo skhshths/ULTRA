@@ -22,7 +22,7 @@ Run the tests with `cargo test --release` in either folder.
 
 ## Shared files
 
-`layout.rs`, `library.rs`, `ui.html`, `content.js` and `reader.js` exist in both `windows/src`
+`layout.rs`, `library.rs`, `downloads.rs`, `ui.html`, `content.js` and `reader.js` exist in both `windows/src`
 and `mac/src`. When you change one, port the change to the other so the two builds keep
 behaving the same. The UI shows platform key names itself (`ctrl`/`alt` on Windows,
 `cmd`/`option` on macOS).

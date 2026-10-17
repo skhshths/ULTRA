@@ -66,8 +66,8 @@ When ULTRA opens, a short tour walks you through everything. You can replay it a
 | Shortcut | What it does |
 |---|---|
 | `ctrl+t` / `ctrl+w` | New tab / close tab |
-| `ctrl+l` | Go to the address bar |
-| `ctrl+f` | Find on the page |
+| `ctrl+l` or `ctrl+f` | Go to the address bar: search, or type a site to go there |
+| `ctrl+j` | Downloads |
 | `ctrl+d` | Bookmark the page |
 | `ctrl+k` | See all your tabs |
 | `ctrl+shift+p` | Command palette: type what you want to do |
@@ -89,6 +89,8 @@ When ULTRA opens, a short tour walks you through everything. You can replay it a
 - **A private workspace** (`ctrl+alt+0`) that saves nothing at all, is hidden from screenshots and
   screen sharing, and locks with a password when you step away.
 - **Separate logins per workspace**, so you can be signed into two accounts at once.
+- **A clean downloads panel** (`ctrl+j`, or the ↓ in the top bar): progress and speed for each
+  download, pause or cancel, open the file or show it in its folder.
 - **Handy extras:** link previews (`ctrl+shift+click` a link), reader view, picture-in-picture for
   videos, history and bookmark suggestions as you type, and a "today" summary on new tabs.
 - **Make it yours:** 12 colour themes plus a colour picker, animated backgrounds (or your own
