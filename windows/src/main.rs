@@ -16,6 +16,7 @@
 mod audio;
 mod blocker;
 mod downloads;
+mod instance;
 mod layout;
 mod library;
 mod privacy;
@@ -147,6 +148,8 @@ enum UserEvent {
     Key(u64, String),
     /// A WebView2 process died: (slot, 0 = the chrome UI; failure kind).
     Failed(u64, i32),
+    /// A second launch of ULTRA: bring the window forward (and open its link, if it had one).
+    Open(String),
 }
 
 struct Tab {
@@ -1923,6 +1926,18 @@ impl App {
     }
 
     /// Open a url as a new tab in workspace `ws` (in the background if that isn't the current one).
+    /// ULTRA was started again: come forward, and open the link it was started with, if any.
+    fn open_external(&mut self, url: &str) {
+        let lower = url.to_ascii_lowercase();
+        if lower.starts_with("http://") || lower.starts_with("https://") {
+            let ws = if self.ws == PRIVATE_WS && self.locked { 0 } else { self.ws };
+            self.open_in(ws, url.to_string());
+        }
+        self.window.set_minimized(false);
+        self.window.set_visible(true);
+        self.window.set_focus();
+    }
+
     fn open_in(&mut self, ws: usize, url: String) {
         if ws == self.ws {
             self.new_tab(url, String::new(), true);
@@ -2986,6 +3001,7 @@ impl App {
                 self.open_in(ws, url);
             }
             UserEvent::Procs(p) => self.on_procs(p),
+            UserEvent::Open(u) => self.open_external(&u),
             UserEvent::DlStart(key, slot, url, path, total) => {
                 let private = self.tabs.iter().any(|t| t.slot == slot && t.ws == PRIVATE_WS);
                 let id = self.dls.start(&url, &path, total, private);
@@ -3116,6 +3132,17 @@ fn main() {
     let bench_mode = std::env::args().any(|a| a == "--bench");
     let data_dir = data_dir();
     let _ = fs::create_dir_all(&data_dir);
+    // One ULTRA per profile: a second launch hands over to the running one (which comes
+    // forward, and opens the web address it was given, if any) instead of opening a second
+    // window over the same session, where whichever closed last would overwrite the other.
+    let link = std::env::args().skip(1).find(|a| {
+        let l = a.to_ascii_lowercase();
+        l.starts_with("http://") || l.starts_with("https://")
+    });
+    let pipe = instance::pipe_name(&data_dir);
+    if !bench_mode && instance::forward(&pipe, link.as_deref().unwrap_or("")) {
+        return;
+    }
     let cfg: Settings = fs::read_to_string(data_dir.join("settings.json"))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -3125,6 +3152,12 @@ fn main() {
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
+    if !bench_mode {
+        let p = proxy.clone();
+        instance::listen(&pipe, move |m| {
+            let _ = p.send_event(UserEvent::Open(m));
+        });
+    }
     // Hidden until the chrome has painted, so there is no white flash on startup.
     let window = WindowBuilder::new()
         .with_title("ULTRA")
