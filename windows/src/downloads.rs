@@ -160,6 +160,14 @@ impl Downloads {
         self.dirty.set(true);
     }
 
+    /// The private workspace was wiped: forget its downloads. Returns their ids, so any still
+    /// running can be cancelled.
+    pub fn forget_private(&mut self) -> Vec<u64> {
+        let ids = self.list.iter().filter(|d| d.private).map(|d| d.id).collect();
+        self.list.retain(|d| !d.private);
+        ids
+    }
+
     /// Forget everything that isn't still downloading.
     pub fn clear(&mut self) {
         self.list.retain(|d| matches!(d.state, State::Active | State::Paused));
@@ -260,6 +268,9 @@ mod tests {
         d.clear();
         assert_eq!(d.list.len(), 1, "the running private one stays");
         assert_eq!(d.view(false)["items"].as_array().unwrap().len(), 0);
+        // Wiping the private workspace forgets its downloads.
+        assert_eq!(d.forget_private(), vec![b]);
+        assert!(d.list.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 }
