@@ -452,8 +452,8 @@ body.bmbar #bmbar { display: flex; }
 <div id="bar">
   <span class="logo">ULTRA</span><span class="spd">SPEED</span><span class="privtag">PRIVATE</span><span class="sep">│</span>
   <div id="wsbar"></div><span class="sep">│</span>
+  <div id="navb"><span id="nback" class="off" title="back">‹</span><span id="nfwd" class="off" title="forward">›</span></div><span class="sep">│</span>
   <div id="tabs"></div><div id="plus" title="new tab (cmd+t)">+</div>
-  <div id="navb"><span id="nback" class="off" title="back">‹</span><span id="nfwd" class="off" title="forward">›</span></div>
   <div id="urlwrap"><span class="p">›</span><input id="url" spellcheck="false" autocomplete="off"><span id="star" title="bookmark (cmd+d)">☆</span></div>
   <span id="zoomchip" class="chip" title="unzoom (cmd+shift+f)">⛶ zoom</span>
   <span id="stats"></span><span id="trim" class="chip" title="put every hidden tab to sleep">trim</span>
@@ -1671,10 +1671,10 @@ ultra.bars = (b) => barsFx.setBars(b);
 // ── window chrome ──
 $('#bar').addEventListener('mousedown', (e) => {
   if (e.button !== 0 || e.detail > 1) return;
-  if (e.target.closest('.tab,#plus,#navb,#urlwrap,.wc,.wsb,.chip,#cfgbtn')) return;
+  if (e.target.closest('.tab,#plus,#navb,#urlwrap,.wc,.wsb,.chip,#cfgbtn,#dlbtn')) return;
   send('drag');
 });
-$('#bar').addEventListener('dblclick', (e) => { if (!e.target.closest('.tab,#plus,#navb,#urlwrap,.wc,.wsb,.chip,#cfgbtn')) send('max'); });
+$('#bar').addEventListener('dblclick', (e) => { if (!e.target.closest('.tab,#plus,#navb,#urlwrap,.wc,.wsb,.chip,#cfgbtn,#dlbtn')) send('max'); });
 $('#wmin').onclick = () => send('min');
 $('#wmax').onclick = () => send('max');
 $('#wq').onclick = () => send('quit');
