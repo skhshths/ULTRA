@@ -52,6 +52,9 @@ use wry::{
 };
 
 const BAR: f64 = 34.0;
+/// At most this many new tabs or pop-ups from one page per POPUP_WINDOW.
+const POPUP_MAX: usize = 4;
+const POPUP_WINDOW: Duration = Duration::from_secs(10);
 /// Settings are written this long after the last change.
 const SETTINGS_SAVE_DELAY: Duration = Duration::from_millis(500);
 /// Where macOS's window buttons sit, centred in the top bar (the chrome leaves room for them).
@@ -129,6 +132,8 @@ enum UserEvent {
     Load(u64, bool),
     /// A page asked for a new tab: (source slot, url).
     NewTab(u64, String),
+    /// A page tried to open too many tabs or pop-ups at once.
+    PopupBlocked(u64),
     Procs(Vec<u32>),
     /// Next slideshow image, loaded off-thread: (data url, file name).
     Slide(String, String),
@@ -272,6 +277,8 @@ struct Settings {
     isolated: Vec<usize>,
     /// Hide cookie banners and consent overlays.
     declutter: bool,
+    /// Shortcut tiles under the new-tab search box.
+    shortcuts: bool,
 }
 
 impl Default for Settings {
@@ -307,6 +314,7 @@ impl Default for Settings {
             memcap: 0,
             isolated: Vec::new(),
             declutter: true,
+            shortcuts: true,
         }
     }
 }
@@ -756,6 +764,7 @@ impl App {
             self.proxy.clone(),
             self.proxy.clone(),
         );
+        let opened = std::sync::Mutex::new(Vec::new());
         let mut b = WebViewBuilder::new_with_web_context(&mut self.ctx);
         if let Some(u) = url {
             b = b.with_url(u);
@@ -800,13 +809,31 @@ impl App {
                 let _ = p3.send_event(UserEvent::Load(slot, matches!(e, PageLoadEvent::Started)));
             })
             .with_new_window_req_handler(move |u, f| {
+                // A page may only open web pages, and only a few at a time: real clicks never
+                // hit the limit, a page opening windows from a timer does (WebView2 has no
+                // pop-up blocker of its own).
+                let web = u.starts_with("https://") || u.starts_with("http://");
+                let now = Instant::now();
+                let flood = {
+                    let mut recent = opened.lock().unwrap_or_else(|e| e.into_inner());
+                    recent.retain(|t: &Instant| now.duration_since(*t) < POPUP_WINDOW);
+                    recent.push(now);
+                    recent.len() > POPUP_MAX
+                };
+                if flood {
+                    let _ = p4.send_event(UserEvent::PopupBlocked(slot));
+                    return NewWindowResponse::Deny;
+                }
                 // Scripted popups (window.open with a size, e.g. "Sign in with Google")
-                // get a real popup that keeps window.opener so OAuth can complete.
-                // Plain target=_blank links open as a new tab without an opener.
-                if f.size.is_some() {
+                // get a real popup that keeps window.opener so OAuth can complete (they may
+                // start blank and navigate themselves).
+                if f.size.is_some() && (web || u.is_empty() || u == "about:blank") {
                     return NewWindowResponse::Allow;
                 }
-                let _ = p4.send_event(UserEvent::NewTab(slot, u));
+                // Plain target=_blank links open as a new tab without an opener.
+                if web {
+                    let _ = p4.send_event(UserEvent::NewTab(slot, u));
+                }
                 NewWindowResponse::Deny
             })
             .with_on_web_content_process_terminate_handler(move || {
@@ -1844,6 +1871,7 @@ impl App {
             "boot" => self.cfg.boot = v.as_bool().unwrap_or(true),
             "audio" => self.cfg.audio = v.as_bool().unwrap_or(true),
             "bmbar" => self.cfg.bmbar = v.as_bool().unwrap_or(true),
+            "shortcuts" => self.cfg.shortcuts = v.as_bool().unwrap_or(true),
             "slidesecs" => {
                 self.cfg.slidesecs = v.as_u64().unwrap_or(60).clamp(5, 24 * 3600) as u32;
                 self.slide_at = Instant::now() + Duration::from_secs(self.cfg.slidesecs as u64);
@@ -1984,6 +2012,10 @@ impl App {
             return;
         }
         if privacy::verify_password(&self.cfg.privpass, password) {
+            if privacy::needs_upgrade(&self.cfg.privpass) {
+                self.cfg.privpass = privacy::hash_password(password);
+                self.save_settings();
+            }
             self.locked = false;
             self.unlock_fails = 0;
             self.apply_layout(false);
@@ -2740,6 +2772,13 @@ impl App {
                 }
                 self.sync();
             }
+            "screname" => {
+                if let (Some(u), Some(t)) = (arg[0].as_str(), arg[1].as_str()) {
+                    self.lib.rename_shortcut(u, t);
+                    self.lib.save(&self.data_dir);
+                    self.sync();
+                }
+            }
             "scrm" => {
                 if let Some(u) = arg.as_str() {
                     self.lib.remove_shortcut(u);
@@ -3085,9 +3124,20 @@ impl App {
                 }
             }
             UserEvent::NewTab(slot, url) => {
-                // Links open in the workspace of the page that opened them (private stays private).
-                let ws = self.idx_slot(slot).map(|i| self.tabs[i].ws).unwrap_or(self.ws);
-                self.open_in(ws, url);
+                // Only a page on screen (or in the glance) opens tabs, and only web pages.
+                let Some(i) = self.idx_slot(slot) else { return };
+                let id = self.tabs[i].id;
+                let on_screen = self.shown.iter().any(|(x, _)| *x == id) || self.glance == Some(id);
+                if on_screen && (url.starts_with("https://") || url.starts_with("http://")) {
+                    // Links open in the workspace of the page that opened them (private stays private).
+                    let ws = self.tabs[i].ws;
+                    self.open_in(ws, url);
+                }
+            }
+            UserEvent::PopupBlocked(slot) => {
+                if let Some(h) = self.idx_slot(slot).and_then(|i| library::host(&self.tabs[i].url)) {
+                    self.toast(&format!("blocked pop-ups from {h}"));
+                }
             }
             UserEvent::Procs(p) => self.on_procs(p),
             UserEvent::UpdateChecked(state, up) => {
@@ -3475,6 +3525,8 @@ fn main() {
     app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
     app.lib = library::Library::load(&app.data_dir);
+    // Copies of other browsers' history left by an interrupted import never linger.
+    std::thread::spawn(library::clear_stale_imports);
     app.me = identity::load(&app.data_dir);
     app.is_default = macos::is_default();
     app.dls = downloads::Downloads::load(&app.data_dir);

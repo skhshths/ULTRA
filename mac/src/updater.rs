@@ -99,6 +99,10 @@ pub fn check(repo: &str) -> (Value, Option<Update>) {
         url: asset["browser_download_url"].as_str().unwrap_or("").to_string(),
         size: asset["size"].as_u64().unwrap_or(0),
     };
+    // Only ever download from this repository's own releases, over HTTPS.
+    if !up.url.starts_with(&format!("https://github.com/{repo}/releases/download/")) || up.size == 0 {
+        return (json!({ "s": "failed", "m": "the latest release's download doesn't look right · nothing was changed" }), None);
+    }
     let when = rel["published_at"].as_str().unwrap_or("").split('T').next().unwrap_or("").to_string();
     let name = rel["name"].as_str().filter(|n| !n.is_empty() && !n.contains("latest build")).map(str::to_string).unwrap_or_else(|| format!("a new build ({})", short(&latest)));
     (json!({ "s": "available", "m": format!("{name} is out ({when})"), "page": releases_page(repo) }), Some(up))

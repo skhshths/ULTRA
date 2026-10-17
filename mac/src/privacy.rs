@@ -14,7 +14,7 @@ const HID_SYSTEM_STATE: i32 = 1;
 /// kCGAnyInputEventType.
 const ANY_INPUT: u32 = !0;
 
-/// Key-stretching rounds; makes each guess against a stolen settings file expensive.
+/// Rounds of the older password format, still accepted (and upgraded on the next unlock).
 const ROUNDS: u32 = 200_000;
 
 fn stretch(salt: &[u8], password: &str) -> [u8; 32] {
@@ -29,20 +29,20 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// `salt$hash`, both hex. The password itself is never stored.
+/// Argon2id (the current standard for passwords: memory-hard, so guessing with graphics cards
+/// is slow) with a random salt, as a PHC string. The password itself is never stored.
 pub fn hash_password(password: &str) -> String {
-    // Salt only needs to be unique: mix time, process id and an address.
-    let seed = format!(
-        "{:?}{}{:p}",
-        std::time::SystemTime::now(),
-        std::process::id(),
-        &password as *const _
-    );
-    let salt: [u8; 16] = Sha256::digest(seed.as_bytes())[..16].try_into().unwrap_or([0; 16]);
-    format!("{}${}", hex(&salt), hex(&stretch(&salt, password)))
+    use argon2::password_hash::{PasswordHasher, SaltString};
+    let salt = SaltString::generate(&mut rand_core::OsRng);
+    argon2::Argon2::default().hash_password(password.as_bytes(), &salt).map(|h| h.to_string()).unwrap_or_default()
 }
 
+/// Check a password against what's stored (Argon2id, or the older salted SHA-256 format).
 pub fn verify_password(stored: &str, password: &str) -> bool {
+    if stored.starts_with("$argon2") {
+        use argon2::password_hash::{PasswordHash, PasswordVerifier};
+        return PasswordHash::new(stored).is_ok_and(|h| argon2::Argon2::default().verify_password(password.as_bytes(), &h).is_ok());
+    }
     let Some((salt_hex, hash_hex)) = stored.split_once('$') else { return false };
     let salt: Vec<u8> = (0..salt_hex.len() / 2)
         .filter_map(|i| u8::from_str_radix(salt_hex.get(i * 2..i * 2 + 2)?, 16).ok())
@@ -50,6 +50,11 @@ pub fn verify_password(stored: &str, password: &str) -> bool {
     let got = hex(&stretch(&salt, password));
     // Constant-time comparison.
     got.len() == hash_hex.len() && got.bytes().zip(hash_hex.bytes()).fold(0u8, |a, (x, y)| a | (x ^ y)) == 0
+}
+
+/// A stored password in the older format, to be re-hashed with Argon2id after a good unlock.
+pub fn needs_upgrade(stored: &str) -> bool {
+    !stored.is_empty() && !stored.starts_with("$argon2")
 }
 
 /// Seconds since the last keyboard/mouse input anywhere on the system.
@@ -83,5 +88,16 @@ mod tests {
         assert!(!verify_password(&h, "hunter23"));
         assert!(!verify_password("garbage", "hunter22"));
         assert_ne!(hash_password("a"), hash_password("a"));
+    }
+
+    #[test]
+    fn argon2_now_and_the_older_format_still_unlocks() {
+        let h = hash_password("correct horse");
+        assert!(h.starts_with("$argon2id$"), "{h}");
+        assert!(!needs_upgrade(&h));
+        let salt = [7u8; 16];
+        let old = format!("{}${}", hex(&salt), hex(&stretch(&salt, "pw1234")));
+        assert!(verify_password(&old, "pw1234") && !verify_password(&old, "pw1235"));
+        assert!(needs_upgrade(&old));
     }
 }

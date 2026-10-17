@@ -189,6 +189,14 @@ impl Library {
         true
     }
 
+    pub fn rename_shortcut(&mut self, url: &str, title: &str) {
+        let title: String = title.trim().chars().filter(|c| !c.is_control()).take(60).collect();
+        if let (Some(s), false) = (self.shortcuts.iter_mut().find(|s| s.url == url), title.is_empty()) {
+            s.title = title;
+            self.dirty.set(true);
+        }
+    }
+
     pub fn remove_shortcut(&mut self, url: &str) {
         let n = self.shortcuts.len();
         self.shortcuts.retain(|s| s.url != url);
@@ -506,6 +514,15 @@ fn open_copy(db: &Path, tmp: &Path) -> Option<rusqlite::Connection> {
         }
     }
     rusqlite::Connection::open_with_flags(tmp.join(&name), rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE).ok()
+}
+
+/// Remove database copies an interrupted import may have left in the temp folder.
+pub fn clear_stale_imports() {
+    for e in fs::read_dir(std::env::temp_dir()).into_iter().flatten().flatten() {
+        if e.file_name().to_string_lossy().starts_with("ultra-import-") {
+            let _ = fs::remove_dir_all(e.path());
+        }
+    }
 }
 
 /// A scratch folder for database copies, removed when dropped.
