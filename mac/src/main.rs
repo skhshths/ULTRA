@@ -37,7 +37,7 @@ use serde_json::{json, Value};
 use objc2::rc::Retained;
 use objc2_app_kit::NSWindow;
 use tao::{
-    dpi::{LogicalPosition, LogicalSize},
+    dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
     platform::macos::{WindowBuilderExtMacOS, WindowExtMacOS},
@@ -170,6 +170,19 @@ struct Session {
     layouts: Vec<Option<(Node, usize)>>,
     #[serde(default)]
     cur_ws: usize,
+    /// The window's normal (not maximized) position and size, and whether it was maximized.
+    #[serde(default)]
+    window: Option<WinState>,
+}
+
+/// Where the window was: physical pixels, so it comes back on the same screen at the same size.
+#[derive(Serialize, Deserialize, Clone, Copy, Default)]
+struct WinState {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    max: bool,
 }
 
 /// A named layout: its tabs and tree (leaves are indices into `tabs`).
@@ -343,6 +356,8 @@ struct App {
     booting: bool,
     /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
     win_focused: bool,
+    /// Last normal (not maximized or minimized) window bounds, saved with the session.
+    win_normal: Option<WinState>,
     timing: Option<(String, Instant)>,
     last_blocked: u64,
     /// After the window is activated (alt+tab), check where keyboard focus landed.
@@ -384,6 +399,35 @@ fn data_dir() -> PathBuf {
         .join("Ultra")
 }
 
+/// Whether address-bar text is a web address rather than a search: a host with a real
+/// (letters-only) top-level domain, localhost or an IPv4 address, optionally with a numeric
+/// port and a path. "3.14", "note:meeting" or "e.g." are searches.
+fn looks_like_host(s: &str) -> bool {
+    if s.is_empty() || s.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let hostport = s.split(['/', '?', '#']).next().unwrap_or("");
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (hostport, None),
+    };
+    if port.is_some_and(|p| p.is_empty() || p.len() > 5 || !p.chars().all(|c| c.is_ascii_digit())) {
+        return false;
+    }
+    let host = host.to_lowercase();
+    if host == "localhost" {
+        return true;
+    }
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() == 4 && parts.iter().all(|p| (1..=3).contains(&p.len()) && p.chars().all(|c| c.is_ascii_digit())) {
+        return true;
+    }
+    let label_ok = |p: &&str| !p.is_empty() && !p.starts_with('-') && !p.ends_with('-') && p.chars().all(|c| c.is_alphanumeric() || c == '-');
+    parts.len() >= 2
+        && parts.iter().all(label_ok)
+        && parts.last().is_some_and(|tld| tld.chars().count() >= 2 && tld.chars().all(char::is_alphabetic))
+}
+
 /// Turn whatever was typed into the address bar into a URL.
 fn resolve(input: &str, engine: &str) -> String {
     let s = input.trim();
@@ -400,9 +444,7 @@ fn resolve(input: &str, engine: &str) -> String {
     {
         return s.into();
     }
-    let looks_like_host = !s.contains(' ')
-        && (s.contains('.') || lower.starts_with("localhost") || s.contains(':'));
-    if looks_like_host {
+    if looks_like_host(s) {
         let scheme = if lower.starts_with("localhost") || lower.starts_with("127.") {
             "http"
         } else {
@@ -1030,8 +1072,16 @@ impl App {
 
     /// Ctrl+Alt+Shift+N: send the focused tab to workspace `n` (tiled into its layout).
     fn send_to_ws(&mut self, n: usize) {
+        if n == self.ws || n >= WORKSPACES {
+            return;
+        }
         // Tabs never cross the private boundary: their webviews belong to one profile.
-        if n == self.ws || n >= WORKSPACES || n == PRIVATE_WS || self.ws == PRIVATE_WS {
+        if self.ws == PRIVATE_WS {
+            self.toast("private tabs stay in the private workspace");
+            return;
+        }
+        if n == PRIVATE_WS {
+            self.toast("tabs can't move into the private workspace · open the page there instead");
             return;
         }
         let id = self.focus;
@@ -1181,15 +1231,23 @@ impl App {
 
     /// Split the focused pane in a fixed direction (command palette).
     fn split_dir(&mut self, dir: &str, url: String) {
-        self.zoom = None;
-        let at = self.cur() + 1;
-        let id = self.push_tab(at, url, String::new());
         let (v, first) = match dir {
             "l" => (true, true),
             "r" => (true, false),
             "u" => (false, true),
             _ => (false, false),
         };
+        // Same minimum pane size as ctrl+shift+e (judged on the unzoomed layout).
+        let zoom = self.zoom.take();
+        let r = self.pane_of(self.focus).unwrap_or(self.area());
+        let room = if v { (r.w - GAP) / 2.0 >= MIN_W } else { (r.h - GAP) / 2.0 >= MIN_H };
+        if !room {
+            self.zoom = zoom;
+            self.toast("no room to split this pane further · close one (ctrl+shift+w) or zoom (ctrl+shift+f)");
+            return;
+        }
+        let at = self.cur() + 1;
+        let id = self.push_tab(at, url, String::new());
         self.root.split(self.focus, id, v, first);
         self.set_focus(id);
         self.apply_layout(true);
@@ -1452,6 +1510,7 @@ impl App {
             ws: self.tabs.iter().filter(|t| t.ws != PRIVATE_WS && Some(t.id) != self.glance).map(|t| t.ws).collect(),
             layouts: (0..WORKSPACES).map(layout_of).collect(),
             cur_ws: if self.ws == PRIVATE_WS { 0 } else { self.ws },
+            window: self.win_normal.map(|w| WinState { max: self.window.is_maximized(), ..w }),
         };
         if let Ok(j) = serde_json::to_string(&s) {
             let _ = library::write_atomic(&self.data_dir.join("session.json"), j);
@@ -1484,6 +1543,16 @@ impl App {
         // Refresh every tick so the home screen's digest stays current.
         self.sync();
         self.save_session();
+    }
+
+    /// Remember the window's bounds while it is neither maximized nor minimized.
+    fn note_bounds(&mut self) {
+        if self.window.is_maximized() || self.window.is_minimized() || !self.visible {
+            return;
+        }
+        if let (Ok(pos), size) = (self.window.outer_position(), self.window.inner_size()) {
+            self.win_normal = Some(WinState { x: pos.x, y: pos.y, w: size.width, h: size.height, max: false });
+        }
     }
 
     fn show_window(&mut self) {
@@ -2882,6 +2951,11 @@ fn bench(app: &mut App) {
     let _ = fs::write(app.data_dir.join("bench.txt"), out);
 }
 
+/// ULTRA couldn't start: say why on stderr (visible in Console.app) instead of crashing.
+fn startup_failed(msg: &str) {
+    eprintln!("ultra: {msg}");
+}
+
 fn main() {
     let bench_mode = std::env::args().any(|a| a == "--bench");
     let data_dir = data_dir();
@@ -2898,7 +2972,29 @@ fn main() {
     // Hidden until the chrome has painted, so there is no white flash on startup.
     // The chrome draws the whole window; macOS keeps its own window buttons (over the top
     // bar), resizable edges, rounded corners and shadow.
-    let window = WindowBuilder::new()
+    // Put the window back where it was last time (size, spot, maximized), as long as that spot
+    // is still on a screen.
+    let saved: Option<WinState> = fs::read_to_string(data_dir.join("session.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Session>(&s).ok())
+        .and_then(|s| s.window)
+        .filter(|w| w.w >= 200 && w.h >= 150 && !bench_mode);
+    let on_screen = saved.is_some_and(|w| {
+        event_loop.available_monitors().any(|m| {
+            let (p, sz) = (m.position(), m.size());
+            w.x + 80 < p.x + sz.width as i32 && w.x + w.w as i32 > p.x + 80 && w.y + 20 < p.y + sz.height as i32 && w.y + 20 > p.y
+        })
+    });
+    let mut wb = WindowBuilder::new();
+    if let Some(w) = saved {
+        wb = wb.with_inner_size(PhysicalSize::new(w.w, w.h)).with_maximized(w.max);
+        if on_screen {
+            wb = wb.with_position(PhysicalPosition::new(w.x, w.y));
+        }
+    } else {
+        wb = wb.with_inner_size(LogicalSize::new(1280.0, 800.0));
+    }
+    let window = wb
         .with_title("ULTRA")
         .with_visible(false)
         .with_focused(!bench_mode)
@@ -2907,7 +3003,6 @@ fn main() {
         .with_fullsize_content_view(true)
         .with_traffic_light_inset(LogicalPosition::new(TRAFFIC_LIGHTS.0, TRAFFIC_LIGHTS.1))
         .with_background_color((20, 20, 20, 255))
-        .with_inner_size(LogicalSize::new(1280.0, 800.0))
         .with_min_inner_size(LogicalSize::new(480.0, 320.0))
         .build(&event_loop)
         .expect("window");
@@ -2917,7 +3012,7 @@ fn main() {
     let mut ctx = WebContext::new(Some(data_dir.join("webview")));
     let size = window.inner_size().to_logical::<f64>(window.scale_factor());
     let (pui, pfail) = (proxy.clone(), proxy.clone());
-    let ui = WebViewBuilder::new_with_web_context(&mut ctx)
+    let ui = match WebViewBuilder::new_with_web_context(&mut ctx)
         .with_html(UI_HTML)
         // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
         .with_initialization_script(format!(
@@ -2939,7 +3034,13 @@ fn main() {
             let _ = pfail.send_event(UserEvent::Failed(0));
         })
         .build_as_child(&window)
-        .expect("ui webview");
+    {
+        Ok(v) => v,
+        Err(e) => {
+            startup_failed(&format!("ULTRA couldn't start its web engine ({e})"));
+            return;
+        }
+    };
     let blocked = Rc::new(Cell::new(0));
     // Before any page exists: lets WebKit report blocked requests to the digest.
     blocker::install_counter(&ui, blocked.clone());
@@ -3000,6 +3101,7 @@ fn main() {
         lib: library::Library::default(),
         booting: false,
         win_focused: true,
+        win_normal: None,
         timing: None,
         last_blocked: 0,
         refocus_at: None,
@@ -3030,6 +3132,8 @@ fn main() {
         return;
     }
 
+    // Keep the restored bounds until the window is moved or resized.
+    app.win_normal = saved.map(|w| WinState { max: false, ..w });
     let session: Session = fs::read_to_string(app.data_dir.join("session.json"))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -3107,7 +3211,9 @@ fn main() {
                 WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
                     app.note_activity();
                     app.layout();
+                    app.note_bounds();
                 }
+                WindowEvent::Moved(_) => app.note_bounds(),
                 _ => {}
             },
             Event::MainEventsCleared => {
@@ -3163,6 +3269,21 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::shortcut;
+
+    #[test]
+    fn address_bar_tells_sites_from_searches() {
+        let r = |s: &str| super::resolve(s, "duckduckgo");
+        assert_eq!(r("example.com"), "https://example.com");
+        assert_eq!(r("news.bbc.co.uk/sport?x=1"), "https://news.bbc.co.uk/sport?x=1");
+        assert_eq!(r("localhost:3000/app"), "http://localhost:3000/app");
+        assert_eq!(r("127.0.0.1:8770/p1.html"), "http://127.0.0.1:8770/p1.html");
+        assert_eq!(r("192.168.1.1"), "https://192.168.1.1");
+        assert_eq!(r("example.com:8080"), "https://example.com:8080");
+        assert_eq!(r("münchen.de"), "https://münchen.de");
+        for q in ["3.14", "note:meeting", "e.g.", "v1.2", "what is rust", "c++", "a.b"] {
+            assert!(r(q).starts_with("https://duckduckgo.com/?q="), "{q} -> {}", r(q));
+        }
+    }
 
     #[test]
     fn shortcuts() {
