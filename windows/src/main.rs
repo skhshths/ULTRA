@@ -39,7 +39,7 @@ use layout::{Node, Splitter, R};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tao::{
-    dpi::{LogicalPosition, LogicalSize},
+    dpi::{LogicalPosition, LogicalSize, PhysicalSize},
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
     platform::windows::{IconExtWindows, WindowExtWindows},
@@ -222,6 +222,19 @@ struct Session {
     layouts: Vec<Option<(Node, usize)>>,
     #[serde(default)]
     cur_ws: usize,
+    /// The window's normal (not maximized) position and size, and whether it was maximized.
+    #[serde(default)]
+    window: Option<WinState>,
+}
+
+/// Where the window was: physical pixels, so it comes back on the same screen at the same size.
+#[derive(Serialize, Deserialize, Clone, Copy, Default)]
+struct WinState {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    max: bool,
 }
 
 /// A named layout: its tabs and tree (leaves are indices into `tabs`).
@@ -398,6 +411,10 @@ struct App {
     booting: bool,
     /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
     win_focused: bool,
+    /// Saved window placement, applied when the window first shows.
+    start_place: Option<WinState>,
+    /// The regular workspace shown before the current one (links land there while private is locked).
+    last_ws: usize,
     /// Link ULTRA was started with, opened once the chrome is ready.
     pending_open: Option<String>,
     /// Whether Windows opens web links in ULTRA (shown in settings).
@@ -462,9 +479,45 @@ fn seed_from(from: &std::path::Path, to: &std::path::Path) {
         return;
     }
     let _ = fs::create_dir_all(to);
-    for f in ["settings.json", "bookmarks.json", "history.json", "commands.json", "layouts.json", "zaps.json"] {
+    for f in ["bookmarks.json", "history.json", "commands.json", "layouts.json", "zaps.json"] {
         let _ = fs::copy(from.join(f), to.join(f));
     }
+    // Settings too, but this build counts its own launches (they drive the one-time prompt).
+    if let Some(mut v) = fs::read_to_string(from.join("settings.json")).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) {
+        if let Some(o) = v.as_object_mut() {
+            o.remove("launches");
+        }
+        let _ = library::write_atomic(&to.join("settings.json"), v.to_string());
+    }
+}
+
+/// Whether address-bar text is a web address rather than a search: a host with a real
+/// (letters-only) top-level domain, localhost or an IPv4 address, optionally with a numeric
+/// port and a path. "3.14", "note:meeting" or "e.g." are searches.
+fn looks_like_host(s: &str) -> bool {
+    if s.is_empty() || s.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let hostport = s.split(['/', '?', '#']).next().unwrap_or("");
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (hostport, None),
+    };
+    if port.is_some_and(|p| p.is_empty() || p.len() > 5 || !p.chars().all(|c| c.is_ascii_digit())) {
+        return false;
+    }
+    let host = host.to_lowercase();
+    if host == "localhost" {
+        return true;
+    }
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() == 4 && parts.iter().all(|p| (1..=3).contains(&p.len()) && p.chars().all(|c| c.is_ascii_digit())) {
+        return true;
+    }
+    let label_ok = |p: &&str| !p.is_empty() && !p.starts_with('-') && !p.ends_with('-') && p.chars().all(|c| c.is_alphanumeric() || c == '-');
+    parts.len() >= 2
+        && parts.iter().all(label_ok)
+        && parts.last().is_some_and(|tld| tld.chars().count() >= 2 && tld.chars().all(char::is_alphabetic))
 }
 
 /// Turn whatever was typed into the address bar into a URL.
@@ -483,9 +536,7 @@ fn resolve(input: &str, engine: &str) -> String {
     {
         return s.into();
     }
-    let looks_like_host = !s.contains(' ')
-        && (s.contains('.') || lower.starts_with("localhost") || s.contains(':'));
-    if looks_like_host {
+    if looks_like_host(s) {
         let scheme = if lower.starts_with("localhost") || lower.starts_with("127.") {
             "http"
         } else {
@@ -1224,6 +1275,9 @@ impl App {
             return;
         }
         self.drop_glance(None);
+        if self.ws != PRIVATE_WS {
+            self.last_ws = self.ws;
+        }
         self.slide = Some(if n > self.ws { 1.0 } else { -1.0 });
         // A workspace holding nothing but one blank tab disappears when left.
         let lone_home = self.root.is_leaf(self.focus)
@@ -1267,8 +1321,16 @@ impl App {
 
     /// Ctrl+Alt+Shift+N: send the focused tab to workspace `n` (tiled into its layout).
     fn send_to_ws(&mut self, n: usize) {
+        if n == self.ws || n >= WORKSPACES {
+            return;
+        }
         // Tabs never cross the private boundary: their webviews belong to one profile.
-        if n == self.ws || n >= WORKSPACES || n == PRIVATE_WS || self.ws == PRIVATE_WS {
+        if self.ws == PRIVATE_WS {
+            self.toast("private tabs stay in the private workspace");
+            return;
+        }
+        if n == PRIVATE_WS {
+            self.toast("tabs can't move into the private workspace · open the page there instead");
             return;
         }
         let id = self.focus;
@@ -1454,15 +1516,23 @@ impl App {
 
     /// Split the focused pane in a fixed direction (command palette).
     fn split_dir(&mut self, dir: &str, url: String) {
-        self.zoom = None;
-        let at = self.cur() + 1;
-        let id = self.push_tab(at, url, String::new());
         let (v, first) = match dir {
             "l" => (true, true),
             "r" => (true, false),
             "u" => (false, true),
             _ => (false, false),
         };
+        // Same minimum pane size as ctrl+shift+e (judged on the unzoomed layout).
+        let zoom = self.zoom.take();
+        let r = self.pane_of(self.focus).unwrap_or(self.area());
+        let room = if v { (r.w - GAP) / 2.0 >= MIN_W } else { (r.h - GAP) / 2.0 >= MIN_H };
+        if !room {
+            self.zoom = zoom;
+            self.toast("no room to split this pane further · close one (ctrl+shift+w) or zoom (ctrl+shift+f)");
+            return;
+        }
+        let at = self.cur() + 1;
+        let id = self.push_tab(at, url, String::new());
         self.root.split(self.focus, id, v, first);
         self.set_focus(id);
         self.apply_layout(true);
@@ -1730,6 +1800,7 @@ impl App {
             ws: self.tabs.iter().filter(|t| t.ws != PRIVATE_WS && Some(t.id) != self.glance).map(|t| t.ws).collect(),
             layouts: (0..WORKSPACES).map(layout_of).collect(),
             cur_ws: if self.ws == PRIVATE_WS { 0 } else { self.ws },
+            window: self.placement(),
         };
         if let Ok(j) = serde_json::to_string(&s) {
             let _ = library::write_atomic(&self.data_dir.join("session.json"), j);
@@ -1764,9 +1835,48 @@ impl App {
         self.save_session();
     }
 
+    /// The window's normal (restore) bounds and whether it is maximized, straight from Windows,
+    /// which keeps them up to date through maximize, minimize and snapping.
+    fn placement(&self) -> Option<WinState> {
+        use windows::Win32::{
+            Foundation::HWND,
+            UI::WindowsAndMessaging::{GetWindowPlacement, SW_SHOWMAXIMIZED, WINDOWPLACEMENT},
+        };
+        if !self.visible {
+            return self.start_place;
+        }
+        let mut wp = WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+        unsafe { GetWindowPlacement(HWND(self.window.hwnd() as *mut _), &mut wp) }.ok()?;
+        let r = wp.rcNormalPosition;
+        Some(WinState {
+            x: r.left,
+            y: r.top,
+            w: (r.right - r.left).max(0) as u32,
+            h: (r.bottom - r.top).max(0) as u32,
+            max: wp.showCmd == SW_SHOWMAXIMIZED.0 as u32 || self.window.is_maximized(),
+        })
+    }
+
     fn show_window(&mut self) {
         if !self.visible {
             self.visible = true;
+            if let Some(w) = self.start_place.take() {
+                // Back where it was, in Windows' own placement terms (the same ones it was saved
+                // in): restore bounds plus maximized, in one step, so un-maximizing is right too.
+                use windows::Win32::{
+                    Foundation::{HWND, RECT},
+                    UI::WindowsAndMessaging::{SetWindowPlacement, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOWPLACEMENT},
+                };
+                let wp = WINDOWPLACEMENT {
+                    length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                    showCmd: if w.max { SW_SHOWMAXIMIZED.0 as u32 } else { SW_SHOWNORMAL.0 as u32 },
+                    rcNormalPosition: RECT { left: w.x, top: w.y, right: w.x + w.w as i32, bottom: w.y + w.h as i32 },
+                    ..Default::default()
+                };
+                unsafe {
+                    let _ = SetWindowPlacement(HWND(self.window.hwnd() as *mut _), &wp);
+                }
+            }
             self.window.set_visible(true);
             self.window.set_focus();
             self.focus_active();
@@ -2030,8 +2140,13 @@ impl App {
     fn open_external(&mut self, url: &str) {
         let lower = url.to_ascii_lowercase();
         if ["http://", "https://", "file:///"].iter().any(|p| lower.starts_with(p)) {
-            let ws = if self.ws == PRIVATE_WS && self.locked { 0 } else { self.ws };
-            self.open_in(ws, url.to_string());
+            if self.ws == PRIVATE_WS && self.locked {
+                // Not behind the lock screen: show it in the last regular workspace instead.
+                let back = self.last_ws;
+                self.switch_ws(back);
+                self.toast(&format!("opened in workspace {} · the private workspace is locked", back + 1));
+            }
+            self.open_in(self.ws, url.to_string());
         }
         self.window.set_minimized(false);
         self.window.set_visible(true);
@@ -2986,7 +3101,8 @@ impl App {
                 if let Some(u) = self.pending_open.take() {
                     self.open_external(&u);
                 }
-                if self.cfg.launches == COFFEE_LAUNCH && self.coffee_at.is_none() && !self.coffee {
+                // No tip page yet: no strip (its button would go nowhere).
+                if !SUPPORT_URL.is_empty() && self.cfg.launches == COFFEE_LAUNCH && self.coffee_at.is_none() && !self.coffee {
                     self.coffee_at = Some(Instant::now() + COFFEE_DELAY);
                 }
                 self.send_bg_image();
@@ -3269,6 +3385,15 @@ fn bench(app: &mut App) {
     let _ = fs::write(app.data_dir.join("bench.txt"), out);
 }
 
+/// Tell the user ULTRA couldn't start (instead of vanishing): a plain Windows message box.
+fn startup_failed(msg: &str) {
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    let (text, title) = (HSTRING::from(msg), HSTRING::from(edition::NAME));
+    unsafe {
+        MessageBoxW(None, &text, &title, MB_OK | MB_ICONERROR);
+    }
+}
+
 fn main() {
     // The audio-bars capture helper (see spectrum.rs): no window, no UI, just band levels.
     let args: Vec<String> = std::env::args().collect();
@@ -3311,42 +3436,76 @@ fn main() {
         }
     }
     // Hidden until the chrome has painted, so there is no white flash on startup.
-    let window = WindowBuilder::new()
+    // Put the window back where it was last time (size, spot, maximized), as long as that spot
+    // is still on a screen. Given to the builder, so un-maximizing returns to the saved size.
+    let saved: Option<WinState> = fs::read_to_string(data_dir.join("session.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Session>(&s).ok())
+        .and_then(|s| s.window)
+        .filter(|w| w.w >= 200 && w.h >= 150 && !bench_mode);
+    let on_screen = saved.is_some_and(|w| {
+        event_loop.available_monitors().any(|m| {
+            let (p, sz) = (m.position(), m.size());
+            w.x + 80 < p.x + sz.width as i32 && w.x + w.w as i32 > p.x + 80 && w.y + 20 < p.y + sz.height as i32 && w.y + 20 > p.y
+        })
+    });
+    let mut wb = WindowBuilder::new();
+    if let Some(w) = saved {
+        // Position and maximized are applied when the window first shows (see show_window).
+        wb = wb.with_inner_size(PhysicalSize::new(w.w, w.h));
+    } else {
+        wb = wb.with_inner_size(LogicalSize::new(1280.0, 800.0));
+    }
+    let window = wb
         .with_title(edition::NAME)
         .with_decorations(false)
         .with_visible(false)
         .with_focused(!bench_mode)
         .with_window_icon(make_icon())
-        .with_inner_size(LogicalSize::new(1280.0, 800.0))
         .with_min_inner_size(LogicalSize::new(480.0, 320.0))
         .build(&event_loop)
         .expect("window");
 
     let mut ctx = WebContext::new(Some(data_dir.join("webview")));
     let size = window.inner_size().to_logical::<f64>(window.scale_factor());
-    let pui = proxy.clone();
-    let ui = WebViewBuilder::new_with_web_context(&mut ctx)
-        .with_html(UI_HTML)
-        // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
-        .with_initialization_script(format!(
-            "window.__ultraCfg = {}; window.__ultraInvert = {};",
-            ui_cfg(&cfg),
-            edition::INVERT
-        ))
-        .with_bounds(Rect {
-            position: LogicalPosition::new(0.0, 0.0).into(),
-            size: LogicalSize::new(size.width, size.height).into(),
-        })
-        .with_background_color((20, 20, 20, 255))
-        .with_default_context_menus(false)
-        .with_additional_browser_args(browser_args())
-        // The chrome UI never navigates anywhere; refuse anything that tries.
-        .with_navigation_handler(|u| u.starts_with("about:") || u.starts_with("data:"))
-        .with_ipc_handler(move |r| {
-            let _ = pui.send_event(UserEvent::Ui(r.into_body()));
-        })
-        .build_as_child(&window)
-        .expect("ui webview");
+    // Reopened right after closing, the web engine can still be shutting down for a moment:
+    // wait for it (up to ~5 s) instead of failing.
+    let mut tries = 0;
+    let ui = loop {
+        let pui = proxy.clone();
+        let res = WebViewBuilder::new_with_web_context(&mut ctx)
+            .with_html(UI_HTML)
+            // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
+            .with_initialization_script(format!(
+                "window.__ultraCfg = {}; window.__ultraInvert = {};",
+                ui_cfg(&cfg),
+                edition::INVERT
+            ))
+            .with_bounds(Rect {
+                position: LogicalPosition::new(0.0, 0.0).into(),
+                size: LogicalSize::new(size.width, size.height).into(),
+            })
+            .with_background_color((20, 20, 20, 255))
+            .with_default_context_menus(false)
+            .with_additional_browser_args(browser_args())
+            // The chrome UI never navigates anywhere; refuse anything that tries.
+            .with_navigation_handler(|u| u.starts_with("about:") || u.starts_with("data:"))
+            .with_ipc_handler(move |r| {
+                let _ = pui.send_event(UserEvent::Ui(r.into_body()));
+            })
+            .build_as_child(&window);
+        match res {
+            Ok(v) => break v,
+            Err(_) if tries < 20 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            Err(e) => {
+                startup_failed(&format!("ULTRA couldn't start its web engine ({e}). Try opening it again in a moment."));
+                return;
+            }
+        }
+    };
     watch_failures(&ui, proxy.clone(), 0);
 
     let now = Instant::now();
@@ -3389,6 +3548,8 @@ fn main() {
         lib: library::Library::default(),
         booting: false,
         win_focused: true,
+        start_place: None,
+        last_ws: 0,
         pending_open: None,
         is_default: false,
         timing: None,
@@ -3424,6 +3585,7 @@ fn main() {
         return;
     }
 
+    app.start_place = saved.filter(|_| on_screen);
     let session: Session = fs::read_to_string(app.data_dir.join("session.json"))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -3581,6 +3743,21 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::shortcut;
+
+    #[test]
+    fn address_bar_tells_sites_from_searches() {
+        let r = |s: &str| super::resolve(s, "duckduckgo");
+        assert_eq!(r("example.com"), "https://example.com");
+        assert_eq!(r("news.bbc.co.uk/sport?x=1"), "https://news.bbc.co.uk/sport?x=1");
+        assert_eq!(r("localhost:3000/app"), "http://localhost:3000/app");
+        assert_eq!(r("127.0.0.1:8770/p1.html"), "http://127.0.0.1:8770/p1.html");
+        assert_eq!(r("192.168.1.1"), "https://192.168.1.1");
+        assert_eq!(r("example.com:8080"), "https://example.com:8080");
+        assert_eq!(r("münchen.de"), "https://münchen.de");
+        for q in ["3.14", "note:meeting", "e.g.", "v1.2", "what is rust", "c++", "a.b"] {
+            assert!(r(q).starts_with("https://duckduckgo.com/?q="), "{q} -> {}", r(q));
+        }
+    }
 
     #[test]
     fn shortcuts() {
