@@ -13,3 +13,5 @@ pub const PROGID: &str = "ULTRAHTML";
 pub const INVERT: bool = false;
 /// GitHub repository whose "latest" release this build updates from.
 pub const REPO: &str = "skhshths/ULTRA";
+/// Developer switches for test scripts (ULTRA_DEVTOOLS_PORT). Never in the public build.
+pub const TEST_SWITCHES: bool = false;

@@ -17,6 +17,7 @@ mod audio;
 mod blocker;
 mod default_browser;
 mod edition;
+mod identity;
 mod downloads;
 mod instance;
 mod layout;
@@ -70,6 +71,9 @@ use wry::{
 };
 
 const BAR: f64 = 34.0;
+/// At most this many new tabs or pop-ups from one page per POPUP_WINDOW.
+const POPUP_MAX: usize = 4;
+const POPUP_WINDOW: Duration = Duration::from_secs(10);
 /// Settings are written this long after the last change.
 const SETTINGS_SAVE_DELAY: Duration = Duration::from_millis(500);
 /// How long the audio-bars helper keeps running after the sound stops.
@@ -129,7 +133,10 @@ const BROWSER_ARGS: &str = "--enable-features=msSmartScreenProtection";
 /// drive ULTRA from test scripts). Computed once so every webview gets the identical string.
 fn browser_args() -> &'static str {
     static ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    ARGS.get_or_init(|| match std::env::var("ULTRA_DEVTOOLS_PORT").ok().and_then(|p| p.parse::<u16>().ok()) {
+    // Only builds made for testing honour it (never the public one): a DevTools port lets any
+    // program on this computer drive the browser.
+    let port = if edition::TEST_SWITCHES { std::env::var("ULTRA_DEVTOOLS_PORT").ok().and_then(|p| p.parse::<u16>().ok()) } else { None };
+    ARGS.get_or_init(|| match port {
         Some(port) => format!("{BROWSER_ARGS} --remote-debugging-port={port}"),
         None => BROWSER_ARGS.to_string(),
     })
@@ -148,6 +155,8 @@ enum UserEvent {
     Load(u64, bool),
     /// A page asked for a new tab: (source slot, url).
     NewTab(u64, String),
+    /// A page tried to open too many tabs or pop-ups at once.
+    PopupBlocked(u64),
     Procs(Vec<u32>),
     /// JS heap (MB) reported by a page.
     Heap(u64, String),
@@ -293,6 +302,8 @@ struct Settings {
     isolated: Vec<usize>,
     /// Hide cookie banners and consent overlays.
     declutter: bool,
+    /// Shortcut tiles under the new-tab search box.
+    shortcuts: bool,
 }
 
 impl Default for Settings {
@@ -327,6 +338,7 @@ impl Default for Settings {
             memcap: 0,
             isolated: Vec::new(),
             declutter: true,
+            shortcuts: true,
         }
     }
 }
@@ -406,6 +418,8 @@ struct App {
     booting: bool,
     /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
     win_focused: bool,
+    /// This computer's ULTRA ID, once made.
+    me: Option<identity::Identity>,
     /// A newer build found by "check for updates", ready to install.
     update: Option<updater::Update>,
     /// Other browsers found on this computer, offered for importing bookmarks.
@@ -940,6 +954,7 @@ impl App {
             self.proxy.clone(),
         );
         let env = self.shared_env.then(|| self.ui.environment());
+        let opened = std::sync::Mutex::new(Vec::new());
         let mut b = WebViewBuilder::new_with_web_context(&mut self.ctx);
         if let Some(env) = env {
             b = b.with_environment(env);
@@ -972,13 +987,31 @@ impl App {
                 let _ = p3.send_event(UserEvent::Load(slot, matches!(e, PageLoadEvent::Started)));
             })
             .with_new_window_req_handler(move |u, f| {
+                // A page may only open web pages, and only a few at a time: real clicks never
+                // hit the limit, a page opening windows from a timer does (WebView2 has no
+                // pop-up blocker of its own).
+                let web = u.starts_with("https://") || u.starts_with("http://");
+                let now = Instant::now();
+                let flood = {
+                    let mut recent = opened.lock().unwrap_or_else(|e| e.into_inner());
+                    recent.retain(|t: &Instant| now.duration_since(*t) < POPUP_WINDOW);
+                    recent.push(now);
+                    recent.len() > POPUP_MAX
+                };
+                if flood {
+                    let _ = p4.send_event(UserEvent::PopupBlocked(slot));
+                    return NewWindowResponse::Deny;
+                }
                 // Scripted popups (window.open with a size, e.g. "Sign in with Google")
-                // get a real popup that keeps window.opener so OAuth can complete.
-                // Plain target=_blank links open as a new tab without an opener.
-                if f.size.is_some() {
+                // get a real popup that keeps window.opener so OAuth can complete (they may
+                // start blank and navigate themselves).
+                if f.size.is_some() && (web || u.is_empty() || u == "about:blank") {
                     return NewWindowResponse::Allow;
                 }
-                let _ = p4.send_event(UserEvent::NewTab(slot, u));
+                // Plain target=_blank links open as a new tab without an opener.
+                if web {
+                    let _ = p4.send_event(UserEvent::NewTab(slot, u));
+                }
                 NewWindowResponse::Deny
             })
             .build_as_child(&self.window);
@@ -1740,6 +1773,7 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            "me": self.me,
             // New-tab shortcuts (or the most visited sites until there are some).
             "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>(), "auto": sc_auto },
             "version": updater::version(),
@@ -2051,6 +2085,7 @@ impl App {
             "boot" => self.cfg.boot = v.as_bool().unwrap_or(true),
             "audio" => self.cfg.audio = v.as_bool().unwrap_or(true),
             "bmbar" => self.cfg.bmbar = v.as_bool().unwrap_or(true),
+            "shortcuts" => self.cfg.shortcuts = v.as_bool().unwrap_or(true),
             "slidesecs" => {
                 self.cfg.slidesecs = v.as_u64().unwrap_or(60).clamp(5, 24 * 3600) as u32;
                 self.slide_at = Instant::now() + Duration::from_secs(self.cfg.slidesecs as u64);
@@ -2188,6 +2223,10 @@ impl App {
             return;
         }
         if privacy::verify_password(&self.cfg.privpass, password) {
+            if privacy::needs_upgrade(&self.cfg.privpass) {
+                self.cfg.privpass = privacy::hash_password(password);
+                self.save_settings();
+            }
             self.locked = false;
             self.unlock_fails = 0;
             self.apply_layout(false);
@@ -2963,6 +3002,25 @@ impl App {
                 }
                 self.sync();
             }
+            "idcreate" => {
+                let (name, handle) = (arg[0].as_str().unwrap_or(""), arg[1].as_str().unwrap_or(""));
+                match identity::create(&self.data_dir, name, handle) {
+                    Ok(me) => {
+                        self.toast(&format!("welcome, {} · your ULTRA ID is ready", me.name));
+                        self.me = Some(me);
+                    }
+                    Err(e) => {
+                        let _ = self.ui.evaluate_script(&format!("ultra.idError({})", json!(e)));
+                    }
+                }
+                self.sync();
+            }
+            "idremove" => {
+                identity::remove(&self.data_dir);
+                self.me = None;
+                self.toast("ULTRA ID removed from this computer");
+                self.sync();
+            }
             "update_check" => {
                 let proxy = self.proxy.clone();
                 std::thread::spawn(move || {
@@ -3003,6 +3061,13 @@ impl App {
                     self.toast("already in your shortcuts, or not a web page");
                 }
                 self.sync();
+            }
+            "screname" => {
+                if let (Some(u), Some(t)) = (arg[0].as_str(), arg[1].as_str()) {
+                    self.lib.rename_shortcut(u, t);
+                    self.lib.save(&self.data_dir);
+                    self.sync();
+                }
             }
             "scrm" => {
                 if let Some(u) = arg.as_str() {
@@ -3341,9 +3406,20 @@ impl App {
                 }
             }
             UserEvent::NewTab(slot, url) => {
-                // Links open in the workspace of the page that opened them (private stays private).
-                let ws = self.idx_slot(slot).map(|i| self.tabs[i].ws).unwrap_or(self.ws);
-                self.open_in(ws, url);
+                // Only a page on screen (or in the glance) opens tabs, and only web pages.
+                let Some(i) = self.idx_slot(slot) else { return };
+                let id = self.tabs[i].id;
+                let on_screen = self.shown.iter().any(|(x, _)| *x == id) || self.glance == Some(id);
+                if on_screen && (url.starts_with("https://") || url.starts_with("http://")) {
+                    // Links open in the workspace of the page that opened them (private stays private).
+                    let ws = self.tabs[i].ws;
+                    self.open_in(ws, url);
+                }
+            }
+            UserEvent::PopupBlocked(slot) => {
+                if let Some(h) = self.idx_slot(slot).and_then(|i| library::host(&self.tabs[i].url)) {
+                    self.toast(&format!("blocked pop-ups from {h}"));
+                }
             }
             UserEvent::Procs(p) => self.on_procs(p),
             UserEvent::UpdateChecked(state, up) => {
@@ -3644,6 +3720,7 @@ fn main() {
         lib: library::Library::default(),
         booting: false,
         win_focused: true,
+        me: None,
         update: None,
         browsers: library::installed_browsers(),
         settings_save_at: None,
@@ -3697,6 +3774,9 @@ fn main() {
     app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
     app.lib = library::Library::load(&app.data_dir);
+    // Copies of other browsers' history left by an interrupted import never linger.
+    std::thread::spawn(library::clear_stale_imports);
+    app.me = identity::load(&app.data_dir);
     app.pending_open = link;
     app.is_default = default_browser::is_default();
     app.dls = downloads::Downloads::load(&app.data_dir);
