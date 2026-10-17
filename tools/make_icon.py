@@ -9,7 +9,8 @@ Two variants: the normal icon, and an inverted one (light tile, dark swirl) for 
 experimental build, matching its inverted colors.
 
 Writes windows/assets/ultra.ico, ultra-inv.ico and mac/assets/ultra.icns, ultra-inv.icns,
-plus a 256px preview (ultra.png) and a contact sheet (icon_sheet.png) in each folder.
+plus 256px PNGs (ultra.png; on the Mac also ultra-inv.png, for the Dock) and a contact sheet
+(icon_sheet.png) in each folder.
 
 Run from anywhere: python tools/make_icon.py   (needs Pillow)
 """
@@ -193,7 +194,7 @@ if __name__ == '__main__':
         write_icns(mi, mac / f'ultra{suffix}.icns')
         if not suffix:
             wi[-1].save(win / 'ultra.png')
-            wi[-1].save(mac / 'ultra.png')
+        wi[-1].save(mac / f'ultra{suffix}.png')  # the Mac sets its Dock icon from this at runtime
         rows.append(wi)
     sheet(rows, win / 'icon_sheet.png')
     sheet(rows, mac / 'icon_sheet.png')

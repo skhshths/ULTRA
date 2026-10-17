@@ -111,7 +111,8 @@ const SPARE_IDLE: Duration = Duration::from_millis(1200);
 /// Pre-built blank webviews kept ready (creating one costs tens of ms of UI-thread time).
 const SPARES: usize = 2;
 /// The Dock icon when running outside an .app bundle.
-const ICON_PNG: &[u8] = include_bytes!("../assets/ultra.png");
+/// The Dock icon, matching the app bundle's icon (inverted for the experimental edition).
+const ICON_PNG: &[u8] = if edition::INVERT { include_bytes!("../assets/ultra-inv.png") } else { include_bytes!("../assets/ultra.png") };
 const THEMES: &[&str] = &[
     "mint", "amber", "red", "mono", "ice", "matrix", "violet", "pink", "orange", "cyan", "gold", "lime", "custom",
 ];
