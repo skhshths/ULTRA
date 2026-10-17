@@ -36,16 +36,18 @@ which is rebuilt automatically every time ULTRA is updated.
 The Mac version is new and less tested than the Windows one. If something doesn't work,
 please [open an issue](https://github.com/skhshths/ULTRA/issues).
 
-## Coming from Chrome?
+## Coming from another browser?
 
-Bring your bookmarks with you in one click:
+Bring your bookmarks with you in one click, from **Chrome, Edge, Brave, Vivaldi, Opera or
+Firefox**:
 
-- The welcome tour offers it right after you first open ULTRA, **or**
-- open **Settings** (`ctrl+,`) → **Import from Chrome** → **import bookmarks**, **or**
-- open the command palette (`ctrl+shift+p`) and type `import chrome`.
+- the welcome tour offers it right after you first open ULTRA, **or**
+- open **Settings** (`ctrl+,`) → **Import bookmarks** and pick your browser, **or**
+- open the command palette (`ctrl+shift+p`) and type `import` and the browser's name.
 
-Your bookmarks show up in the bookmarks bar under the address bar. Chrome can stay open, and
-nothing in Chrome is changed.
+Your bookmarks show up in the bookmarks bar under the address bar. The other browser can stay
+open, and nothing in it is changed. Saved passwords and sign-ins aren't imported: sign in once in
+ULTRA and it keeps you signed in.
 
 ## Getting started
 

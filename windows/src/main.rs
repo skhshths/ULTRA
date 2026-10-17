@@ -378,6 +378,8 @@ struct App {
     booting: bool,
     /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
     win_focused: bool,
+    /// Other browsers found on this computer, offered for importing bookmarks.
+    browsers: Vec<(&'static str, &'static str)>,
     /// Settings changed and not yet written (saved shortly after the last change).
     settings_save_at: Option<Instant>,
     /// Saved window placement, applied when the window first shows.
@@ -1650,6 +1652,7 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            "browsers": self.browsers,
             // Private-workspace downloads are only listed while it is unlocked.
             "dl": self.dls.view(!self.locked),
             // Back/forward buttons: whether the focused tab's own history allows each way.
@@ -2846,13 +2849,15 @@ impl App {
                 }
                 self.sync();
             }
-            "importchrome" => {
-                // Onboarding from Chrome: bookmarks land in the bookmarks bar right away.
-                let msg = match self.lib.import_chrome() {
-                    Ok((0, name)) => format!("nothing new to import from Chrome ({name})"),
-                    Ok((n, name)) => {
+            "import" | "importchrome" => {
+                // Onboarding from another browser: its bookmarks land in the bookmarks bar.
+                let id = if cmd == "importchrome" { "chrome" } else { arg.as_str().unwrap_or("chrome") };
+                let name = library::browser_name(id);
+                let msg = match self.lib.import_from(id) {
+                    Ok((0, profile)) => format!("nothing new to import from {name} ({profile})"),
+                    Ok((n, profile)) => {
                         self.lib.save(&self.data_dir);
-                        format!("imported {n} bookmark{} from Chrome ({name})", if n == 1 { "" } else { "s" })
+                        format!("imported {n} bookmark{} from {name} ({profile})", if n == 1 { "" } else { "s" })
                     }
                     Err(e) => e,
                 };
@@ -3410,6 +3415,7 @@ fn main() {
         lib: library::Library::default(),
         booting: false,
         win_focused: true,
+        browsers: library::installed_browsers(),
         settings_save_at: None,
         start_place: None,
         last_ws: 0,

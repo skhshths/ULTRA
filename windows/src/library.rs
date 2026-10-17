@@ -213,22 +213,12 @@ impl Library {
     /// Onboarding: copy bookmarks from Google Chrome's most recently used profile (bookmarks
     /// bar first, then the rest). Chrome may stay open; its Bookmarks file is plain JSON.
     /// Returns how many were added (duplicates are skipped) and the profile's name.
-    pub fn import_chrome(&mut self) -> Result<(usize, String), String> {
-        let base = chrome_dir().ok_or("couldn't find Google Chrome on this computer")?;
-        let state: serde_json::Value = fs::read_to_string(base.join("Local State"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-        let profile = state["profile"]["last_used"].as_str().unwrap_or("Default").to_string();
-        let name = state["profile"]["info_cache"][&profile]["name"].as_str().unwrap_or(&profile).to_string();
-        let file = fs::read_to_string(base.join(&profile).join("Bookmarks"))
-            .or_else(|_| fs::read_to_string(base.join("Default").join("Bookmarks")))
-            .map_err(|_| "Chrome has no bookmarks to import yet".to_string())?;
-        let json: serde_json::Value = serde_json::from_str(&file).map_err(|_| "couldn't read Chrome's bookmarks".to_string())?;
-        let mut found = Vec::new();
-        for root in ["bookmark_bar", "other", "synced"] {
-            walk(&json["roots"][root], &mut found);
-        }
+    /// Copy another browser's bookmarks into ULTRA (new ones only). Returns how many were added
+    /// and which profile they came from. The other browser is only read, never changed.
+    pub fn import_from(&mut self, id: &str) -> Result<(usize, String), String> {
+        let name = browser_name(id);
+        let base = browser_dir(id).ok_or_else(|| format!("couldn't find {name} on this computer"))?;
+        let (found, profile) = if id == "firefox" { firefox_bookmarks(&base, name)? } else { chromium_bookmarks(&base, name)? };
         let t = now();
         let mut added = 0;
         for (title, url) in found {
@@ -240,7 +230,7 @@ impl Library {
         if added > 0 {
             self.dirty.set(true);
         }
-        Ok((added, name))
+        Ok((added, profile))
     }
 
     pub fn clear_history(&mut self) {
@@ -312,13 +302,169 @@ impl Library {
 }
 
 /// Where Chrome keeps its profiles on this OS.
-fn chrome_dir() -> Option<std::path::PathBuf> {
+/// Browsers ULTRA can copy bookmarks from: (id, name). All but Firefox are built on Chromium
+/// and keep bookmarks the way Chrome does.
+pub const BROWSERS: &[(&str, &str)] = &[
+    ("chrome", "Chrome"),
+    ("edge", "Edge"),
+    ("brave", "Brave"),
+    ("vivaldi", "Vivaldi"),
+    ("opera", "Opera"),
+    ("firefox", "Firefox"),
+];
+
+pub fn browser_name(id: &str) -> &'static str {
+    BROWSERS.iter().find(|(i, _)| *i == id).map_or("that browser", |(_, n)| n)
+}
+
+/// The browsers that have data on this computer (for the import buttons).
+pub fn installed_browsers() -> Vec<(&'static str, &'static str)> {
+    BROWSERS.iter().copied().filter(|(id, _)| browser_dir(id).is_some()).collect()
+}
+
+/// Where a browser keeps its profiles on this computer, if it's installed.
+fn browser_dir(id: &str) -> Option<std::path::PathBuf> {
+    let var = |v: &str| std::env::var_os(v).map(std::path::PathBuf::from);
     let p = if cfg!(target_os = "macos") {
-        std::path::PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support/Google/Chrome")
+        let s = var("HOME")?.join("Library/Application Support");
+        match id {
+            "chrome" => s.join("Google/Chrome"),
+            "edge" => s.join("Microsoft Edge"),
+            "brave" => s.join("BraveSoftware/Brave-Browser"),
+            "vivaldi" => s.join("Vivaldi"),
+            "opera" => s.join("com.operasoftware.Opera"),
+            "firefox" => s.join("Firefox/Profiles"),
+            _ => return None,
+        }
     } else {
-        std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Google/Chrome/User Data")
+        let (local, roaming) = (var("LOCALAPPDATA")?, var("APPDATA")?);
+        match id {
+            "chrome" => local.join("Google/Chrome/User Data"),
+            "edge" => local.join("Microsoft/Edge/User Data"),
+            "brave" => local.join("BraveSoftware/Brave-Browser/User Data"),
+            "vivaldi" => local.join("Vivaldi/User Data"),
+            "opera" => roaming.join("Opera Software/Opera Stable"),
+            "firefox" => roaming.join("Mozilla/Firefox/Profiles"),
+            _ => return None,
+        }
     };
     p.is_dir().then_some(p)
+}
+
+/// Bookmarks of the profile last used in a Chromium-based browser, and that profile's name.
+fn chromium_bookmarks(base: &Path, name: &str) -> Result<(Vec<(String, String)>, String), String> {
+    let state: serde_json::Value = fs::read_to_string(base.join("Local State"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let profile = state["profile"]["last_used"].as_str().unwrap_or("Default").to_string();
+    let label = state["profile"]["info_cache"][&profile]["name"].as_str().unwrap_or(&profile).to_string();
+    // Opera keeps a single profile right in its folder.
+    let file = [base.join(&profile).join("Bookmarks"), base.join("Default").join("Bookmarks"), base.join("Bookmarks")]
+        .iter()
+        .find_map(|p| fs::read_to_string(p).ok())
+        .ok_or_else(|| format!("{name} has no bookmarks to import yet"))?;
+    let json: serde_json::Value = serde_json::from_str(&file).map_err(|_| format!("couldn't read {name}'s bookmarks"))?;
+    let mut found = Vec::new();
+    for root in ["bookmark_bar", "other", "synced"] {
+        walk(&json["roots"][root], &mut found);
+    }
+    Ok((found, label))
+}
+
+/// Firefox's bookmarks, from the compressed backup it writes each day in every profile's
+/// bookmarkbackups folder (its live database is locked while Firefox runs). The newest backup
+/// belongs to the profile in use.
+fn firefox_bookmarks(profiles: &Path, name: &str) -> Result<(Vec<(String, String)>, String), String> {
+    let newest = fs::read_dir(profiles)
+        .map_err(|_| format!("couldn't find {name}'s profiles"))?
+        .flatten()
+        .filter_map(|p| fs::read_dir(p.path().join("bookmarkbackups")).ok())
+        .flatten()
+        .flatten()
+        .filter(|f| f.file_name().to_string_lossy().ends_with(".jsonlz4"))
+        .filter_map(|f| Some((f.metadata().ok()?.modified().ok()?, f.path())))
+        .max_by_key(|(t, _)| *t)
+        .map(|(_, p)| p)
+        .ok_or_else(|| format!("{name} hasn't saved a bookmark backup yet · open {name} once, then try again"))?;
+    let json: serde_json::Value = fs::read(&newest)
+        .ok()
+        .and_then(|d| mozlz4(&d))
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .ok_or_else(|| format!("couldn't read {name}'s bookmarks"))?;
+    // Profile folders are named "<random>.<profile name>".
+    let label = newest
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().split_once('.').map_or(n.to_string_lossy().to_string(), |(_, b)| b.to_string()))
+        .unwrap_or_else(|| "default".into());
+    let mut found = Vec::new();
+    walk_firefox(&json, &mut found);
+    Ok((found, label))
+}
+
+/// Collect (title, url) from a Firefox bookmark backup, in Firefox's order.
+fn walk_firefox(node: &serde_json::Value, out: &mut Vec<(String, String)>) {
+    if node["type"] == "text/x-moz-place" {
+        if let Some(u) = node["uri"].as_str() {
+            out.push((node["title"].as_str().unwrap_or("").to_string(), u.to_string()));
+        }
+    }
+    for c in node["children"].as_array().into_iter().flatten() {
+        walk_firefox(c, out);
+    }
+}
+
+/// Firefox's "mozLz40" files: an 8-byte magic, the decompressed size, then one LZ4 block.
+fn mozlz4(data: &[u8]) -> Option<Vec<u8>> {
+    let body = data.strip_prefix(b"mozLz40\0")?;
+    let size = u32::from_le_bytes(body.get(..4)?.try_into().ok()?) as usize;
+    lz4_block(&body[4..], size)
+}
+
+/// Decompress one LZ4 block of known size (sequences of literals plus back-references).
+fn lz4_block(src: &[u8], size: usize) -> Option<Vec<u8>> {
+    let mut out: Vec<u8> = Vec::with_capacity(size.min(64 << 20));
+    let mut i = 0;
+    let more = |i: &mut usize, mut n: usize| -> Option<usize> {
+        loop {
+            let b = *src.get(*i)?;
+            *i += 1;
+            n += b as usize;
+            if b != 255 {
+                return Some(n);
+            }
+        }
+    };
+    while i < src.len() {
+        let token = src[i];
+        i += 1;
+        let mut lit = (token >> 4) as usize;
+        if lit == 15 {
+            lit = more(&mut i, lit)?;
+        }
+        out.extend_from_slice(src.get(i..i + lit)?);
+        i += lit;
+        if i >= src.len() {
+            break; // the last sequence is literals only
+        }
+        let off = u16::from_le_bytes([*src.get(i)?, *src.get(i + 1)?]) as usize;
+        i += 2;
+        let mut len = (token & 15) as usize;
+        if len == 15 {
+            len = more(&mut i, len)?;
+        }
+        len += 4;
+        if off == 0 || off > out.len() || out.len() + len > size {
+            return None;
+        }
+        let start = out.len() - off;
+        for k in 0..len {
+            out.push(out[start + k]); // may overlap what it's copying: byte by byte
+        }
+    }
+    (out.len() == size).then_some(out)
 }
 
 /// Collect (title, url) from a Chrome bookmark folder, depth first, in Chrome's order.
@@ -391,6 +537,25 @@ mod tests {
         walk(&j, &mut out);
         let urls: Vec<&str> = out.iter().map(|x| x.1.as_str()).collect();
         assert_eq!(urls, ["https://github.com/", "https://docs.rs/", "https://news.ycombinator.com/"]);
+    }
+
+    #[test]
+    fn firefox_backup_decompresses_and_flattens() {
+        // "abcabcabcabc" + "XYZ": 3 literals, a 9-byte back-reference, 3 closing literals.
+        let mut f = b"mozLz40\0".to_vec();
+        f.extend(15u32.to_le_bytes());
+        f.extend([0x35, b'a', b'b', b'c', 3, 0, 0x30, b'X', b'Y', b'Z']);
+        assert_eq!(mozlz4(&f).as_deref(), Some(&b"abcabcabcabcXYZ"[..]));
+        assert_eq!(mozlz4(b"notmozlz"), None);
+        let j: serde_json::Value = serde_json::from_str(r#"{"type":"text/x-moz-place-container","children":[
+            {"type":"text/x-moz-place-container","title":"toolbar","children":[
+                {"type":"text/x-moz-place","title":"MDN","uri":"https://developer.mozilla.org/"},
+                {"type":"text/x-moz-place-separator"}]},
+            {"type":"text/x-moz-place","title":"Rust","uri":"https://www.rust-lang.org/"}]}"#).unwrap();
+        let mut out = Vec::new();
+        walk_firefox(&j, &mut out);
+        assert_eq!(out, [("MDN".to_string(), "https://developer.mozilla.org/".to_string()), ("Rust".to_string(), "https://www.rust-lang.org/".to_string())]);
+        assert_eq!(browser_name("edge"), "Edge");
     }
 
     #[test]
