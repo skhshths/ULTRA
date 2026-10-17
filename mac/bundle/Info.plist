@@ -33,6 +33,34 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>ULTRA — a minimalist, tiling, memory-frugal browser.</string>
 
+	<!-- A web browser: listed under System Settings → Desktop & Dock → Default web browser. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Web site URL</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>http</string>
+				<string>https</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>HTML document</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.html</string>
+				<string>public.xhtml</string>
+			</array>
+		</dict>
+	</array>
+
 	<!-- Audio-reactive visuals tap ULTRA's own sound (macOS 14.2+ process tap). -->
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>ULTRA listens only to its own tabs' sound to animate the audio-reactive background and audio bars. Nothing is recorded or saved.</string>

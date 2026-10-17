@@ -51,6 +51,10 @@ Bring your bookmarks with you in one click:
 Your bookmarks show up in the bookmarks bar under the address bar. Chrome can stay open, and
 nothing in Chrome is changed.
 
+To have links from other apps (email, chat, documents) open in ULTRA, open **Settings** →
+**Default browser** → **make default**. On Windows this opens Windows' Default apps page:
+choose ULTRA as your web browser. On a Mac, confirm in the dialog that appears.
+
 ## Getting started
 
 When ULTRA opens, a short tour walks you through everything. You can replay it any time from

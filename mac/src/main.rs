@@ -355,6 +355,13 @@ struct App {
     booting: bool,
     /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
     win_focused: bool,
+    /// Links macOS handed over before the chrome was ready (opened on "ready").
+    pending_open: Vec<String>,
+    ui_ready: bool,
+    /// Whether macOS opens web links in ULTRA (shown in settings).
+    is_default: bool,
+    /// Safari's user agent, for every page.
+    user_agent: String,
     timing: Option<(String, Instant)>,
     last_blocked: u64,
     /// After the window is activated (alt+tab), check where keyboard focus landed.
@@ -682,6 +689,7 @@ impl App {
             .with_visible(false)
             .with_background_color((20, 20, 20, 255))
             .with_devtools(true)
+            .with_user_agent(&self.user_agent)
             .with_incognito(private)
             // WebKit pauses hidden pages on its own (media keeps playing).
             .with_background_throttling(BackgroundThrottlingPolicy::Suspend)
@@ -1415,6 +1423,7 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            "isdef": self.is_default,
             // Private-workspace downloads are only listed while it is unlocked.
             "dl": self.dls.view(!self.locked),
             // Back/forward buttons: whether the focused tab's own history allows each way.
@@ -1746,6 +1755,22 @@ impl App {
     }
 
     /// Open a url as a new tab in workspace `ws` (in the background if that isn't the current one).
+    /// A link from another app: a new tab in front of the user, and the window brought forward.
+    fn open_external(&mut self, url: &str) {
+        if !self.ui_ready {
+            self.pending_open.push(url.to_string());
+            return;
+        }
+        let lower = url.to_ascii_lowercase();
+        if ["http://", "https://", "file:///"].iter().any(|p| lower.starts_with(p)) {
+            let ws = if self.ws == PRIVATE_WS && self.locked { 0 } else { self.ws };
+            self.open_in(ws, url.to_string());
+        }
+        self.window.set_minimized(false);
+        self.window.set_visible(true);
+        self.window.set_focus();
+    }
+
     fn open_in(&mut self, ws: usize, url: String) {
         if ws == self.ws {
             self.new_tab(url, String::new(), true);
@@ -2458,6 +2483,17 @@ impl App {
                     self.navigate(i, HOME);
                 }
             }
+            "makedefault" => {
+                self.is_default = macos::is_default();
+                if self.is_default {
+                    self.toast("ULTRA is already your default browser");
+                } else if macos::make_default() {
+                    self.toast("confirm in the macOS dialog to use ULTRA for links");
+                } else {
+                    self.toast("macOS didn't accept ULTRA as the default browser");
+                }
+                self.sync();
+            }
             "importchrome" => {
                 // Onboarding from Chrome: bookmarks land in the bookmarks bar right away.
                 let msg = match self.lib.import_chrome() {
@@ -2594,6 +2630,10 @@ impl App {
                 }
             }
             "ready" => {
+                self.ui_ready = true;
+                for u in std::mem::take(&mut self.pending_open) {
+                    self.open_external(&u);
+                }
                 if self.cfg.launches == COFFEE_LAUNCH && self.coffee_at.is_none() && !self.coffee {
                     self.coffee_at = Some(Instant::now() + COFFEE_DELAY);
                 }
@@ -2764,6 +2804,12 @@ impl App {
                     if !started {
                         self.remember(i);
                         self.apply_zaps(i);
+                        // New views start on ULTRA's dark backdrop (no white flash while the
+                        // first page loads); after that, pages that set no background of their
+                        // own get the white canvas they were designed for, as in other browsers.
+                        if let Some(v) = &self.tabs[i].view {
+                            macos::draw_page_background(v);
+                        }
                     }
                     self.sync();
                 }
@@ -3064,6 +3110,10 @@ fn main() {
         lib: library::Library::default(),
         booting: false,
         win_focused: true,
+        pending_open: Vec::new(),
+        ui_ready: false,
+        is_default: false,
+        user_agent: macos::safari_user_agent(),
         timing: None,
         last_blocked: 0,
         refocus_at: None,
@@ -3110,6 +3160,7 @@ fn main() {
     app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
     app.lib = library::Library::load(&app.data_dir);
+    app.is_default = macos::is_default();
     app.dls = downloads::Downloads::load(&app.data_dir);
     app.booting = app.cfg.boot && !app.cfg.ultraspeed;
     app.boot_until = Instant::now() + Duration::from_secs(4);
@@ -3151,6 +3202,12 @@ fn main() {
 
     event_loop.run(move |event, _, flow| {
         match event {
+            // Links (and .html files) macOS opens in ULTRA as the default browser.
+            Event::Opened { urls } => {
+                for u in urls {
+                    app.open_external(u.as_str());
+                }
+            }
             Event::UserEvent(ev) => {
                 if !matches!(ev, UserEvent::Procs(_)) {
                     app.note_activity();
@@ -3166,6 +3223,11 @@ fn main() {
                 }
                 WindowEvent::Focused(f) => {
                     app.win_focused = f;
+                    // Back from the default-browser prompt or System Settings: settings shows it.
+                    if f && app.is_default != macos::is_default() {
+                        app.is_default = !app.is_default;
+                        app.sync();
+                    }
                     app.track();
                     // Give macOS a moment to settle activation before checking focus.
                     app.refocus_at = f.then(|| Instant::now() + Duration::from_millis(40));

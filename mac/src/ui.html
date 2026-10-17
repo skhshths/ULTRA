@@ -219,6 +219,7 @@ body.mac.fs #bar { padding-left: 12px; }
 .card .ft { padding: 10px 16px; color: #444; font-size: 10px; }
 .row .run { background: none; border: 1px solid #2c2c2c; color: var(--mid); font: inherit; padding: 5px 10px; cursor: default; }
 .row .run:hover { color: var(--acc); border-color: var(--acc-dim); }
+.row .run:disabled { color: var(--acc); border-color: var(--acc-dim); }
 .row .ctl { display: flex; gap: 10px; align-items: center; }
 .spd { display: none; color: var(--bg); background: var(--acc); font-size: 9px; font-weight: 700; padding: 2px 4px; letter-spacing: .12em; }
 
@@ -529,6 +530,9 @@ body.bmbar #bmbar { display: flex; }
     <div class="desc">letters &amp; numbers jump to the address bar when you aren't in a text field.<br>turn off if a site's single-key shortcuts matter to you.</div></div><div class="sw" id="sw-type"></div></div>
   <div class="row"><div><div class="name">search</div><div class="desc">used when the address bar isn't a url.</div></div>
     <div class="seg" id="seg"><button data-e="duckduckgo">ddg</button><button data-e="google">google</button><button data-e="bing">bing</button><button data-e="brave">brave</button></div></div>
+  <div class="sec">DEFAULT BROWSER</div>
+  <div class="row"><div><div class="name">default browser</div><div class="desc" id="def-desc">open links from other apps (mail, chat, documents) in ULTRA.<br>macOS asks you to confirm.</div></div>
+    <div class="ctl"><button class="run" id="def-btn">make default</button></div></div>
   <div class="sec">IMPORT</div>
   <div class="row"><div><div class="name">import from chrome</div><div class="desc" id="imp-desc">copies your Google Chrome bookmarks into ULTRA (they show up in the bookmarks bar).<br>chrome can stay open; nothing is changed in chrome.</div></div>
     <div class="ctl"><button class="run" id="imp-chrome">import bookmarks</button></div></div>
@@ -656,6 +660,8 @@ window.ultra = {
     document.body.classList.toggle('private', s.ws === 9);
     if (s.gate) setLock(cfg().haspass ? 'unlock' : 'create'); else if (lockMode && lockMode !== 'change') setLock(null);
     setText($('#priv-pass'), cfg().haspass ? 'change password' : 'set password');
+    setText($('#def-btn'), s.isdef ? '✓ ULTRA is default' : 'make default');
+    $('#def-btn').disabled = !!s.isdef;
     const cur = s.tabs[s.a] || { s: 'home', u: '' };
     const url = $('#url'); if (document.activeElement !== url) url.value = cur.s === 'home' ? '' : cur.u;
     const insecure = cur.s !== 'home' && /^http:/i.test(cur.u) && !/^http:\/\/(localhost|127\.)/i.test(cur.u);
@@ -780,6 +786,7 @@ $('#r-bmbar').onclick = () => toggle('bmbar', true);
 $('#r-bars').onclick = () => toggle('bars', false);
 $('#hist-clear').onclick = () => send('clearhistory');
 $('#imp-chrome').onclick = () => send('importchrome');
+$('#def-btn').onclick = () => send('makedefault');
 // ── downloads (ctrl+j): everything downloaded, live progress, open / show in folder ──
 const fmtB = (b) => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : b >= 1e3 ? Math.round(b / 1e3) + ' KB' : b + ' B';
 const ago = (t) => {
@@ -1068,6 +1075,7 @@ const CMDS = [
   { k: 'isolate', a: '[1-9]', d: 'give a workspace its own logins (or share them again)', opts: ['1', '2', '3', '4', '5', '6', '7', '8', '9'], run: (x) => send('isolate', num(x) ? num(x) - 1 : S.ws) },
   { k: 'overview', d: 'every tab at a glance', run: () => send('overview', true) },
   { k: 'downloads', d: 'everything you downloaded', run: () => send('downloads', true) },
+  { k: 'make default', d: 'open links from other apps in ULTRA', run: () => send('makedefault') },
   { k: 'settings', d: 'open settings', run: () => send('settings', true) },
   { k: 'tour', d: 'run the tutorial', run: () => send('tour', true) },
 ];

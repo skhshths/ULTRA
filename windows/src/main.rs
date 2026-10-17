@@ -15,7 +15,9 @@
 
 mod audio;
 mod blocker;
+mod default_browser;
 mod downloads;
+mod instance;
 mod layout;
 mod library;
 mod privacy;
@@ -152,6 +154,8 @@ enum UserEvent {
     DlState(u64, downloads::State, String),
     /// A WebView2 process died: (slot, 0 = the chrome UI; failure kind).
     Failed(u64, i32),
+    /// A link handed over by another app (or a second launch): URL, or empty to come forward.
+    Open(String),
 }
 
 struct Tab {
@@ -368,6 +372,10 @@ struct App {
     booting: bool,
     /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
     win_focused: bool,
+    /// Link ULTRA was started with, opened once the chrome is ready.
+    pending_open: Option<String>,
+    /// Whether Windows opens web links in ULTRA (shown in settings).
+    is_default: bool,
     timing: Option<(String, Instant)>,
     last_blocked: u64,
     /// After the window is activated (alt+tab), check where keyboard focus landed.
@@ -1590,6 +1598,7 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            "isdef": self.is_default,
             // Private-workspace downloads are only listed while it is unlocked.
             "dl": self.dls.view(!self.locked),
             // Back/forward buttons: whether the focused tab's own history allows each way.
@@ -1932,6 +1941,19 @@ impl App {
     }
 
     /// Open a url as a new tab in workspace `ws` (in the background if that isn't the current one).
+    /// A link from another app: a new tab in front of the user, and the window brought forward.
+    /// An empty link (ULTRA started again) only brings the window forward.
+    fn open_external(&mut self, url: &str) {
+        let lower = url.to_ascii_lowercase();
+        if ["http://", "https://", "file:///"].iter().any(|p| lower.starts_with(p)) {
+            let ws = if self.ws == PRIVATE_WS && self.locked { 0 } else { self.ws };
+            self.open_in(ws, url.to_string());
+        }
+        self.window.set_minimized(false);
+        self.window.set_visible(true);
+        self.window.set_focus();
+    }
+
     fn open_in(&mut self, ws: usize, url: String) {
         if ws == self.ws {
             self.new_tab(url, String::new(), true);
@@ -2701,6 +2723,20 @@ impl App {
                 }
                 self.sync();
             }
+            "makedefault" => {
+                // Windows only lets the user pick the default browser: register, then open
+                // its Default apps page at ULTRA.
+                self.is_default = default_browser::is_default();
+                if self.is_default {
+                    self.toast("ULTRA is already your default browser");
+                } else if std::env::current_exe().is_ok_and(|exe| default_browser::register(&exe)) {
+                    default_browser::open_settings();
+                    self.toast("in Windows settings, set ULTRA as your web browser");
+                } else {
+                    self.toast("couldn't register ULTRA with Windows");
+                }
+                self.sync();
+            }
             "importchrome" => {
                 // Onboarding from Chrome: bookmarks land in the bookmarks bar right away.
                 let msg = match self.lib.import_chrome() {
@@ -2849,6 +2885,9 @@ impl App {
                 }
             }
             "ready" => {
+                if let Some(u) = self.pending_open.take() {
+                    self.open_external(&u);
+                }
                 if self.cfg.launches == COFFEE_LAUNCH && self.coffee_at.is_none() && !self.coffee {
                     self.coffee_at = Some(Instant::now() + COFFEE_DELAY);
                 }
@@ -2973,6 +3012,12 @@ impl App {
                     if !started {
                         self.remember(i);
                         self.apply_zaps(i);
+                        // New views start on ULTRA's dark backdrop (no white flash while the
+                        // first page loads); after that, pages that set no background of their
+                        // own get the white canvas they were designed for, as in other browsers.
+                        if let Some(v) = &self.tabs[i].view {
+                            let _ = v.set_background_color((255, 255, 255, 255));
+                        }
                         // A navigation started from the address bar can leave keyboard focus on
                         // the bare window; once the page is in, make sure keys reach it.
                         if self.tabs[i].id == self.focus && self.win_focused {
@@ -2988,6 +3033,7 @@ impl App {
                 self.open_in(ws, url);
             }
             UserEvent::Procs(p) => self.on_procs(p),
+            UserEvent::Open(u) => self.open_external(&u),
             UserEvent::DlStart(key, slot, url, path, total) => {
                 let private = self.tabs.iter().any(|t| t.slot == slot && t.ws == PRIVATE_WS);
                 let id = self.dls.start(&url, &path, total, private);
@@ -3112,6 +3158,13 @@ fn main() {
     let bench_mode = std::env::args().any(|a| a == "--bench");
     let data_dir = data_dir();
     let _ = fs::create_dir_all(&data_dir);
+    // A link from another app (ULTRA as the default browser), or a plain second launch:
+    // if ULTRA is already running, hand it over and leave.
+    let link = std::env::args().skip(1).find(|a| !a.starts_with("--")).and_then(|a| default_browser::link_to_url(&a));
+    let pipe = instance::pipe_name(&data_dir);
+    if !bench_mode && instance::forward(&pipe, link.as_deref().unwrap_or("")) {
+        return;
+    }
     let cfg: Settings = fs::read_to_string(data_dir.join("settings.json"))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -3127,6 +3180,15 @@ fn main() {
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
+    if !bench_mode {
+        let p = proxy.clone();
+        instance::listen(&pipe, move |m| {
+            let _ = p.send_event(UserEvent::Open(m));
+        });
+        if let Ok(exe) = std::env::current_exe() {
+            default_browser::refresh(&exe);
+        }
+    }
     // Hidden until the chrome has painted, so there is no white flash on startup.
     let window = WindowBuilder::new()
         .with_title("ULTRA")
@@ -3205,6 +3267,8 @@ fn main() {
         lib: library::Library::default(),
         booting: false,
         win_focused: true,
+        pending_open: None,
+        is_default: false,
         timing: None,
         last_blocked: 0,
         refocus_at: None,
@@ -3251,6 +3315,8 @@ fn main() {
     app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
     app.lib = library::Library::load(&app.data_dir);
+    app.pending_open = link;
+    app.is_default = default_browser::is_default();
     app.dls = downloads::Downloads::load(&app.data_dir);
     app.booting = app.cfg.boot && !app.cfg.ultraspeed;
     app.boot_until = Instant::now() + Duration::from_secs(4);
@@ -3318,6 +3384,11 @@ fn main() {
                 }
                 WindowEvent::Focused(f) => {
                     app.win_focused = f;
+                    // Back from Windows' Default apps page? Settings shows the new state.
+                    if f && app.is_default != default_browser::is_default() {
+                        app.is_default = !app.is_default;
+                        app.sync();
+                    }
                     app.track();
                     // Give Windows a moment to settle activation before checking focus.
                     app.refocus_at = f.then(|| Instant::now() + Duration::from_millis(40));
