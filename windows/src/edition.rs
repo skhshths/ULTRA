@@ -11,3 +11,5 @@ pub const TAG: &str = "";
 pub const PROGID: &str = "ULTRAHTML";
 /// The chrome UI in inverted colors (light), to tell the builds apart at a glance.
 pub const INVERT: bool = false;
+/// GitHub repository whose "latest" release this build updates from.
+pub const REPO: &str = "skhshths/ULTRA";

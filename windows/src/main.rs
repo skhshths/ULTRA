@@ -16,12 +16,14 @@
 mod audio;
 mod blocker;
 mod downloads;
+mod edition;
 mod instance;
 mod layout;
 mod library;
 mod privacy;
 mod slideshow;
 mod spectrum;
+mod updater;
 mod stats;
 
 use std::{
@@ -121,6 +123,16 @@ const SPARES: usize = 2;
 /// Must be identical for every webview so they all share one WebView2 environment.
 /// SmartScreen (phishing/malware protection) is deliberately left on.
 const BROWSER_ARGS: &str = "--enable-features=msSmartScreenProtection";
+
+/// The engine flags, plus a DevTools port when the developer sets ULTRA_DEVTOOLS_PORT (used to
+/// drive ULTRA from test scripts). Computed once so every webview gets the identical string.
+fn browser_args() -> &'static str {
+    static ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ARGS.get_or_init(|| match std::env::var("ULTRA_DEVTOOLS_PORT").ok().and_then(|p| p.parse::<u16>().ok()) {
+        Some(port) => format!("{BROWSER_ARGS} --remote-debugging-port={port}"),
+        None => BROWSER_ARGS.to_string(),
+    })
+}
 const THEMES: &[&str] = &[
     "mint", "amber", "red", "mono", "ice", "matrix", "violet", "pink", "orange", "cyan", "gold", "lime", "custom",
 ];
@@ -129,6 +141,10 @@ const BG_MODES: &[&str] = &["swirl", "matrix", "stars", "gradient", "solid", "im
 const BG_MAX: usize = 16 * 1024 * 1024;
 
 enum UserEvent {
+    /// "Check for updates" finished: state for settings, and the update to install if any.
+    UpdateChecked(Value, Option<updater::Update>),
+    /// An update was downloaded and swapped in (the exe to restart from), or failed.
+    UpdateInstalled(Result<PathBuf, String>),
     Ui(String),
     Content(u64, String),
     Title(u64, String),
@@ -378,6 +394,8 @@ struct App {
     booting: bool,
     /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
     win_focused: bool,
+    /// A newer build found by "check for updates", ready to install.
+    update: Option<updater::Update>,
     /// Other browsers found on this computer, offered for importing bookmarks.
     browsers: Vec<(&'static str, &'static str)>,
     /// Settings changed and not yet written (saved shortly after the last change).
@@ -907,7 +925,7 @@ impl App {
             .with_devtools(true)
             // Private tabs use WebView2's InPrivate profile: nothing reaches disk.
             .with_incognito(private)
-            .with_additional_browser_args(BROWSER_ARGS)
+            .with_additional_browser_args(browser_args())
             .with_initialization_script_for_main_only(typeahead_js(self.cfg.typeahead), true)
             .with_initialization_script_for_main_only(declutter_js(self.cfg.declutter), true)
             .with_initialization_script_for_main_only(CONTENT_JS, true)
@@ -1652,6 +1670,7 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            "version": updater::short(updater::COMMIT),
             "browsers": self.browsers,
             // Private-workspace downloads are only listed while it is unlocked.
             "dl": self.dls.view(!self.locked),
@@ -2849,6 +2868,26 @@ impl App {
                 }
                 self.sync();
             }
+            "update_check" => {
+                let proxy = self.proxy.clone();
+                std::thread::spawn(move || {
+                    let (state, up) = updater::check(edition::REPO);
+                    let _ = proxy.send_event(UserEvent::UpdateChecked(state, up));
+                });
+            }
+            "update_install" => {
+                if let Some(up) = self.update.clone() {
+                    let proxy = self.proxy.clone();
+                    std::thread::spawn(move || {
+                        let _ = proxy.send_event(UserEvent::UpdateInstalled(updater::install(&up)));
+                    });
+                }
+            }
+            "update_page" => {
+                let ws = if self.ws == PRIVATE_WS { self.last_ws } else { self.ws };
+                self.open_in(ws, updater::releases_page(edition::REPO));
+                self.command("settings", &json!(false));
+            }
             "import" | "importchrome" => {
                 // Onboarding from another browser: its bookmarks land in the bookmarks bar.
                 let id = if cmd == "importchrome" { "chrome" } else { arg.as_str().unwrap_or("chrome") };
@@ -3137,6 +3176,23 @@ impl App {
                 self.open_in(ws, url);
             }
             UserEvent::Procs(p) => self.on_procs(p),
+            UserEvent::UpdateChecked(state, up) => {
+                self.update = up;
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({state})"));
+            }
+            UserEvent::UpdateInstalled(Ok(exe)) => {
+                // Hand the session over to the new build: save everything, start it, close.
+                self.save_settings();
+                self.save_session();
+                if updater::restart(&exe) {
+                    *flow = ControlFlow::Exit;
+                } else {
+                    let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "failed", "m": "updated · restart ULTRA to use the new build" })));
+                }
+            }
+            UserEvent::UpdateInstalled(Err(m)) => {
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "failed", "m": m })));
+            }
             UserEvent::Open(u) => self.open_external(&u),
             UserEvent::DlStart(key, slot, url, path, total) => {
                 let private = self.tabs.iter().any(|t| t.slot == slot && t.ws == PRIVATE_WS);
@@ -3275,6 +3331,9 @@ fn main() {
         return;
     }
     let bench_mode = std::env::args().any(|a| a == "--bench");
+    // Just updated: let the previous ULTRA finish closing, then tidy up after it.
+    updater::wait_for_previous();
+    updater::clean_up();
     let data_dir = data_dir();
     let _ = fs::create_dir_all(&data_dir);
     // One ULTRA per profile: a second launch hands over to the running one (which comes
@@ -3354,7 +3413,7 @@ fn main() {
             })
             .with_background_color((20, 20, 20, 255))
             .with_default_context_menus(false)
-            .with_additional_browser_args(BROWSER_ARGS)
+            .with_additional_browser_args(browser_args())
             // The chrome UI never navigates anywhere; refuse anything that tries.
             .with_navigation_handler(|u| u.starts_with("about:") || u.starts_with("data:"))
             .with_ipc_handler(move |r| {
@@ -3415,6 +3474,7 @@ fn main() {
         lib: library::Library::default(),
         booting: false,
         win_focused: true,
+        update: None,
         browsers: library::installed_browsers(),
         settings_save_at: None,
         start_place: None,

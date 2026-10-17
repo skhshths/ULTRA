@@ -14,12 +14,14 @@
 mod audio;
 mod blocker;
 mod downloads;
+mod edition;
 mod layout;
 mod library;
 mod macos;
 mod privacy;
 mod slideshow;
 mod spectrum;
+mod updater;
 mod stats;
 
 use std::{
@@ -110,6 +112,8 @@ const BG_MODES: &[&str] = &["swirl", "matrix", "stars", "gradient", "solid", "im
 const BG_MAX: usize = 16 * 1024 * 1024;
 
 enum UserEvent {
+    /// "Check for updates" finished: state for settings, and the update to install if any.
+    UpdateChecked(Value, Option<updater::Update>),
     Ui(String),
     Content(u64, String),
     Title(u64, String),
@@ -358,6 +362,8 @@ struct App {
     booting: bool,
     /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
     win_focused: bool,
+    /// A newer build found by "check for updates", ready to install.
+    update: Option<updater::Update>,
     /// Other browsers found on this computer, offered for importing bookmarks.
     browsers: Vec<(&'static str, &'static str)>,
     /// Settings changed and not yet written (saved shortly after the last change).
@@ -1463,6 +1469,7 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            "version": updater::short(updater::COMMIT),
             "browsers": self.browsers,
             // Private-workspace downloads are only listed while it is unlocked.
             "dl": self.dls.view(!self.locked),
@@ -2525,6 +2532,24 @@ impl App {
                     self.navigate(i, HOME);
                 }
             }
+            "update_check" => {
+                let proxy = self.proxy.clone();
+                std::thread::spawn(move || {
+                    let (state, up) = updater::check(edition::REPO);
+                    let _ = proxy.send_event(UserEvent::UpdateChecked(state, up));
+                });
+            }
+            "update_install" => {
+                // A Mac app bundle is replaced by hand: open the download page.
+                let ws = if self.ws == PRIVATE_WS { 0 } else { self.ws };
+                self.open_in(ws, updater::releases_page(edition::REPO));
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "available", "m": "download page opened · unzip it and drag the new app over the old one" })));
+            }
+            "update_page" => {
+                let ws = if self.ws == PRIVATE_WS { 0 } else { self.ws };
+                self.open_in(ws, updater::releases_page(edition::REPO));
+                self.command("settings", &json!(false));
+            }
             "import" | "importchrome" => {
                 // Onboarding from another browser: its bookmarks land in the bookmarks bar.
                 let id = if cmd == "importchrome" { "chrome" } else { arg.as_str().unwrap_or("chrome") };
@@ -2804,6 +2829,10 @@ impl App {
                 self.open_in(ws, url);
             }
             UserEvent::Procs(p) => self.on_procs(p),
+            UserEvent::UpdateChecked(state, up) => {
+                self.update = up;
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({state})"));
+            }
             UserEvent::Slide(data, name) => {
                 self.slide_loading = false;
                 if !data.is_empty() && self.slideshow_on() {
@@ -3120,6 +3149,7 @@ fn main() {
         lib: library::Library::default(),
         booting: false,
         win_focused: true,
+        update: None,
         browsers: library::installed_browsers(),
         settings_save_at: None,
         win_normal: None,
