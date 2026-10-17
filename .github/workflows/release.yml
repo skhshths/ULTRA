@@ -1,11 +1,18 @@
-# Build Windows + macOS on every push to main and publish them as the "latest" release,
-# so the README's download links always serve the newest build.
+# Experimental builds. Windows is built on every push to main. The Mac build costs ten times
+# the Actions minutes in a private repo, so it only runs for a batch of changes worth shipping:
+# a commit message containing [mac], or a manual run with "build mac" ticked. Otherwise the
+# release keeps the previous Mac download.
 name: release
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      mac:
+        description: Build the Mac app too
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -35,6 +42,7 @@ jobs:
           path: ULTRA-windows-x64.exe
 
   macos:
+    if: ${{ inputs.mac || contains(github.event.head_commit.message, '[mac]') }}
     runs-on: macos-latest
     defaults:
       run:
@@ -56,6 +64,8 @@ jobs:
 
   release:
     needs: [windows, macos]
+    # Runs when the Mac build was skipped too; never ships a half-failed build.
+    if: ${{ always() && needs.windows.result == 'success' && needs.macos.result != 'failure' && needs.macos.result != 'cancelled' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -66,8 +76,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # No new Mac build this time: carry the previous one over.
+          if [ ! -f ULTRA-macos.zip ]; then
+            gh release download latest -p ULTRA-macos.zip || true
+          fi
+          files="ULTRA-windows-x64.exe"
+          [ -f ULTRA-macos.zip ] && files="$files ULTRA-macos.zip"
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest ULTRA-windows-x64.exe ULTRA-macos.zip \
+          gh release create latest $files \
             --title "ULTRA experimental (latest build)" \
             --target "$GITHUB_SHA" \
             --latest \
