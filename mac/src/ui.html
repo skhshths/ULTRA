@@ -1582,7 +1582,9 @@ panesEl.addEventListener('pointerdown', (e) => {
   const move = (ev) => {
     const r = info.parent;
     pending = info.v ? (ev.clientX - r.x - 3) / (r.w - 6) : (ev.clientY - r.y - 3) / (r.h - 6);
-    if (!raf) raf = requestAnimationFrame(() => { raf = 0; send('ratio', [info.path, Math.min(.9, Math.max(.1, pending))]); });
+    // Both sides keep at least ~60px (and at least 10%), so a drag can't squeeze a pane away.
+    const min = Math.min(0.45, Math.max(0.1, 60 / ((info.v ? r.w : r.h) - 6)));
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; send('ratio', [info.path, Math.min(1 - min, Math.max(min, pending))]); });
   };
   const up = () => {
     removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
