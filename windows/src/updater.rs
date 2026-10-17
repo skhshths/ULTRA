@@ -14,6 +14,23 @@ pub const COMMIT: &str = match option_env!("ULTRA_COMMIT") {
     Some(c) => c,
     None => "",
 };
+/// The release this build is (named by CI, e.g. "ULTRA 1 · Apple"; empty for local builds).
+pub const RELEASE: &str = match option_env!("ULTRA_RELEASE") {
+    Some(r) => r,
+    None => "",
+};
+
+/// How this build introduces itself in settings: its release name, or else its commit.
+pub fn version() -> String {
+    if !RELEASE.is_empty() {
+        RELEASE.to_string()
+    } else if !COMMIT.is_empty() {
+        format!("build {}", short(COMMIT))
+    } else {
+        String::new()
+    }
+}
+
 /// The release file this platform updates from.
 #[cfg(windows)]
 const ASSET: &str = "ULTRA-windows-x64.exe";
@@ -76,14 +93,15 @@ pub fn check(repo: &str) -> (Value, Option<Update>) {
         return (json!({ "s": "failed", "m": "the latest release has no download for this computer" }), None);
     };
     if !COMMIT.is_empty() && latest == COMMIT {
-        return (json!({ "s": "uptodate", "m": format!("you have the latest build ({})", short(COMMIT)) }), None);
+        return (json!({ "s": "uptodate", "m": "you have the latest version" }), None);
     }
     let up = Update {
         url: asset["browser_download_url"].as_str().unwrap_or("").to_string(),
         size: asset["size"].as_u64().unwrap_or(0),
     };
     let when = rel["published_at"].as_str().unwrap_or("").split('T').next().unwrap_or("").to_string();
-    (json!({ "s": "available", "m": format!("a new build is out ({}, {when})", short(&latest)), "page": releases_page(repo) }), Some(up))
+    let name = rel["name"].as_str().filter(|n| !n.is_empty() && !n.contains("latest build")).map(str::to_string).unwrap_or_else(|| format!("a new build ({})", short(&latest)));
+    (json!({ "s": "available", "m": format!("{name} is out ({when})"), "page": releases_page(repo) }), Some(up))
 }
 
 /// Where the exe sits while it's being replaced.

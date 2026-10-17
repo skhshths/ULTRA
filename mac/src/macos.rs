@@ -412,3 +412,73 @@ pub fn install_menu(on_command: impl Fn(&str) + 'static) -> Option<Retained<Menu
     app.setWindowsMenu(Some(&window));
     Some(target)
 }
+
+/// Safari's user agent, with the installed Safari's version. WKWebView's own user agent
+/// leaves out "Version/… Safari/…", and sites such as Gmail then call the browser outdated.
+pub fn safari_user_agent() -> String {
+    let v = std::fs::read_to_string("/Applications/Safari.app/Contents/Info.plist")
+        .ok()
+        .and_then(|s| {
+            let rest = &s[s.find("<key>CFBundleShortVersionString</key>")?..];
+            let a = rest.find("<string>")? + "<string>".len();
+            let b = rest[a..].find("</string>")?;
+            Some(rest[a..a + b].trim().to_string())
+        })
+        .filter(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        .unwrap_or_else(|| "18.0".into());
+    format!("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{v} Safari/605.1.15")
+}
+
+#[link(name = "CoreServices", kind = "framework")]
+extern "C" {
+    fn LSSetDefaultHandlerForURLScheme(scheme: *const std::ffi::c_void, handler: *const std::ffi::c_void) -> i32;
+    fn LSSetDefaultRoleHandlerForContentType(kind: *const std::ffi::c_void, role: u32, handler: *const std::ffi::c_void) -> i32;
+    fn LSCopyDefaultHandlerForURLScheme(scheme: *const std::ffi::c_void) -> *const std::ffi::c_void;
+}
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFRelease(cf: *const std::ffi::c_void);
+}
+
+/// tools/bundle.sh writes the same id into the app's Info.plist.
+use crate::edition::BUNDLE_ID;
+
+/// NSString is toll-free bridged to CFString.
+fn cf(s: &NSString) -> *const std::ffi::c_void {
+    s as *const NSString as *const std::ffi::c_void
+}
+
+/// Ask macOS to make ULTRA the default browser (macOS shows its own confirmation).
+pub fn make_default() -> bool {
+    let id = NSString::from_str(BUNDLE_ID);
+    let mut ok = true;
+    for scheme in ["http", "https"] {
+        ok &= unsafe { LSSetDefaultHandlerForURLScheme(cf(&NSString::from_str(scheme)), cf(&id)) } == 0;
+    }
+    // kLSRolesAll: .html files open in ULTRA too.
+    unsafe { LSSetDefaultRoleHandlerForContentType(cf(&NSString::from_str("public.html")), 0xFFFF_FFFF, cf(&id)) };
+    ok
+}
+
+/// Whether web links currently open in ULTRA.
+pub fn is_default() -> bool {
+    let p = unsafe { LSCopyDefaultHandlerForURLScheme(cf(&NSString::from_str("https"))) };
+    if p.is_null() {
+        return false;
+    }
+    let id = unsafe { &*(p as *const NSString) }.to_string();
+    unsafe { CFRelease(p) };
+    id.eq_ignore_ascii_case(BUNDLE_ID)
+}
+
+/// Let WebKit draw its normal page background again: white, or dark for pages that use a dark
+/// color scheme. New pages are created without it (ULTRA's dark backdrop shows instead), so
+/// switching pages never flashes white.
+pub fn draw_page_background(v: &WebView) {
+    let w = v.webview();
+    let yes = objc2_foundation::NSNumber::numberWithBool(true);
+    let key = NSString::from_str("drawsBackground");
+    unsafe {
+        let _: () = msg_send![&*w, setValue: &*yes, forKey: &*key];
+    }
+}

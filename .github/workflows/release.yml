@@ -1,5 +1,7 @@
-# Build Windows + macOS on every push to main and publish them as the "latest" release,
-# so the README's download links always serve the newest build.
+# Every push to main builds Windows and macOS and publishes them as a new release, named after
+# a food in alphabetical order (ULTRA 1 · Apple, ULTRA 2 · Banana, …) so releases are easy to
+# tell apart and the newer one is obvious. The newest is GitHub's "latest" release, so the
+# README's download links and ULTRA's "check for updates" always find it.
 name: release
 
 on:
@@ -12,11 +14,37 @@ permissions:
 
 concurrency:
   group: release
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  name:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      title: ${{ steps.pick.outputs.title }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          foods=(Apple Banana Cherry Dumpling Eclair Fig Gelato Honeydew Icecream Jalapeno Kiwi Lemon Mango
+                 Nectarine Olive Pancake Quiche Ramen Sushi Taco Udon Vanilla Waffle Xigua Yam Ziti)
+          # Releases so far are tagged v<number>-<food>; the next number is one more.
+          last=$(gh release list --limit 1000 --json tagName --jq '.[].tagName' | sed -n 's/^v\([0-9]\+\)-.*/\1/p' | sort -n | tail -1)
+          n=$(( ${last:-0} + 1 ))
+          food=${foods[$(( (n - 1) % 26 ))]}
+          round=$(( (n - 1) / 26 + 1 ))
+          [ "$round" -gt 1 ] && food="$food $round"
+          slug=$(echo "$food" | tr 'A-Z ' 'a-z-')
+          echo "tag=v$n-$slug" >> "$GITHUB_OUTPUT"
+          echo "title=ULTRA $n · $food" >> "$GITHUB_OUTPUT"
+
   windows:
+    needs: name
     runs-on: windows-latest
+    env:
+      ULTRA_RELEASE: ${{ needs.name.outputs.title }}
     defaults:
       run:
         working-directory: windows
@@ -35,7 +63,10 @@ jobs:
           path: ULTRA-windows-x64.exe
 
   macos:
+    needs: name
     runs-on: macos-latest
+    env:
+      ULTRA_RELEASE: ${{ needs.name.outputs.title }}
     defaults:
       run:
         working-directory: mac
@@ -48,32 +79,35 @@ jobs:
         with:
           workspaces: mac
       - run: sh tools/bundle.sh universal
-      - run: ditto -c -k --keepParent target/ULTRA.app ../ULTRA-macos.zip
+      - run: ditto -c -k --keepParent target/*.app ../ULTRA-macos.zip
       - uses: actions/upload-artifact@v4
         with:
           name: macos
           path: ULTRA-macos.zip
 
   release:
-    needs: [windows, macos]
+    needs: [name, windows, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-      - name: Replace the "latest" release
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.name.outputs.tag }}
+          TITLE: ${{ needs.name.outputs.title }}
         run: |
-          gh release delete latest --yes --cleanup-tag || true
-          gh release create latest ULTRA-windows-x64.exe ULTRA-macos.zip \
-            --title "ULTRA (latest build)" \
+          # The old rolling "latest" release (from before releases had names) goes away.
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" ULTRA-windows-x64.exe ULTRA-macos.zip \
+            --title "$TITLE" \
             --target "$GITHUB_SHA" \
             --latest \
-            --notes "Newest build of ULTRA, from commit ${GITHUB_SHA::7}.
+            --notes "**$TITLE**, built from commit ${GITHUB_SHA::7}.
 
-          - **Windows 10/11:** download \`ULTRA-windows-x64.exe\` and run it. If SmartScreen appears, click *More info → Run anyway*.
-          - **macOS 11+ (early preview):** download \`ULTRA-macos.zip\`, drag ULTRA.app to Applications, then right-click → Open the first time.
+          - **Windows 10/11:** download \`ULTRA-windows-x64.exe\` and run it. If SmartScreen appears, click *More info → Run anyway*. Already using ULTRA? Settings → updates → **update now** installs it in place.
+          - **macOS 11+ (early preview):** download \`ULTRA-macos.zip\`, drag the app to Applications, then right-click → Open the first time.
 
           See the [README](https://github.com/skhshths/ULTRA#readme) for help getting started."

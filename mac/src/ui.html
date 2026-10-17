@@ -107,6 +107,7 @@ input::selection { background: var(--acc-sel); }
 .hp.show { opacity: 1; }
 .hp pre { color: #d6d6d6; font: 13px/1.05 Consolas, "Cascadia Mono", monospace;
   text-shadow: 0 0 18px color-mix(in srgb, var(--acc) 15%, transparent); }
+.hp .hphint { color: #4a4a4a; font-size: 10px; letter-spacing: .08em; }
 .hp .mini { color: #d6d6d6; letter-spacing: .6em; font-weight: 700; font-size: 15px; }
 .hp input { width: min(560px, 90%); height: 34px; background: rgba(12,12,12,.85); border: 1px solid #2c2c2c; color: var(--fg);
   font: 13px Consolas, monospace; padding: 0 12px; outline: 0; transition: border-color var(--fast); }
@@ -130,6 +131,9 @@ input::selection { background: var(--acc-sel); }
 .sp.v { cursor: col-resize; } .sp.h { cursor: row-resize; }
 .sp:hover, .sp.drag { background: color-mix(in srgb, var(--acc) 18%, transparent); }
 #panes.anim .sp { display: none; }
+body.sizing, body.sizing * { user-select: none !important; }
+body.sizing-v, body.sizing-v * { cursor: col-resize !important; }
+body.sizing-h, body.sizing-h * { cursor: row-resize !important; }
 
 /* overlays covering the content area */
 .ovl { position: fixed; left: calc(var(--gap) + 1px); top: calc(var(--top) + 1px); right: calc(var(--gap) + 1px);
@@ -221,6 +225,7 @@ body.mac.fs #bar { padding-left: 12px; }
 .imp-list { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; max-width: 270px; }
 .imp-list .none { color: #5c5c5c; font-size: 11px; }
 .row .run:hover { color: var(--acc); border-color: var(--acc-dim); }
+.row .run:disabled { color: var(--acc); border-color: var(--acc-dim); }
 .row .ctl { display: flex; gap: 10px; align-items: center; }
 .spd { display: none; color: var(--bg); background: var(--acc); font-size: 9px; font-weight: 700; padding: 2px 4px; letter-spacing: .12em; }
 
@@ -314,6 +319,9 @@ input[type=range] { accent-color: var(--acc); width: 140px; }
 :root { --priv: #ff4d6d; }
 .wsb.priv { color: var(--priv); border-color: color-mix(in srgb, var(--priv) 35%, transparent); }
 .wsb.priv.on { color: var(--bg); background: var(--priv); border-color: var(--priv); }
+/* which build this is (experimental): set from Rust's edition file */
+#edtag { display: none; color: var(--acc); border: 1px solid var(--acc-dim); font-size: 9px; font-weight: 700; padding: 1px 4px; letter-spacing: .12em; margin-left: -4px; }
+#edtag.on { display: inline; }
 .privtag { display: none; color: var(--bg); background: var(--priv); font-size: 9px; font-weight: 700; padding: 2px 4px; letter-spacing: .12em; }
 body.private .privtag { display: inline; }
 body.private #bar { box-shadow: inset 0 -1px 0 var(--priv); }
@@ -433,13 +441,33 @@ body.bmbar #bmbar { display: flex; }
 .dlft span { color: var(--dim); transition: color var(--fast); }
 .dlft span:hover { color: var(--acc); }
 
+/* inverted colors (experimental build): the whole chrome flips to light, hues kept; pictures flip back */
+html.inv { filter: invert(1) hue-rotate(180deg); }
+html.inv #bgimg, html.inv img { filter: invert(1) hue-rotate(180deg); }
+
+/* new-tab shortcuts: tiles under the search box */
+.hp .scs { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; max-width: min(660px, 94%); }
+.sct { position: relative; width: 86px; padding: 11px 4px 9px; display: flex; flex-direction: column; align-items: center; gap: 7px;
+  border: 1px solid #262626; background: rgba(12,12,12,.72); color: var(--mid); font-size: 10px; transition: border-color var(--fast), color var(--fast); }
+.sct b { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--acc-dim); color: var(--acc); font-size: 13px; font-weight: 700; }
+.sct span { max-width: 78px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sct:hover { border-color: var(--acc-dim); color: var(--fg); }
+.sct .scx { position: absolute; top: 2px; right: 5px; font-style: normal; color: var(--dim); display: none; }
+.sct:hover .scx { display: block; }
+.sct .scx:hover { color: var(--bad); }
+.sct.add b { border-style: dashed; color: var(--dim); }
+.sct.add:hover b { color: var(--acc); }
+.scs .scin { width: 230px; height: 30px; align-self: center; background: rgba(12,12,12,.85); border: 1px solid var(--acc-dim); color: var(--fg);
+  font: 12px Consolas, monospace; padding: 0 10px; outline: 0; }
+.scs .auto { width: 100%; text-align: center; color: #4a4a4a; font-size: 10px; letter-spacing: .08em; }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation: none !important; } }
 </style>
 </head>
 <body>
 <div id="bgimg"></div><canvas id="bg"></canvas><canvas id="barsfx"></canvas>
 <div id="bar">
-  <span class="logo">ULTRA</span><span class="spd">SPEED</span><span class="privtag">PRIVATE</span><span class="sep">│</span>
+  <span class="logo">ULTRA</span><span id="edtag"></span><span class="spd">SPEED</span><span class="privtag">PRIVATE</span><span class="sep">│</span>
   <div id="wsbar"></div><span class="sep">│</span>
   <div id="navb"><span id="nback" class="off" title="back">‹</span><span id="nfwd" class="off" title="forward">›</span></div><span class="sep">│</span>
   <div id="tabs"></div><div id="plus" title="new tab (cmd+t)">+</div>
@@ -517,15 +545,18 @@ body.bmbar #bmbar { display: flex; }
     <div class="desc">letters &amp; numbers jump to the address bar when you aren't in a text field.<br>turn off if a site's single-key shortcuts matter to you.</div></div><div class="sw" id="sw-type"></div></div>
   <div class="row"><div><div class="name">search</div><div class="desc">used when the address bar isn't a url.</div></div>
     <div class="seg" id="seg"><button data-e="duckduckgo">ddg</button><button data-e="google">google</button><button data-e="bing">bing</button><button data-e="brave">brave</button></div></div>
+  <div class="sec">DEFAULT BROWSER</div>
+  <div class="row"><div><div class="name">default browser</div><div class="desc" id="def-desc">open links from other apps (mail, chat, documents) in ULTRA.<br>macOS asks you to confirm.</div></div>
+    <div class="ctl"><button class="run" id="def-btn">make default</button></div></div>
   <div class="sec">IMPORT</div>
-  <div class="row"><div><div class="name">import bookmarks</div><div class="desc" id="imp-desc">copies another browser's bookmarks into ULTRA (they show up in the bookmarks bar).<br>it can stay open; nothing in it is changed.</div></div>
+  <div class="row"><div><div class="name">import from another browser</div><div class="desc" id="imp-desc">brings over everything it can: bookmarks, new-tab shortcuts, history, open tabs (asleep, in a free workspace) and your search engine.<br>it can stay open; nothing in it is changed. passwords and sign-ins stay where they are.</div></div>
     <div class="ctl imp-list" id="imp-list"></div></div>
   <div class="sec" id="keys-sec">KEYBOARD SHORTCUTS</div>
   <div class="keylist" id="keylist"></div>
   <div class="sec">HELP</div>
   <div class="row"><div><div class="name">updates</div><div class="desc"><span id="upd-ver"></span><br><span id="upd-msg">ULTRA updates itself in place: your taskbar pin and shortcuts keep working.</span></div></div>
     <div class="ctl"><button class="run" id="upd-btn">check for updates</button></div></div>
-  <div class="row"><div><div class="name">tutorial</div><div class="desc">show the tour every time ULTRA starts.</div></div>
+  <div class="row"><div><div class="name">tutorial</div><div class="desc">the tour shows once, the first time ULTRA starts.<br>switch on to see it every time.</div></div>
     <div class="ctl"><button class="run" id="run-tour">run now</button><div class="sw" id="sw-tour"></div></div></div>
   <div class="ft">saved automatically · esc to close</div>
 </div></div>
@@ -569,6 +600,8 @@ const $ = (s) => document.querySelector(s);
 const send = (cmd, arg) => { try { window.ipc.postMessage(JSON.stringify({ cmd, arg })); } catch (_) {} };
 const CFG0 = window.__ultraCfg || {};
 let S = { tabs: [], a: 0, panes: [], splits: [], live: 0, ws: 0, wss: [0], ps: {}, cfg: CFG0 };
+// The experimental build wears inverted colors (light chrome) so the two builds can't be mixed up.
+if (window.__ultraInvert) document.documentElement.classList.add('inv');
 let ovOn = false, cfgOn = false, palOn = false, dlOn = false, ovSel = 0, ovList = [], splitSig = '', pendingFocus = null, lastWs = 0;
 let SPEED = !!CFG0.ultraspeed;
 document.body.classList.toggle('speed', SPEED);
@@ -648,6 +681,9 @@ window.ultra = {
     setText($('#priv-pass'), cfg().haspass ? 'change password' : 'set password');
     setHTML($('#imp-list'), importButtons());
     drawUpd();
+    setText($('#edtag'), s.ed || ''); $('#edtag').classList.toggle('on', !!s.ed);
+    setText($('#def-btn'), s.isdef ? '✓ ULTRA is default' : 'make default');
+    $('#def-btn').disabled = !!s.isdef;
     const cur = s.tabs[s.a] || { s: 'home', u: '' };
     const url = $('#url'); if (document.activeElement !== url) url.value = cur.s === 'home' ? '' : cur.u;
     const insecure = cur.s !== 'home' && /^http:/i.test(cur.u) && !/^http:\/\/(localhost|127\.)/i.test(cur.u);
@@ -776,11 +812,13 @@ let importing = null;
 const importButtons = () => (S.browsers || []).map(([id, n]) => `<button class="run" data-imp="${id}">${esc(n)}</button>`).join('')
   || '<span class="none">no other browsers found</span>';
 const startImport = (id) => { importing = id; send('import', id); };
+$('#imp-list').addEventListener('click', (e) => { const b = e.target.closest('[data-imp]'); if (b) startImport(b.dataset.imp); });
+$('#def-btn').onclick = () => send('makedefault');
 // ── updates: check GitHub for a newer build; install it in place (Windows) ──
 let updState = null;
 function drawUpd() {
   const st = updState || {};
-  setText($('#upd-ver'), S.version ? 'you have build ' + S.version : 'development build');
+  setText($('#upd-ver'), S.version ? 'you have ' + S.version : 'development build');
   if (st.m) setText($('#upd-msg'), st.m);
   const label = { checking: 'checking…', installing: 'updating…', available: window.__ultraMac ? 'download update' : 'update now', private: 'open releases' }[st.s] || 'check for updates';
   setText($('#upd-btn'), label);
@@ -794,7 +832,6 @@ $('#upd-btn').onclick = () => {
   else if (s === 'private') send('update_page');
   else checkUpdates();
 };
-$('#imp-list').addEventListener('click', (e) => { const b = e.target.closest('[data-imp]'); if (b) startImport(b.dataset.imp); });
 // ── downloads (ctrl+j): everything downloaded, live progress, open / show in folder ──
 const fmtB = (b) => b >= 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : b >= 1e3 ? Math.round(b / 1e3) + ' KB' : b + ' B';
 const ago = (t) => {
@@ -1053,7 +1090,8 @@ const CMDS = [
   { k: 'sleep all', d: 'put every hidden tab to sleep now', run: () => send('trim') },
   { k: 'bookmark', d: 'bookmark / unbookmark this page (cmd+d)', run: () => send('bookmark') },
   { k: 'clear history', d: 'forget every page visited', run: () => send('clearhistory') },
-  ...['chrome', 'edge', 'brave', 'vivaldi', 'opera', 'firefox'].map((id) => ({ k: 'import ' + id, d: `copy your ${BROWSER_NAMES[id]} bookmarks into ULTRA`, run: () => startImport(id) })),
+  ...['chrome', 'edge', 'brave', 'vivaldi', 'opera', 'firefox'].map((id) => ({ k: 'import ' + id, d: `bring over bookmarks, shortcuts, history and tabs from ${BROWSER_NAMES[id]}`, run: () => startImport(id) })),
+  { k: 'add shortcut', d: 'pin this page to the new-tab page', run: () => send('scadd', null) },
   { k: 'shortcuts', d: 'every keyboard shortcut (in settings)', run: () => { send('settings', true); setTimeout(() => $('#keys-sec').scrollIntoView({ block: 'start' }), 60); } },
   { k: 'layout save', a: '<name>', d: "save this workspace's layout and tabs", run: (x) => x && send('layout', ['save', x]) },
   { k: 'layout load', a: '<name>', d: 'open a saved layout in a free workspace', opts: () => S.layouts || [], run: (x) => x && send('layout', ['load', x]) },
@@ -1084,6 +1122,7 @@ const CMDS = [
   { k: 'overview', d: 'every tab at a glance', run: () => send('overview', true) },
   { k: 'downloads', d: 'everything you downloaded', run: () => send('downloads', true) },
   { k: 'update', d: 'check for a newer ULTRA', run: () => { send('settings', true); checkUpdates(); } },
+  { k: 'make default', d: 'open links from other apps in ULTRA', run: () => send('makedefault') },
   { k: 'settings', d: 'open settings', run: () => send('settings', true) },
   { k: 'tour', d: 'run the tutorial', run: () => send('tour', true) },
 ];
@@ -1167,10 +1206,10 @@ const MINI = `<pre><b>██╗   ██╗</b>
 const paneSig = (s) => JSON.stringify(s.panes.map((p) => p.id));
 const TOUR = [
   { t: 'welcome to ULTRA', art: MINI,
-    b: `a tiling browser that stays light. this tour takes about a minute and every step is skippable.<br><br>
+    b: `a tiling browser that stays light. this tour takes about a minute and every step is skippable.<br>it shows once: <kbd>cmd+,</kbd> has every shortcut, help and this tour again whenever you need them.<br><br>
       <kbd>→</kbd> next · <kbd>←</kbd> back · <kbd>esc</kbd> close` },
   { t: 'coming from another browser?', art: `<pre> chrome  ─┐\n edge    ─┤\n firefox ─┼─▶ ULTRA\n brave   ─┤\n …       ─┘\n\n ★ github  ★ docs\n bookmarks bar</pre>`,
-    b: `bring your bookmarks with you: one click copies them from your old browser into ULTRA's bookmarks bar.
+    b: `one click brings over your bookmarks, new-tab shortcuts, history, open tabs and search engine from your old browser.
       it can stay open, and nothing in it is changed.<br><br>
       <span id="t-imp-list"></span> <span id="t-import-res" style="color:var(--mid)"></span><br><br>
       starting fresh? skip this. you can import later from settings.` },
@@ -1182,7 +1221,7 @@ const TOUR = [
     b: `point at any side of the window and press <kbd>cmd+shift+e</kbd>.<br>ULTRA splits the pane under your cursor toward the nearest edge and opens a blank tab there.`,
     check: (a, b) => b.panes.length > a.panes.length },
   { t: 'split again', map: true, try: 'point near the bottom of a pane and press cmd+shift+e.',
-    b: `every pane can split again. wide panes prefer side-by-side, tall ones stack.<br>if a split would be too cramped, the tab swaps in instead.`,
+    b: `every pane can split again. wide panes prefer side-by-side, tall ones stack.<br>when a pane is too small to split, ULTRA tells you instead of cramming another one in.`,
     check: (a, b) => b.panes.length > a.panes.length },
   { t: 'pull a tab in', map: true, try: 'point at a pane and press cmd+shift+1.',
     b: `<kbd>cmd+shift+1‥9</kbd> pulls that tab into the pane under your cursor, splitting it the same smart way.`,
@@ -1216,7 +1255,7 @@ const TOUR = [
     b: `<kbd>cmd+,</kbd> opens settings: six themes, scanlines, pane stats, ad blocking and more. <span class="acc">ULTRASPEED</span> turns off every effect: 100% speed, 0% looks.<br>
       you can re-run this tour from settings any time.` },
   { t: "you're set", art: MINI, last: true,
-    b: `that's everything. go split some panes.<br><br>want this tour gone for good? switch off <b>show on startup</b> below.` },
+    b: `that's everything. go split some panes.<br><br>forgot a key? <kbd>cmd+,</kbd> opens settings with <b>every keyboard shortcut</b> and help, and can run this tour again.` },
 ];
 let tourOn = false, tStep = 0, tBase = null, tDone = false, tTimer = 0, mouse = null, mmRaf = 0;
 const seen = new Set();
@@ -1439,7 +1478,7 @@ function homeContent(e, id, big, tall) {
   const keep = e.hp.querySelector('input');
   const val = keep ? keep.value : '';
   e.hp.innerHTML = `${big ? $('#logo').innerHTML : '<div class="mini">ULTRA</div>'}` +
-    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big && tall ? '<div class="digest"></div>' : ''}`;
+    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big ? '<div class="scs"></div>' : ''}${big && tall ? '<div class="digest"></div>' : ''}${big ? '<div class="hphint"><kbd>cmd+,</kbd> every shortcut &amp; help</div>' : ''}`;
   const q = e.hp.querySelector('input'); q.value = val;
   e.big = big + ':' + tall;
 }
@@ -1491,6 +1530,8 @@ function renderPanes() {
       if (e.big !== big + ':' + tall) homeContent(e, p.id, big, tall);
       const dg = e.hp.querySelector('.digest');
       if (dg) setHTML(dg, digestHTML(t.w === 9));
+      const sc = e.hp.querySelector('.scs');
+      if (sc && !sc.querySelector('.scin')) setHTML(sc, shortcutsHTML());
     } else if (e.hp) {
       e.hp.remove(); e.hp = null; e.big = null;
     }
@@ -1502,15 +1543,20 @@ function renderPanes() {
     for (const el of [e.pf, e.hp, e.ph]) if (el) el.classList.add('gone');
     later(() => { for (const el of [e.pf, e.hp, e.ph]) if (el) el.remove(); }, 200);
   }
+  // Dividers are kept per split path and only moved, so the one being dragged survives the
+  // re-render each drag step causes (recreating it would drop the drag mid-slide).
   const sig = JSON.stringify(S.splits);
   if (sig !== splitSig) {
     splitSig = sig;
-    panesEl.querySelectorAll('.sp').forEach((x) => x.remove());
+    const keep = new Set();
     for (const sp of S.splits) {
-      const d = document.createElement('div');
-      d.className = 'sp ' + (sp.v ? 'v' : 'h'); d.dataset.p = sp.path; place(d, sp.gap);
-      panesEl.appendChild(d);
+      const key = (sp.v ? 'v' : 'h') + sp.path;
+      keep.add(key);
+      let d = panesEl.querySelector(`.sp[data-k="${key}"]`);
+      if (!d) { d = document.createElement('div'); d.className = 'sp ' + (sp.v ? 'v' : 'h'); d.dataset.k = key; panesEl.appendChild(d); }
+      d.dataset.p = sp.path; place(d, sp.gap);
     }
+    panesEl.querySelectorAll('.sp').forEach((x) => { if (!keep.has(x.dataset.k)) x.remove(); });
   }
   panesEl.classList.toggle('anim', S.panes.length > 1 && S.splits.length === 0);
   applyPendingFocus();
@@ -1525,15 +1571,46 @@ function applyPendingFocus() {
   if (q) { q.focus(); pendingFocus = null; }
 }
 
+// ── new-tab shortcuts ──
+function shortcutsHTML() {
+  const sc = S.sc || { list: [] }, list = sc.list || [];
+  const tile = (x) => {
+    const h = host(x.u), letter = (x.t || h || '?').replace(/^www\./, '').charAt(0).toUpperCase();
+    return `<div class="sct" data-u="${esc(x.u)}" title="${esc(x.u)}"><b>${esc(letter)}</b><span>${esc(x.t || h)}</span>` +
+      (sc.auto ? '' : `<i class="scx" data-rm="${esc(x.u)}" title="remove">×</i>`) + '</div>';
+  };
+  const add = list.length < 12 || sc.auto ? '<div class="sct add" title="add a shortcut"><b>+</b><span>add</span></div>' : '';
+  return list.map(tile).join('') + add + (sc.auto && list.length ? '<div class="auto">your most visited sites · add your own with +</div>' : '');
+}
+panesEl.addEventListener('click', (e) => {
+  const scs = e.target.closest('.scs'); if (!scs) return;
+  const rm = e.target.closest('[data-rm]');
+  if (rm) { send('scrm', rm.dataset.rm); return; }
+  const id = +scs.closest('.hp').dataset.id;
+  if (e.target.closest('.sct.add')) {
+    scs.innerHTML = '<input class="scin" placeholder="site address, then enter" spellcheck="false" autocomplete="off">';
+    const q = scs.querySelector('.scin'); q.focus();
+    q.addEventListener('keydown', (k) => {
+      if (k.key === 'Enter' && q.value.trim()) { send('scadd', q.value.trim()); q.remove(); k.preventDefault(); }
+      else if (k.key === 'Escape') { q.remove(); setHTML(scs, shortcutsHTML()); }
+    });
+    q.addEventListener('blur', () => setTimeout(() => { if (!scs.querySelector('.scin:focus')) setHTML(scs, shortcutsHTML()); }, 100));
+    return;
+  }
+  const tile = e.target.closest('.sct[data-u]');
+  if (tile) send('go', [id, tile.dataset.u]);
+});
 panesEl.addEventListener('pointerdown', (e) => {
   const act = e.target.closest('[data-act]');
   if (act) { send(act.dataset.act, +act.dataset.id); return; }
   const hp = e.target.closest('.hp');
   if (hp) send('focuspane', +hp.dataset.id);
   const sp = e.target.closest('.sp');
-  if (!sp) return;
+  if (!sp || e.button !== 0) return;
   const info = S.splits.find((x) => x.path === sp.dataset.p); if (!info) return;
+  e.preventDefault(); // a drag, never a text selection
   sp.setPointerCapture(e.pointerId); sp.classList.add('drag');
+  document.body.classList.add('sizing', info.v ? 'sizing-v' : 'sizing-h');
   let pending = null, raf = 0;
   const move = (ev) => {
     const r = info.parent;
@@ -1542,8 +1619,11 @@ panesEl.addEventListener('pointerdown', (e) => {
     const min = Math.min(0.45, Math.max(0.1, 60 / ((info.v ? r.w : r.h) - 6)));
     if (!raf) raf = requestAnimationFrame(() => { raf = 0; send('ratio', [info.path, Math.min(1 - min, Math.max(min, pending))]); });
   };
-  const up = () => { sp.removeEventListener('pointermove', move); sp.removeEventListener('pointerup', up); sp.classList.remove('drag'); };
-  sp.addEventListener('pointermove', move); sp.addEventListener('pointerup', up);
+  const up = () => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+    sp.classList.remove('drag'); document.body.classList.remove('sizing', 'sizing-v', 'sizing-h');
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
 });
 panesEl.addEventListener('keydown', (e) => {
   const q = e.target.closest('.hp input'); if (!q) return;

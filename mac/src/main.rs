@@ -21,8 +21,8 @@ mod macos;
 mod privacy;
 mod slideshow;
 mod spectrum;
-mod updater;
 mod stats;
+mod updater;
 
 use std::{
     cell::Cell,
@@ -103,7 +103,8 @@ const SPARE_IDLE: Duration = Duration::from_millis(1200);
 /// Pre-built blank webviews kept ready (creating one costs tens of ms of UI-thread time).
 const SPARES: usize = 2;
 /// The Dock icon when running outside an .app bundle.
-const ICON_PNG: &[u8] = include_bytes!("../assets/ultra.png");
+/// The Dock icon, matching the app bundle's icon (inverted for the experimental edition).
+const ICON_PNG: &[u8] = if edition::INVERT { include_bytes!("../assets/ultra-inv.png") } else { include_bytes!("../assets/ultra.png") };
 const THEMES: &[&str] = &[
     "mint", "amber", "red", "mono", "ice", "matrix", "violet", "pink", "orange", "cyan", "gold", "lime", "custom",
 ];
@@ -112,8 +113,6 @@ const BG_MODES: &[&str] = &["swirl", "matrix", "stars", "gradient", "solid", "im
 const BG_MAX: usize = 16 * 1024 * 1024;
 
 enum UserEvent {
-    /// "Check for updates" finished: state for settings, and the update to install if any.
-    UpdateChecked(Value, Option<updater::Update>),
     Ui(String),
     Content(u64, String),
     Title(u64, String),
@@ -125,6 +124,8 @@ enum UserEvent {
     Slide(String, String),
     /// A page's WebContent process died: slot (0 = the chrome UI).
     Failed(u64),
+    /// "Check for updates" finished: state for settings, and the update to install if any.
+    UpdateChecked(Value, Option<updater::Update>),
     /// A shortcut or mouse button caught natively: (WKWebView it was aimed at, 0 = none; message).
     Native(usize, String),
     /// The slideshow folder picker closed.
@@ -135,6 +136,16 @@ enum UserEvent {
     DownloadStarted(u64, String, String),
     /// A download ended: (url, final path, ok).
     DownloadDone(String, Option<String>, bool),
+}
+
+/// A closed tab, remembered so ctrl+shift+t can put it back: its page, workspace, place in
+/// the tab strip, and (if it was tiled) the spot in the layout from `Node::place_of`.
+struct Closed {
+    url: String,
+    title: String,
+    ws: usize,
+    at: usize,
+    place: Option<(Vec<u64>, bool, f64, bool)>,
 }
 
 struct Tab {
@@ -329,7 +340,8 @@ struct App {
     slide: Option<f64>,
     next_id: u64,
     next_slot: u64,
-    closed: Vec<(String, String)>,
+    /// Recently closed tabs, newest last (ctrl+shift+t brings them back where they were).
+    closed: Vec<Closed>,
     cfg: Settings,
     overlay: bool,
     /// Tutorial open: pages stay hidden while the user practises on the live layout.
@@ -370,6 +382,15 @@ struct App {
     settings_save_at: Option<Instant>,
     /// Last normal (not maximized or minimized) window bounds, saved with the session.
     win_normal: Option<WinState>,
+    /// The regular workspace shown before the current one (links land there while private is locked).
+    last_ws: usize,
+    /// Links macOS handed over before the chrome was ready (opened on "ready").
+    pending_open: Vec<String>,
+    ui_ready: bool,
+    /// Whether macOS opens web links in ULTRA (shown in settings).
+    is_default: bool,
+    /// Safari's user agent, for every page.
+    user_agent: String,
     timing: Option<(String, Instant)>,
     last_blocked: u64,
     /// After the window is activated (alt+tab), check where keyboard focus landed.
@@ -405,10 +426,27 @@ struct App {
 /// ~/Library/Application Support/Ultra. (Cookies, sign-ins and site data live in WebKit's
 /// own store for the app, as WKWebView keeps them.)
 fn data_dir() -> PathBuf {
-    std::env::var_os("HOME")
+    let base = std::env::var_os("HOME")
         .map(|h| PathBuf::from(h).join("Library/Application Support"))
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Ultra")
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = base.join(edition::DATA_DIR);
+    if edition::DATA_DIR != "Ultra" {
+        seed_from(&base.join("Ultra"), &dir);
+    }
+    dir
+}
+
+/// A build with its own data folder (experimental) starts from a copy of the regular ULTRA's
+/// settings, bookmarks and history, so it feels like home. Open tabs and sign-ins stay separate.
+fn seed_from(from: &std::path::Path, to: &std::path::Path) {
+    if to.exists() || !from.exists() {
+        return;
+    }
+    let _ = fs::create_dir_all(to);
+    for f in ["bookmarks.json", "history.json", "commands.json", "layouts.json", "zaps.json"] {
+        let _ = fs::copy(from.join(f), to.join(f));
+    }
+    let _ = fs::copy(from.join("settings.json"), to.join("settings.json"));
 }
 
 /// Whether address-bar text is a web address rather than a search: a host with a real
@@ -721,6 +759,7 @@ impl App {
             .with_visible(false)
             .with_background_color((20, 20, 20, 255))
             .with_devtools(true)
+            .with_user_agent(&self.user_agent)
             .with_incognito(private)
             // WebKit pauses hidden pages on its own (media keeps playing).
             .with_background_throttling(BackgroundThrottlingPolicy::Suspend)
@@ -1041,6 +1080,9 @@ impl App {
             return;
         }
         self.drop_glance(None);
+        if self.ws != PRIVATE_WS {
+            self.last_ws = self.ws;
+        }
         self.slide = Some(if n > self.ws { 1.0 } else { -1.0 });
         // A workspace holding nothing but one blank tab disappears when left.
         let lone_home = self.root.is_leaf(self.focus)
@@ -1158,6 +1200,36 @@ impl App {
         }
     }
 
+    /// Ctrl+Shift+T: the most recently closed tab, back in its workspace, its place in the tab
+    /// strip and, when the panes around it are still there, its old pane (same side, same size).
+    fn reopen(&mut self) {
+        let Some(c) = self.closed.pop() else {
+            self.toast("no closed tabs to bring back");
+            return;
+        };
+        self.drop_glance(None);
+        let switched = c.ws != self.ws;
+        if switched {
+            self.enter_ws(c.ws);
+        }
+        let id = self.push_tab(c.at, c.url, c.title);
+        self.zoom = None;
+        self.overlay = false;
+        let placed = c.place.as_ref().is_some_and(|(near, v, r, first)| {
+            self.root.restore(near, id, *v, *r, *first)
+                // The panes around it changed: split the first one still showing, same side.
+                || near.iter().any(|&n| self.root.split(n, id, *v, *first))
+        });
+        if placed {
+            self.set_focus(id);
+            self.apply_layout(true);
+            self.focus_active();
+        } else if let Some(i) = self.idx(id) {
+            // It was the only pane, or hidden: show it in the focused pane, as before.
+            self.activate(i);
+        }
+    }
+
     fn close_tab(&mut self, i: usize) {
         let Some((id, ws)) = self.tabs.get(i).map(|t| (t.id, t.ws)) else { return };
         if self.glance == Some(id) {
@@ -1165,6 +1237,7 @@ impl App {
             return;
         }
         let tiled = !self.root.is_leaf(id) && self.root.contains(id);
+        let place = if tiled { self.root.place_of(id) } else { None };
         if self.zoom == Some(id) {
             self.zoom = None;
         }
@@ -1197,7 +1270,7 @@ impl App {
         let i = self.idx(id).unwrap_or(i);
         let t = self.tabs.remove(i);
         if t.url != HOME && t.ws != PRIVATE_WS {
-            self.closed.push((t.url, t.title));
+            self.closed.push(Closed { url: t.url, title: t.title, ws: t.ws, at: i, place });
             if self.closed.len() > 32 {
                 self.closed.remove(0);
             }
@@ -1210,17 +1283,22 @@ impl App {
 
     /// Ctrl+Shift+N / Ctrl+Shift+E: place a tab in the pane under the cursor,
     /// splitting it in the most useful direction.
-    fn place_at_cursor(&mut self, id: u64) {
-        self.zoom = None;
+    /// The pane a cursor shortcut acts on, its rect and the point used to pick a side.
+    /// Cursor outside every pane: the focused pane, toward its far side.
+    fn cursor_target(&self) -> (u64, R, f64, f64) {
         let panes = self.panes();
         let hit = self.cursor().and_then(|(px, py)| {
             panes.iter().find(|(_, r)| r.contains(px, py)).map(|&(t, r)| (t, r, px, py))
         });
-        // Cursor outside every pane: split the focused pane toward its far side.
-        let (target, r, px, py) = hit.unwrap_or_else(|| {
+        hit.unwrap_or_else(|| {
             let r = self.pane_of(self.focus).unwrap_or(self.area());
             (self.focus, r, r.x + r.w * 0.95, r.y + r.h * 0.5)
-        });
+        })
+    }
+
+    fn place_at_cursor(&mut self, id: u64) {
+        self.zoom = None;
+        let (target, r, px, py) = self.cursor_target();
         if target == id {
             self.activate(self.idx(id).unwrap_or(0));
             return;
@@ -1442,6 +1520,7 @@ impl App {
         wss.dedup();
         let ps: HashMap<String, [f64; 2]> =
             self.pane_stats.iter().map(|(id, (m, c))| (id.to_string(), [*m, *c])).collect();
+        let (sc_list, sc_auto) = self.lib.shortcuts_view();
         let state = json!({
             "tabs": tabs,
             "a": self.cur(),
@@ -1469,8 +1548,12 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
-            "version": updater::short(updater::COMMIT),
+            // New-tab shortcuts (or the most visited sites until there are some).
+            "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>(), "auto": sc_auto },
+            "version": updater::version(),
             "browsers": self.browsers,
+            "ed": edition::TAG,
+            "isdef": self.is_default,
             // Private-workspace downloads are only listed while it is unlocked.
             "dl": self.dls.view(!self.locked),
             // Back/forward buttons: whether the focused tab's own history allows each way.
@@ -1816,6 +1899,27 @@ impl App {
 
     fn toast(&self, msg: &str) {
         let _ = self.ui.evaluate_script(&format!("ultra.toast({})", json!(msg)));
+    }
+
+    /// A link from another app: a new tab in front of the user, and the window brought forward.
+    fn open_external(&mut self, url: &str) {
+        if !self.ui_ready {
+            self.pending_open.push(url.to_string());
+            return;
+        }
+        let lower = url.to_ascii_lowercase();
+        if ["http://", "https://", "file:///"].iter().any(|p| lower.starts_with(p)) {
+            if self.ws == PRIVATE_WS && self.locked {
+                // Not behind the lock screen: show it in the last regular workspace instead.
+                let back = self.last_ws;
+                self.switch_ws(back);
+                self.toast(&format!("opened in workspace {} · the private workspace is locked", back + 1));
+            }
+            self.open_in(self.ws, url.to_string());
+        }
+        self.window.set_minimized(false);
+        self.window.set_visible(true);
+        self.window.set_focus();
     }
 
     /// Open a url as a new tab in workspace `ws` (in the background if that isn't the current one).
@@ -2304,8 +2408,18 @@ impl App {
                 }
             }
             "mvnew" => {
-                let id = self.push_tab(n, HOME.into(), String::new());
-                self.place_at_cursor(id);
+                // Only when the pane under the cursor can actually split: on a full board a new
+                // blank tab would just push a page out of view (and pile up hidden tabs).
+                // (Judged on the unzoomed layout, which is where the new pane will go.)
+                let zoom = self.zoom.take();
+                let (_, r, px, py) = self.cursor_target();
+                self.zoom = zoom;
+                if pick_split(r, px, py).is_none() {
+                    self.toast("no room for another pane here · close one (ctrl+shift+w) or zoom (ctrl+shift+f)");
+                } else {
+                    let id = self.push_tab(n, HOME.into(), String::new());
+                    self.place_at_cursor(id);
+                }
             }
             "splitdir" => {
                 let url = arg[1].as_str().filter(|u| !u.trim().is_empty());
@@ -2349,11 +2463,7 @@ impl App {
                     }
                 }
             }
-            "reopen" => {
-                if let Some((u, t)) = self.closed.pop() {
-                    self.new_tab(u, t, true);
-                }
-            }
+            "reopen" => self.reopen(),
             "go" => {
                 // Either "query" (focused pane) or [tab id, "query"] from a home pane.
                 let (i, q) = match arg {
@@ -2532,6 +2642,17 @@ impl App {
                     self.navigate(i, HOME);
                 }
             }
+            "makedefault" => {
+                self.is_default = macos::is_default();
+                if self.is_default {
+                    self.toast("ULTRA is already your default browser");
+                } else if macos::make_default() {
+                    self.toast("confirm in the macOS dialog to use ULTRA for links");
+                } else {
+                    self.toast("macOS didn't accept ULTRA as the default browser");
+                }
+                self.sync();
+            }
             "update_check" => {
                 let proxy = self.proxy.clone();
                 std::thread::spawn(move || {
@@ -2541,24 +2662,87 @@ impl App {
             }
             "update_install" => {
                 // A Mac app bundle is replaced by hand: open the download page.
-                let ws = if self.ws == PRIVATE_WS { 0 } else { self.ws };
+                let ws = if self.ws == PRIVATE_WS { self.last_ws } else { self.ws };
                 self.open_in(ws, updater::releases_page(edition::REPO));
                 let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "available", "m": "download page opened · unzip it and drag the new app over the old one" })));
             }
             "update_page" => {
-                let ws = if self.ws == PRIVATE_WS { 0 } else { self.ws };
+                let ws = if self.ws == PRIVATE_WS { self.last_ws } else { self.ws };
                 self.open_in(ws, updater::releases_page(edition::REPO));
                 self.command("settings", &json!(false));
+            }
+            "scadd" => {
+                // A shortcut on the new-tab page: the address given, or the page in front of you.
+                let (url, title) = match arg.as_str().filter(|u| !u.trim().is_empty()) {
+                    Some(u) => (resolve(u, &self.cfg.search), String::new()),
+                    None => self.tabs.get(self.cur()).map(|t| (t.url.clone(), t.title.clone())).unwrap_or_default(),
+                };
+                let private = self.tabs.get(self.cur()).is_some_and(|t| t.ws == PRIVATE_WS) && arg.is_null();
+                if private {
+                    self.toast("private pages aren't added as shortcuts");
+                } else if url.contains("duckduckgo.com/?q=") || url.contains("/search?q=") {
+                    self.toast("that isn't a web address · try something like github.com");
+                } else if self.lib.add_shortcut(&url, &title) {
+                    self.lib.save(&self.data_dir);
+                    self.toast(&format!("added {} to your shortcuts", library::host(&url).unwrap_or_default()));
+                } else if self.lib.shortcuts.len() >= 12 {
+                    self.toast("shortcuts are full · remove one first");
+                } else {
+                    self.toast("already in your shortcuts, or not a web page");
+                }
+                self.sync();
+            }
+            "scrm" => {
+                if let Some(u) = arg.as_str() {
+                    self.lib.remove_shortcut(u);
+                    self.lib.save(&self.data_dir);
+                    self.sync();
+                }
             }
             "import" | "importchrome" => {
                 // Onboarding from another browser: its bookmarks land in the bookmarks bar.
                 let id = if cmd == "importchrome" { "chrome" } else { arg.as_str().unwrap_or("chrome") };
                 let name = library::browser_name(id);
+                let plural = |n: usize, w: &str| format!("{n} {w}{}", if n == 1 { "" } else { "s" });
                 let msg = match self.lib.import_from(id) {
-                    Ok((0, profile)) => format!("nothing new to import from {name} ({profile})"),
-                    Ok((n, profile)) => {
+                    Ok(got) => {
+                        let mut parts = Vec::new();
+                        if got.bookmarks > 0 {
+                            parts.push(plural(got.bookmarks, "bookmark"));
+                        }
+                        if got.shortcuts > 0 {
+                            parts.push(plural(got.shortcuts, "shortcut"));
+                        }
+                        if got.history > 0 {
+                            parts.push(format!("{} of history", plural(got.history, "page")));
+                        }
+                        // Its open tabs: asleep in the first empty workspace, so nothing loads
+                        // until you look and the current layout is left alone.
+                        // (Tabs already open in ULTRA, e.g. from an earlier import, aren't opened again.)
+                        let mut tabs = got.tabs;
+                        tabs.retain(|(_, u)| !self.tabs.iter().any(|t| &t.url == u));
+                        let free = (0..PRIVATE_WS).find(|&w| w != self.ws && !self.tabs.iter().any(|t| t.ws == w) && self.stash[w].is_none());
+                        if let (false, Some(w)) = (tabs.is_empty(), free) {
+                            let n = tabs.len().min(40);
+                            for (title, url) in tabs.into_iter().take(40) {
+                                let tid = self.push_tab(self.tabs.len(), url, title);
+                                if let Some(i) = self.idx(tid) {
+                                    self.tabs[i].ws = w;
+                                }
+                            }
+                            parts.push(format!("{} (in workspace {})", plural(n, "open tab"), w + 1));
+                        }
+                        if let Some(e) = got.search.filter(|e| *e != self.cfg.search) {
+                            self.cfg.search = e.to_string();
+                            self.save_settings();
+                            parts.push(format!("search engine: {e}"));
+                        }
                         self.lib.save(&self.data_dir);
-                        format!("imported {n} bookmark{} from {name} ({profile})", if n == 1 { "" } else { "s" })
+                        if parts.is_empty() {
+                            format!("nothing new to import from {name} ({})", got.label)
+                        } else {
+                            format!("from {name} ({}): {}", got.label, parts.join(", "))
+                        }
                     }
                     Err(e) => e,
                 };
@@ -2676,6 +2860,10 @@ impl App {
                 }
             }
             "ready" => {
+                self.ui_ready = true;
+                for u in std::mem::take(&mut self.pending_open) {
+                    self.open_external(&u);
+                }
                 self.send_bg_image();
                 if self.slideshow_on() {
                     self.next_slide(Instant::now());
@@ -2685,6 +2873,9 @@ impl App {
                 if self.cfg.tour && !self.tour_offered {
                     self.tour_offered = true;
                     self.command("tour", &json!(true));
+                    // Shown once: after this it only runs from settings (or if switched back on).
+                    self.cfg.tour = false;
+                    self.save_settings();
                 }
             }
             _ => {}
@@ -2819,6 +3010,12 @@ impl App {
                     if !started {
                         self.remember(i);
                         self.apply_zaps(i);
+                        // New views start on ULTRA's dark backdrop (no white flash while the
+                        // first page loads); after that, pages that set no background of their
+                        // own get the white canvas they were designed for, as in other browsers.
+                        if let Some(v) = &self.tabs[i].view {
+                            macos::draw_page_background(v);
+                        }
                     }
                     self.sync();
                 }
@@ -3021,7 +3218,7 @@ fn main() {
     // The chrome draws the whole window; macOS keeps its own window buttons (over the top
     // bar), resizable edges, rounded corners and shadow.
     // Put the window back where it was last time (size, spot, maximized), as long as that spot
-    // is still on a screen.
+    // is still on a screen. Given to the builder, so un-maximizing returns to the saved size.
     let saved: Option<WinState> = fs::read_to_string(data_dir.join("session.json"))
         .ok()
         .and_then(|s| serde_json::from_str::<Session>(&s).ok())
@@ -3043,7 +3240,7 @@ fn main() {
         wb = wb.with_inner_size(LogicalSize::new(1280.0, 800.0));
     }
     let window = wb
-        .with_title("ULTRA")
+        .with_title(edition::NAME)
         .with_visible(false)
         .with_focused(!bench_mode)
         .with_titlebar_transparent(true)
@@ -3064,8 +3261,9 @@ fn main() {
         .with_html(UI_HTML)
         // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
         .with_initialization_script(format!(
-            "window.__ultraCfg = {}; window.__ultraMac = true;",
-            ui_cfg(&cfg)
+            "window.__ultraCfg = {}; window.__ultraMac = true; window.__ultraInvert = {};",
+            ui_cfg(&cfg),
+            edition::INVERT
         ))
         .with_bounds(Rect {
             position: LogicalPosition::new(0.0, 0.0).into(),
@@ -3153,6 +3351,11 @@ fn main() {
         browsers: library::installed_browsers(),
         settings_save_at: None,
         win_normal: None,
+        last_ws: 0,
+        pending_open: Vec::new(),
+        ui_ready: false,
+        is_default: false,
+        user_agent: macos::safari_user_agent(),
         timing: None,
         last_blocked: 0,
         refocus_at: None,
@@ -3199,6 +3402,7 @@ fn main() {
     app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
     app.lib = library::Library::load(&app.data_dir);
+    app.is_default = macos::is_default();
     app.dls = downloads::Downloads::load(&app.data_dir);
     app.booting = app.cfg.boot && !app.cfg.ultraspeed;
     app.boot_until = Instant::now() + Duration::from_secs(4);
@@ -3240,6 +3444,12 @@ fn main() {
 
     event_loop.run(move |event, _, flow| {
         match event {
+            // Links (and .html files) macOS opens in ULTRA as the default browser.
+            Event::Opened { urls } => {
+                for u in urls {
+                    app.open_external(u.as_str());
+                }
+            }
             Event::UserEvent(ev) => {
                 if !matches!(ev, UserEvent::Procs(_)) {
                     app.note_activity();
@@ -3258,6 +3468,11 @@ fn main() {
                 }
                 WindowEvent::Focused(f) => {
                     app.win_focused = f;
+                    // Back from the default-browser prompt or System Settings: settings shows it.
+                    if f && app.is_default != macos::is_default() {
+                        app.is_default = !app.is_default;
+                        app.sync();
+                    }
                     app.track();
                     // Give macOS a moment to settle activation before checking focus.
                     app.refocus_at = f.then(|| Instant::now() + Duration::from_millis(40));
