@@ -15,6 +15,7 @@ mod audio;
 mod blocker;
 mod downloads;
 mod edition;
+mod identity;
 mod layout;
 mod library;
 mod macos;
@@ -386,6 +387,8 @@ struct App {
     booting: bool,
     /// For the daily digest: whether ULTRA has focus, the page being timed, blocked-count baseline.
     win_focused: bool,
+    /// This computer's ULTRA ID, once made.
+    me: Option<identity::Identity>,
     /// A newer build found by "check for updates", ready to install.
     update: Option<updater::Update>,
     /// Other browsers found on this computer, offered for importing bookmarks.
@@ -1570,6 +1573,7 @@ impl App {
                 json!({ "id": t.id, "r": self.glance_rect(), "t": t.title, "u": t.url, "s": t.loading })
             }),
             "max": self.window.is_maximized(),
+            "me": self.me,
             // New-tab shortcuts (or the most visited sites until there are some).
             "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>(), "auto": sc_auto },
             "version": updater::version(),
@@ -2678,6 +2682,25 @@ impl App {
                 }
                 self.sync();
             }
+            "idcreate" => {
+                let (name, handle) = (arg[0].as_str().unwrap_or(""), arg[1].as_str().unwrap_or(""));
+                match identity::create(&self.data_dir, name, handle) {
+                    Ok(me) => {
+                        self.toast(&format!("welcome, {} · your ULTRA ID is ready", me.name));
+                        self.me = Some(me);
+                    }
+                    Err(e) => {
+                        let _ = self.ui.evaluate_script(&format!("ultra.idError({})", json!(e)));
+                    }
+                }
+                self.sync();
+            }
+            "idremove" => {
+                identity::remove(&self.data_dir);
+                self.me = None;
+                self.toast("ULTRA ID removed from this computer");
+                self.sync();
+            }
             "update_check" => {
                 let proxy = self.proxy.clone();
                 std::thread::spawn(move || {
@@ -3394,6 +3417,7 @@ fn main() {
         lib: library::Library::default(),
         booting: false,
         win_focused: true,
+        me: None,
         update: None,
         browsers: library::installed_browsers(),
         settings_save_at: None,
@@ -3451,6 +3475,7 @@ fn main() {
     app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
     app.lib = library::Library::load(&app.data_dir);
+    app.me = identity::load(&app.data_dir);
     app.is_default = macos::is_default();
     app.dls = downloads::Downloads::load(&app.data_dir);
     app.booting = app.cfg.boot && !app.cfg.ultraspeed;

@@ -474,6 +474,16 @@ html.inv #bgimg, html.inv img { filter: invert(1) hue-rotate(180deg); }
   font: 12px Consolas, monospace; padding: 0 10px; outline: 0; }
 .scs .auto { width: 100%; text-align: center; color: #4a4a4a; font-size: 10px; letter-spacing: .08em; }
 
+/* settings: ULTRA ID */
+.idform { display: flex; gap: 6px; margin-top: 10px; }
+.idform input { height: 28px; background: #101010; border: 1px solid #2c2c2c; color: var(--fg); font: 12px Consolas, monospace; padding: 0 8px; outline: 0; width: 160px; }
+.idform input:focus { border-color: var(--acc-dim); }
+.iderr { color: var(--bad); margin-top: 6px; min-height: 1em; }
+.idcard { display: flex; gap: 14px; align-items: center; }
+.idcard > b { width: 42px; height: 42px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--acc-dim); color: var(--acc); font-size: 18px; }
+.idcode { margin-top: 8px; display: flex; align-items: center; gap: 8px; }
+.idcode code { color: var(--acc); letter-spacing: .08em; font-size: 12px; user-select: text; }
+
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation: none !important; } }
 </style>
 </head>
@@ -501,6 +511,14 @@ html.inv #bgimg, html.inv img { filter: invert(1) hue-rotate(180deg); }
 </div></div>
 <div id="cfg" class="ovl" tabindex="-1"><div class="card">
   <div class="hd"><span>SETTINGS</span><span class="k">cmd+,</span></div>
+  <div class="sec">ULTRA ID</div>
+  <div class="row idrow" id="id-new"><div><div class="name">create your ULTRA ID</div>
+    <div class="desc">who you'll be to other ULTRA users: friends, chat and shared workspaces are on the way.<br>it's made on this computer; nothing is sent anywhere yet.</div>
+    <div class="idform"><input id="id-name" placeholder="display name" maxlength="40" spellcheck="false" autocomplete="off"><input id="id-handle" placeholder="@handle" maxlength="21" spellcheck="false" autocomplete="off"><button class="run" id="id-make">create</button></div>
+    <div class="desc iderr" id="id-err"></div></div></div>
+  <div class="row idrow" id="id-card"><div class="idcard"><b id="id-av"></b><div><div class="name" id="id-who"></div><div class="desc"><span id="id-handle-show"></span> · since <span id="id-since"></span></div>
+    <div class="idcode"><code id="id-code"></code> <button class="run" id="id-copy">copy</button></div></div></div>
+    <div class="ctl"><button class="run" id="id-rm" title="remove this ULTRA ID from this computer">remove</button></div></div>
   <div class="sec">PERFORMANCE</div>
   <div class="row" id="r-speed"><div><div class="name">ULTRASPEED</div>
     <div class="desc">no swirls, no transitions, no pane animations, no scanlines.<br>100% speed, 0% looks.</div></div><div class="sw" id="sw-speed"></div></div>
@@ -694,6 +712,7 @@ window.ultra = {
     if (s.gate) setLock(cfg().haspass ? 'unlock' : 'create'); else if (lockMode && lockMode !== 'change') setLock(null);
     setText($('#priv-pass'), cfg().haspass ? 'change password' : 'set password');
     setHTML($('#imp-list'), importButtons());
+    drawId();
     drawUpd();
     setText($('#edtag'), s.ed || ''); $('#edtag').classList.toggle('on', !!s.ed);
     setText($('#def-btn'), s.isdef ? '✓ ULTRA is default' : 'make default');
@@ -829,6 +848,29 @@ const importButtons = () => (S.browsers || []).map(([id, n]) => `<button class="
 const startImport = (id) => { importing = id; send('import', id); };
 $('#imp-list').addEventListener('click', (e) => { const b = e.target.closest('[data-imp]'); if (b) startImport(b.dataset.imp); });
 $('#def-btn').onclick = () => send('makedefault');
+// ── ULTRA ID ──
+function drawId() {
+  const me = S.me;
+  $('#id-new').style.display = me ? 'none' : '';
+  $('#id-card').style.display = me ? '' : 'none';
+  if (!me) return;
+  setText($('#id-av'), (me.name || '?').charAt(0).toUpperCase());
+  setText($('#id-who'), me.name);
+  setText($('#id-handle-show'), '@' + me.handle);
+  setText($('#id-since'), new Date(me.created * 1000).toLocaleDateString());
+  setText($('#id-code'), me.id);
+}
+ultra.idError = (m) => setText($('#id-err'), m);
+$('#id-make').onclick = () => { setText($('#id-err'), ''); send('idcreate', [$('#id-name').value, $('#id-handle').value]); };
+$('#id-handle').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#id-make').click(); });
+$('#id-copy').onclick = () => {
+  const code = $('#id-code').textContent, done = () => { setText($('#id-copy'), 'copied'); setTimeout(() => setText($('#id-copy'), 'copy'), 1500); };
+  const fallback = () => { const r = document.createRange(); r.selectNodeContents($('#id-code')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy'); s.removeAllRanges(); done(); };
+  if (navigator.clipboard) navigator.clipboard.writeText(code).then(done, fallback); else fallback();
+};
+$('#id-rm').onclick = () => {
+  if (confirm('Remove your ULTRA ID from this computer?\n\nOnce friends and chat exist, a removed ID can\'t be recovered: its key exists only here.')) send('idremove');
+};
 // ── updates: check GitHub for a newer build; install it in place (Windows) ──
 let updState = null;
 function drawUpd() {
