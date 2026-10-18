@@ -102,9 +102,10 @@ cd windows && cargo test --release
 ```
 
 The Windows output is `windows/target/release/ultra.exe` (public) or `ultra-exp.exe`
-(experimental). For macOS, use `cd mac && sh tools/bundle.sh universal`; it can only be built
-on CI from this Windows machine. Run `cargo check` for mac on Windows when possible, but expect
-platform errors. Mac code is checked by the release workflow.
+(experimental). For macOS, use `cd mac && sh tools/bundle.sh universal`; that only works on a
+Mac (CI builds it). From this Windows machine the Mac code **can be type-checked**:
+`sh tools/maccheck/check.sh` (run `rustup target add aarch64-apple-darwin` once first). Run it
+before every push that touches `mac/`.
 
 - **Before every push:**
   - all tests pass (23 at the time of writing)
