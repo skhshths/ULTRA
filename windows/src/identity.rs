@@ -3,7 +3,7 @@
 //! key will prove it's you to ULTRA's servers and friends without a password; your shareable ID
 //! code is derived from the public key. On Windows the private key is encrypted by Windows
 //! (DPAPI, tied to your Windows login); on a Mac the file is readable by your user only.
-//! Nothing is sent anywhere yet.
+//! It signs in to the friends & chat server (see social.rs) without a password.
 
 use std::path::Path;
 
@@ -106,8 +106,26 @@ pub fn remove(dir: &Path) {
     let _ = std::fs::remove_file(dir.join(FILE));
 }
 
-/// Sign a message with this computer's ULTRA ID key (for the servers to come).
-#[allow(dead_code)]
+fn signing_key(dir: &Path) -> Option<SigningKey> {
+    let s: Stored = serde_json::from_str(&std::fs::read_to_string(dir.join(FILE)).ok()?).ok()?;
+    let raw = unhex(&s.secret)?;
+    let bytes = if s.protected { unprotect(&raw)? } else { raw };
+    Some(SigningKey::from_bytes(&bytes.try_into().ok()?))
+}
+
+/// The key for chatting with a friend: X25519 between this ID's key and theirs (both ed25519
+/// keys, converted), hashed. Both sides get the same key; the server never can.
+pub fn chat_key(dir: &Path, their_public_hex: &str) -> Option<[u8; 32]> {
+    let theirs: [u8; 32] = unhex(their_public_hex)?.try_into().ok()?;
+    let theirs = ed25519_dalek::VerifyingKey::from_bytes(&theirs).ok()?;
+    let shared = theirs.to_montgomery().mul_clamped(signing_key(dir)?.to_scalar_bytes());
+    let mut h = Sha256::new();
+    h.update(b"ultra-chat-v1");
+    h.update(shared.to_bytes());
+    Some(h.finalize().into())
+}
+
+/// Sign a message with this computer's ULTRA ID key (signing in to the chat server).
 pub fn sign(dir: &Path, msg: &[u8]) -> Option<Vec<u8>> {
     let s: Stored = serde_json::from_str(&std::fs::read_to_string(dir.join(FILE)).ok()?).ok()?;
     let raw = unhex(&s.secret)?;

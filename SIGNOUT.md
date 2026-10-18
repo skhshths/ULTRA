@@ -184,7 +184,14 @@ before every push that touches `mac/`.
 
 ## 8. Open threads and ideas
 
-- **ULTRA ID → social features (planned):** friends, chat, then collaborative workspaces where
+- **Friends & chat (built 2026-10-18):**
+  - The relay is `server/`, running on the owner's Pi (see `server/README.md`). The client is
+    `social.rs`, and the Friends panel is the @ in the top bar.
+  - Everything is by @handle. Messages are end-to-end encrypted with `identity::chat_key`.
+  - Home network only for now (`ws://`); going public needs TLS (`wss://`) and a public
+    address.
+  - Not done: collaborative workspaces, typing/read receipts, multiple devices per ID.
+- **ULTRA ID → collaborative workspaces (planned):** friends, chat, then collaborative workspaces where
   different people control different tabs. Each ID already has a signing key (`identity::sign`)
   for this.
   - A Raspberry Pi 5 was discussed as a short-term relay server. It's fine for a few hundred to
@@ -256,6 +263,20 @@ Newest first. Copy the template for your entry.
 **Verified:** what you tested and how; what you could NOT verify.
 **Left off:** the exact next step, anything half-done, open questions for the owner.
 ```
+
+### 2026-10-18 (afternoon) — Claude (Opus 5.5)
+**Did:**
+- Key SSH access to the owner's Pi (`oliverbarnet@oliverbarnet.local`).
+- Built and deployed the friends & chat relay there as a user service.
+- Added friends & chat to ULTRA (both platforms; Mac type-checked only).
+- Spare-pool reuse.
+- Restored the swirl icon, with experimental as an exact colour inversion.
+
+**Verified:**
+- Two ULTRA instances friended each other by @handle and exchanged encrypted messages both
+  ways through a relay.
+- The relay held 0 messages afterwards, and its test accounts were removed from the Pi's
+  database.
 
 ### 2026-10-18 — Claude (Opus 5.5)
 **Did:** the real ad blocker (phase 1, Windows) and hard numbers.

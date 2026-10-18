@@ -432,6 +432,48 @@ body.bmbar #bmbar { display: flex; }
 #dlbtn.ping { animation: dlping .8s var(--ease) 2; }
 @keyframes dlping { 50% { color: var(--acc); text-shadow: 0 0 10px var(--acc); } }
 #dl { display: grid; place-items: center; background: rgba(20,20,20,.7); }
+#frbtn { position: relative; color: var(--dim); font-size: 12px; padding: 4px 6px; cursor: default; transition: color var(--fast); }
+#frbtn:hover, #frbtn.on { color: var(--acc); }
+#frbtn i { position: absolute; top: 0; right: -2px; min-width: 12px; height: 12px; padding: 0 3px; border-radius: 6px; background: var(--acc);
+  color: #111; font: 700 9px/12px Consolas, monospace; font-style: normal; text-align: center; display: none; }
+#frbtn.unread i { display: block; }
+#fr { display: grid; place-items: center; background: rgba(20,20,20,.7); }
+#fr.on .card { transform: none; }
+#fr .card { width: min(780px, 94vw); height: min(560px, 86vh); display: flex; flex-direction: column; }
+.frwrap { flex: 1; min-height: 0; display: grid; grid-template-columns: 250px minmax(0, 1fr); }
+.frside { border-right: 1px solid #1d1d1d; display: flex; flex-direction: column; min-height: 0; }
+.fradd { padding: 10px 12px; border-bottom: 1px solid #1d1d1d; }
+.fradd input, .frsay input { width: 100%; height: 28px; background: #101010; border: 1px solid #2c2c2c; color: var(--fg); font: 12px Consolas, monospace; padding: 0 8px; outline: 0; }
+.fradd input:focus, .frsay input:focus { border-color: var(--acc-dim); }
+#frlist { flex: 1; overflow: auto; }
+.frsec { padding: 10px 12px 4px; color: var(--dim); font-size: 10px; letter-spacing: .12em; }
+.fri { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: default; }
+.fri:hover { background: #191919; }
+.fri.sel { background: var(--acc-bg); }
+.fri .dot { width: 7px; height: 7px; border-radius: 50%; background: #333; flex: none; }
+.fri .dot.on { background: var(--acc); box-shadow: 0 0 6px var(--acc); }
+.fri .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fri .who b { color: var(--fg); font-weight: 600; }
+.fri .who span { color: var(--dim); margin-left: 6px; font-size: 11px; }
+.fri .n { background: var(--acc); color: #111; border-radius: 8px; padding: 0 6px; font-size: 10px; font-weight: 700; }
+.fri .act { color: var(--dim); padding: 0 4px; }
+.fri .act:hover { color: var(--acc); }
+.fri .act.bad:hover { color: var(--bad); }
+.frchat { display: flex; flex-direction: column; min-height: 0; }
+#frhead { padding: 10px 14px; border-bottom: 1px solid #1d1d1d; color: var(--dim); min-height: 38px; display: flex; align-items: center; gap: 8px; }
+#frhead b { color: var(--fg); }
+#frhead .rm { margin-left: auto; color: var(--dim); font-size: 11px; }
+#frhead .rm:hover { color: var(--bad); }
+#frmsgs { flex: 1; overflow: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+.frm { max-width: 78%; padding: 6px 10px; background: #1a1a1a; border: 1px solid #242424; white-space: pre-wrap; word-break: break-word; align-self: flex-start; }
+.frm.mine { align-self: flex-end; background: var(--acc-bg); border-color: var(--acc-dim); }
+.frm.mine.wait { opacity: .6; }
+.frm time { display: block; color: var(--dim); font-size: 9px; margin-top: 2px; }
+.frempty { margin: auto; text-align: center; color: var(--dim); line-height: 1.7; padding: 20px; }
+.frempty b { color: var(--fg); }
+.frsay { padding: 10px 14px; border-top: 1px solid #1d1d1d; }
+#frnote { padding: 6px 14px; color: var(--dim); font-size: 10px; border-top: 1px solid #1d1d1d; }
+#frnote.bad { color: var(--bad); }
 #dl.on .card { transform: none; }
 #dllist { min-height: 90px; }
 .dli { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 4px; align-items: center;
@@ -503,13 +545,21 @@ body.noscs .hp .scs { display: none; }
   <div id="urlwrap"><span class="p">›</span><input id="url" spellcheck="false" autocomplete="off"><span id="shield" style="display:none"></span><span id="star" title="bookmark (cmd+d)">☆</span></div>
   <span id="zoomchip" class="chip" title="unzoom (cmd+shift+f)">⛶ zoom</span>
   <span id="stats"></span><span id="trim" class="chip" title="put every hidden tab to sleep">trim</span>
-  <span id="clock"></span><span id="dlbtn" title="downloads (cmd+j)"><i><b></b></i>↓</span><span id="cfgbtn" title="settings (cmd+,)">cfg</span>
+  <span id="clock"></span><span id="frbtn" title="friends & chat">@<i></i></span><span id="dlbtn" title="downloads (cmd+j)"><i><b></b></i>↓</span><span id="cfgbtn" title="settings (cmd+,)">cfg</span>
   <div class="wc"><div id="wmin">─</div><div id="wmax">□</div><div id="wq" class="q">✕</div></div>
 </div>
 <div id="bmbar"></div><div id="coffee"><span class="msg">☕ <b>enjoying ULTRA?</b> it's made by a tiny team. if it's saved you some time, you can buy us a coffee.</span>
   <span class="cb" id="coffee-yes">buy us a coffee</span><span class="later" id="coffee-later">not now</span><span class="x" id="coffee-x" title="close">✕</span></div><div id="panes"></div><div id="glancebg"></div><div id="glance"><div class="gh"><span class="gt"></span>
   <span class="gb" id="g-split" title="keep it, tiled next to the focused pane (cmd+enter)">⧉ split</span><span class="gb" id="g-tab" title="keep it as a background tab">keep as tab</span><span class="gb" id="g-x" title="close (esc)">✕</span></div></div>
 <div id="toast"></div><div id="sugg"></div>
+<div id="fr" class="ovl" tabindex="-1"><div class="card">
+  <div class="hd"><span>FRIENDS</span><span class="k" id="fr-me"></span></div>
+  <div class="frwrap">
+    <div class="frside"><div class="fradd"><input id="fr-add" placeholder="add a friend by @handle" maxlength="21" spellcheck="false" autocomplete="off"></div><div id="frlist"></div></div>
+    <div class="frchat"><div id="frhead"></div><div id="frmsgs"></div><div class="frsay"><input id="fr-say" placeholder="message · enter sends" maxlength="4000" spellcheck="true" autocomplete="off"></div></div>
+  </div>
+  <div id="frnote"></div>
+</div></div>
 <div id="dl" class="ovl" tabindex="-1"><div class="card">
   <div class="hd"><span>DOWNLOADS</span><span class="k">cmd+j</span></div>
   <div id="dllist"></div>
@@ -519,7 +569,7 @@ body.noscs .hp .scs { display: none; }
   <div class="hd"><span>SETTINGS</span><span class="k">cmd+,</span></div>
   <div class="sec">ULTRA ID</div>
   <div class="row idrow" id="id-new"><div><div class="name">create your ULTRA ID</div>
-    <div class="desc">who you'll be to other ULTRA users: friends, chat and shared workspaces are on the way.<br>it's made on this computer; nothing is sent anywhere yet.</div>
+    <div class="desc">who you are to other ULTRA users: friends add you by your @handle and chat with you (the @ in the top bar).<br>it's made on this computer and signs you in without a password; the private key never leaves it.</div>
     <div class="idform"><input id="id-name" placeholder="display name" maxlength="40" spellcheck="false" autocomplete="off"><input id="id-handle" placeholder="@handle" maxlength="21" spellcheck="false" autocomplete="off"><button class="run" id="id-make">create</button></div>
     <div class="desc iderr" id="id-err"></div></div></div>
   <div class="row idrow" id="id-card"><div class="idcard"><b id="id-av"></b><div><div class="name" id="id-who"></div><div class="desc"><span id="id-handle-show"></span> · since <span id="id-since"></span></div>
@@ -643,7 +693,7 @@ const $ = (s) => document.querySelector(s);
 const send = (cmd, arg) => { try { window.ipc.postMessage(JSON.stringify({ cmd, arg })); } catch (_) {} };
 const CFG0 = window.__ultraCfg || {};
 let S = { tabs: [], a: 0, panes: [], splits: [], live: 0, ws: 0, wss: [0], ps: {}, cfg: CFG0 };
-let ovOn = false, cfgOn = false, palOn = false, dlOn = false, ovSel = 0, ovList = [], splitSig = '', pendingFocus = null, lastWs = 0;
+let ovOn = false, cfgOn = false, palOn = false, dlOn = false, frOn = false, ovSel = 0, ovList = [], splitSig = '', pendingFocus = null, lastWs = 0;
 let SPEED = !!CFG0.ultraspeed;
 document.body.classList.toggle('speed', SPEED);
 const later = (f, ms) => SPEED ? f() : setTimeout(f, ms);
@@ -755,6 +805,7 @@ window.ultra = {
     document.body.classList.toggle('coffee', !!s.coffee);
     renderGlance();
     renderDl();
+    renderFr();
     document.body.classList.toggle('fs', !!s.fs);
     setText($('#wmax'), s.max ? '❐' : '□');
     renderPanes();
@@ -775,6 +826,7 @@ window.ultra = {
   settings(on) { setCfg(on); },
   palette(on) { setPal(on); },
   downloads(on) { setDl(on); },
+  friends(on) { setFr(on); },
   tour(on) { setTour(on); },
   // Type-to-search: put the first typed character into the focused pane's search field.
   typeUrl(ch) {
@@ -786,7 +838,7 @@ window.ultra = {
     sgTyped = true; sgAsk(q);
   },
 };
-const anyOverlay = () => ovOn || cfgOn || palOn || dlOn || tourOn || !!lockMode;
+const anyOverlay = () => ovOn || cfgOn || palOn || dlOn || frOn || tourOn || !!lockMode;
 // Glance: the page floats natively inside this frame; the strip above it names it and offers keep / close.
 function renderGlance() {
   const g = S.glance, on = !!g && !anyOverlay();
@@ -841,7 +893,7 @@ function setCfg(on) {
   cfgOn = on;
   $('#cfg').classList.toggle('on', on);
   $('#cfgbtn').classList.toggle('on', on);
-  if (on) { if (ovOn) setOv(false); if (palOn) setPal(false); if (dlOn) setDl(false); if (tourOn) setTour(false); setTimeout(() => $('#cfg').focus(), 0); }
+  if (on) { if (ovOn) setOv(false); if (palOn) setPal(false); if (dlOn) setDl(false); if (frOn) setFr(false); if (tourOn) setTour(false); setTimeout(() => $('#cfg').focus(), 0); }
   renderPanes();
 }
 function closeCfg() { setCfg(false); send('settings', false); }
@@ -966,10 +1018,74 @@ function setDl(on) {
   dlOn = on;
   $('#dl').classList.toggle('on', on);
   $('#dlbtn').classList.toggle('on', on);
-  if (on) { if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false); if (tourOn) setTour(false); renderDl(); setTimeout(() => $('#dl').focus(), 0); }
+  if (on) { if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false); if (frOn) setFr(false); if (tourOn) setTour(false); renderDl(); setTimeout(() => $('#dl').focus(), 0); }
   else renderDl();
   renderPanes();
 }
+// ── friends & chat (by @handle; messages are end-to-end encrypted by ULTRA itself) ──
+let frShown = '';
+const frTime = (t) => { const d = new Date(t * 1000); return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
+function renderFr() {
+  const so = S.social || {}, btn = $('#frbtn');
+  btn.classList.toggle('unread', !!so.unread);
+  setText(btn.querySelector('i'), so.unread > 9 ? '9+' : String(so.unread || ''));
+  if (!frOn) return;
+  const me = so.me || (S.me && S.me.handle);
+  setText($('#fr-me'), me ? '@' + me : '');
+  const note = $('#frnote');
+  const status = { online: 'connected · messages are end-to-end encrypted', connecting: 'connecting…', offline: 'offline · retrying' + (so.error ? ' (' + so.error + ')' : ''), error: so.error || 'couldn\'t sign in', off: '' }[so.status] ?? '';
+  setText(note, status); note.classList.toggle('bad', so.status === 'error' || so.status === 'offline');
+  if (!S.me) {
+    setHTML($('#frlist'), '');
+    setHTML($('#frmsgs'), '<div class="frempty">friends and chat use your <b>ULTRA ID</b>.<br>make one in settings (ctrl+,), then come back here.</div>');
+    setHTML($('#frhead'), ''); $('#fr-say').disabled = true; $('#fr-add').disabled = true; return;
+  }
+  $('#fr-add').disabled = so.status !== 'online';
+  let h = '';
+  if ((so.requests || []).length) {
+    h += '<div class="frsec">REQUESTS</div>' + so.requests.map((r) => `<div class="fri"><span class="dot"></span><span class="who"><b>@${esc(r.handle)}</b><span>${esc(r.name)}</span></span>` +
+      `<span class="act" data-acc="${esc(r.handle)}" title="accept">✓</span><span class="act bad" data-dec="${esc(r.handle)}" title="decline">✕</span></div>`).join('');
+  }
+  const fl = (so.friends || []).slice().sort((a, b) => (b.online - a.online) || (b.last - a.last) || a.handle.localeCompare(b.handle));
+  h += '<div class="frsec">FRIENDS</div>' + (fl.length ? fl.map((f) => `<div class="fri${so.open === f.handle ? ' sel' : ''}" data-open="${esc(f.handle)}"><span class="dot${f.online ? ' on' : ''}"></span>` +
+    `<span class="who"><b>@${esc(f.handle)}</b><span>${esc(f.name)}</span></span>${f.unread ? `<span class="n">${f.unread}</span>` : ''}</div>`).join('') : '<div class="fri"><span class="who"><span>no friends yet · add one by their @handle above</span></span></div>');
+  if ((so.sent || []).length) h += '<div class="frsec">WAITING FOR</div>' + so.sent.map((s) => `<div class="fri"><span class="dot"></span><span class="who"><b>@${esc(s)}</b><span>request sent</span></span><span class="act bad" data-dec="${esc(s)}" title="cancel">✕</span></div>`).join('');
+  setHTML($('#frlist'), h);
+  const f = fl.find((x) => x.handle === so.open);
+  $('#fr-say').disabled = !f || so.status !== 'online';
+  if (!f) { setHTML($('#frhead'), ''); setHTML($('#frmsgs'), '<div class="frempty">pick a friend to chat.<br>only you and they can read your messages: ULTRA encrypts them before they leave this computer.</div>'); frShown = ''; return; }
+  setHTML($('#frhead'), `<span class="dot${f.online ? ' on' : ''}" style="width:7px;height:7px;border-radius:50%;background:${f.online ? 'var(--acc)' : '#333'}"></span><b>@${esc(f.handle)}</b><span>${esc(f.name)}${f.online ? ' · online' : ''}</span><span class="rm" data-rm="${esc(f.handle)}">remove friend</span>`);
+  const box = $('#frmsgs'), msgs = so.msgs || [];
+  const sig = f.handle + ':' + msgs.length + ':' + msgs.filter((m) => m.sent).length;
+  if (sig === frShown) return;
+  const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30 || !frShown.startsWith(f.handle + ':');
+  setHTML(box, msgs.length ? msgs.map((m) => `<div class="frm${m.from === me ? ' mine' : ''}${m.from === me && !m.sent ? ' wait' : ''}">${esc(m.text)}<time>${frTime(m.ts)}${m.from === me && !m.sent ? ' · sending' : ''}</time></div>`).join('')
+    : `<div class="frempty">say hi to <b>@${esc(f.handle)}</b>.</div>`);
+  if (atEnd) box.scrollTop = box.scrollHeight;
+  frShown = sig;
+}
+function setFr(on) {
+  frOn = on;
+  $('#fr').classList.toggle('on', on);
+  $('#frbtn').classList.toggle('on', on);
+  if (on) { if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false); if (dlOn) setDl(false); if (tourOn) setTour(false); frShown = ''; renderFr(); setTimeout(() => ((S.social || {}).open ? $('#fr-say') : $('#fr-add')).focus(), 0); }
+  renderPanes();
+}
+function closeFr() { setFr(false); send('friends', false); }
+$('#frbtn').onclick = () => frOn ? closeFr() : send('friends', true);
+$('#fr').addEventListener('mousedown', (e) => { if (e.target.id === 'fr') closeFr(); });
+$('#frlist').addEventListener('click', (e) => {
+  const a = e.target.closest('[data-acc]'), d = e.target.closest('[data-dec]'), o = e.target.closest('[data-open]');
+  if (a) send('saccept', a.dataset.acc); else if (d) send('sdecline', d.dataset.dec);
+  else if (o) { send('sopen', o.dataset.open); setTimeout(() => $('#fr-say').focus(), 0); }
+});
+$('#frhead').addEventListener('click', (e) => { const r = e.target.closest('[data-rm]'); if (r && confirm(`remove @${r.dataset.rm} from your friends? your chat history with them stays on this computer.`)) send('sremove', r.dataset.rm); });
+for (const id of ['#fr-add', '#fr-say']) $(id).addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Escape') { closeFr(); return; }
+  if (e.key !== 'Enter' || !e.target.value.trim()) return;
+  send(id === '#fr-add' ? 'sadd' : 'ssend', e.target.value.trim()); e.target.value = '';
+});
 function closeDl() { setDl(false); send('downloads', false); }
 $('#dlbtn').onclick = () => dlOn ? closeDl() : send('downloads', true);
 $('#dl').addEventListener('mousedown', (e) => { if (e.target.id === 'dl') closeDl(); });
@@ -1183,6 +1299,7 @@ const CMDS = [
   { k: 'lock', d: 'lock the private workspace now (cmd+opt+l)', run: () => send('lock') },
   { k: 'wipe private', d: 'close every private tab', run: () => send('wipe') },
   { k: 'reload', d: 'reload the focused page', run: () => send('reload') },
+  { k: 'friends', d: 'friends & chat: add people by @handle', run: () => send('friends', true) },
   { k: 'crash log', d: 'show the crash log (it stays on this computer)', run: () => send('crashlog') },
   { k: 'reopen', d: 'reopen the last closed tab', run: () => send('reopen') },
   { k: 'devtools', d: 'developer tools for the focused page', run: () => send('devtools') },
@@ -1215,7 +1332,7 @@ function setPal(on) {
   palOn = on;
   $('#pal').classList.toggle('on', on);
   if (on) {
-    if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (dlOn) setDl(false); if (tourOn) setTour(false);
+    if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (dlOn) setDl(false); if (frOn) setFr(false); if (tourOn) setTour(false);
     $('#palq').value = ''; palSel = 0; drawPal(); setTimeout(() => $('#palq').focus(), 0);
   } else $('#palq').blur();
   renderPanes();
@@ -1920,6 +2037,7 @@ document.addEventListener('keydown', (e) => {
   else if (c && !e.shiftKey && !e.altKey && code === 'KeyF') { ultra.focusUrl(); e.preventDefault(); return; }
   else if (c && !e.shiftKey && !e.altKey && code === 'KeyJ') { if (dlOn) closeDl(); else send('downloads', true); e.preventDefault(); return; }
   else if (k === 'escape' && dlOn) { closeDl(); e.preventDefault(); return; }
+  else if (k === 'escape' && frOn) { closeFr(); e.preventDefault(); return; }
   else if (c && e.shiftKey && !e.altKey && code === 'KeyR') { send('blankat'); e.preventDefault(); return; }
   else if (c && code === 'Comma') { if (cfgOn) closeCfg(); else send('settings', true); e.preventDefault(); return; }
   else if (k === 'escape' && cfgOn) { closeCfg(); e.preventDefault(); return; }

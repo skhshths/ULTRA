@@ -19,6 +19,7 @@ mod edition;
 mod identity;
 mod layout;
 mod library;
+mod social;
 mod macos;
 mod privacy;
 mod slideshow;
@@ -142,6 +143,8 @@ enum UserEvent {
     Failed(u64),
     /// "Check for updates" finished: state for settings, and the update to install if any.
     UpdateChecked(Value, Option<updater::Update>),
+    /// A frame from the friends & chat server (or the connection's status).
+    Social(Value),
     /// A shortcut or mouse button caught natively: (WKWebView it was aimed at, 0 = none; message).
     Native(usize, String),
     /// The slideshow folder picker closed.
@@ -243,6 +246,8 @@ struct Settings {
     stats: bool,
     /// Ad & tracker blocking.
     block: bool,
+    /// The friends & chat server (ws://host:port/ws).
+    chatserver: String,
     /// Sites where blocking is switched off (host names).
     blockoff: Vec<String>,
     theme: String,
@@ -298,6 +303,7 @@ impl Default for Settings {
             tour: true,
             stats: false,
             block: true,
+            chatserver: social::DEFAULT_SERVER.into(),
             blockoff: Vec::new(),
             theme: "mint".into(),
             scanlines: false,
@@ -402,6 +408,8 @@ struct App {
     win_focused: bool,
     /// This computer's ULTRA ID, once made.
     me: Option<identity::Identity>,
+    /// Friends & chat (needs an ULTRA ID).
+    social: social::Social,
     /// A newer build found by "check for updates", ready to install.
     update: Option<updater::Update>,
     /// Other browsers found on this computer, offered for importing bookmarks.
@@ -1613,6 +1621,7 @@ impl App {
             }),
             "max": self.window.is_maximized(),
             "me": self.me,
+            "social": self.social.state(),
             // New-tab shortcuts (or the most visited sites until there are some).
             "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>() },
             "version": updater::version(),
@@ -1634,6 +1643,15 @@ impl App {
     fn layout(&mut self) {
         let _ = self.ui.set_bounds(self.full_rect());
         self.apply_layout(false);
+    }
+
+    /// Connect friends & chat (again), e.g. after the ULTRA ID is made or the server changes.
+    fn start_social(&mut self) {
+        let proxy = self.proxy.clone();
+        let server = if self.cfg.chatserver.is_empty() { social::DEFAULT_SERVER.to_string() } else { self.cfg.chatserver.clone() };
+        self.social.start(&server, move |v| {
+            let _ = proxy.send_event(UserEvent::Social(v));
+        });
     }
 
     fn save_session(&self) {
@@ -2626,7 +2644,7 @@ impl App {
                 let _ = self.ui.focus();
                 let _ = self.ui.evaluate_script("ultra.focusUrl()");
             }
-            "overview" | "settings" | "palette" | "urlpanel" | "downloads" => {
+            "overview" | "settings" | "palette" | "urlpanel" | "downloads" | "friends" => {
                 // These panels cover the content area, so pages are hidden while open.
                 let on = arg.as_bool().unwrap_or(!self.overlay);
                 self.overlay = on;
@@ -2756,6 +2774,7 @@ impl App {
                     Ok(me) => {
                         self.toast(&format!("welcome, {} · your ULTRA ID is ready", me.name));
                         self.me = Some(me);
+                        self.start_social();
                     }
                     Err(e) => {
                         let _ = self.ui.evaluate_script(&format!("ultra.idError({})", json!(e)));
@@ -2763,9 +2782,29 @@ impl App {
                 }
                 self.sync();
             }
+            // Friends & chat, all by @handle.
+            "sadd" => self.social.add(arg.as_str().unwrap_or("")),
+            "saccept" => self.social.accept(arg.as_str().unwrap_or("")),
+            "sdecline" => {
+                self.social.decline(arg.as_str().unwrap_or(""));
+                self.sync();
+            }
+            "sremove" => self.social.remove(arg.as_str().unwrap_or("")),
+            "sopen" => {
+                self.social.open(arg.as_str().map(String::from));
+                self.sync();
+            }
+            "ssend" => {
+                if let Err(e) = self.social.say(arg.as_str().unwrap_or("")) {
+                    self.toast(&e);
+                }
+                self.social.save();
+                self.sync();
+            }
             "idremove" => {
                 identity::remove(&self.data_dir);
                 self.me = None;
+                self.social.stop();
                 self.toast("ULTRA ID removed from this computer");
                 self.sync();
             }
@@ -3225,6 +3264,13 @@ impl App {
                 }
             }
             UserEvent::Procs(p) => self.on_procs(p),
+            UserEvent::Social(v) => {
+                if let social::Effect::Toast(m) = self.social.on_event(&v) {
+                    self.toast(&m);
+                }
+                self.social.save();
+                self.sync();
+            }
             UserEvent::UpdateChecked(state, up) => {
                 self.update = up;
                 let _ = self.ui.evaluate_script(&format!("ultra.updateState({state})"));
@@ -3399,6 +3445,7 @@ fn startup_failed(msg: &str) {
 fn main() {
     let bench_mode = std::env::args().any(|a| a == "--bench");
     let data_dir = data_dir();
+    let social_dir = data_dir.clone();
     let _ = fs::create_dir_all(&data_dir);
     // Any panic from here on is written to crash.log before ULTRA goes down.
     crash::install(data_dir.clone(), format!("{} {}", edition::NAME, updater::version()));
@@ -3551,6 +3598,7 @@ fn main() {
         booting: false,
         win_focused: true,
         me: None,
+        social: social::Social::new(&social_dir),
         update: None,
         browsers: library::installed_browsers(),
         settings_save_at: None,
@@ -3613,6 +3661,8 @@ fn main() {
     // Copies of other browsers' history left by an interrupted import never linger.
     std::thread::spawn(library::clear_stale_imports);
     app.me = identity::load(&app.data_dir);
+    // Friends & chat: sign in to the server in the background (only with an ULTRA ID).
+    app.start_social();
     app.is_default = macos::is_default();
     app.dls = downloads::Downloads::load(&app.data_dir);
     app.booting = app.cfg.boot && !app.cfg.ultraspeed;
