@@ -32,6 +32,7 @@ built-in ad/tracker blocking.
 | Monetization | **none**: no coffee strip, no `SUPPORT_URL` | coffee strip on 5th launch (`SUPPORT_URL` empty for now) |
 | DevTools test switch | off (`TEST_SWITCHES = false`) | on: `ULTRA_DEVTOOLS_PORT=9333` |
 | Release on push | new **food-named** release (`v2-banana`, "ULTRA 2 · Banana") | rolling release; Mac build only for `[mac]` commits |
+| Updates | in place from public releases | in place too, after a one-time "connect GitHub" in settings (read-only token, DPAPI-encrypted `github-token` in the data folder, sent only to api.github.com via curl stdin) |
 | Experimental-only files | none | `BUGS.md`, `SIGNOUT.md` (this file) |
 
 The difference between editions lives in `windows/src/edition.rs` and `mac/src/edition.rs`.
@@ -253,6 +254,25 @@ Newest first. Copy the template for your entry.
 **Verified:** what you tested and how; what you could NOT verify.
 **Left off:** the exact next step, anything half-done, open questions for the owner.
 ```
+
+### 2026-10-17 (evening) — Claude (Opus 5.5)
+**Did (experimental):**
+- Ctrl+R reloads the tab from inside pages too.
+- The experimental updater installs straight from the private repo once a read-only GitHub
+  token is connected in settings.
+- New app icon: a bold mint U on a dark tile (inverted for experimental). Regenerate with
+  `tools/make_icon.py`.
+- Earlier the same evening: the UI is no longer inverted (only the icon is), suggested
+  shortcut tiles were removed, and ctrl shortcuts are no longer dropped (see that commit).
+
+**Verified:**
+- Tests pass; the UI script parses.
+- Live: private-repo detection, the connect row, bad-token rejection, the pre-filled GitHub
+  token page, a fake token getting a 401 (so the header is sent), and the stored token being
+  an encrypted DPAPI blob.
+- Not verified: a real token download end to end (the owner has to paste theirs).
+
+**Left off:** §9 to-dos; public hasn't received any of tonight's changes.
 
 ### 2026-10-17 — Claude (Opus 5.5)
 **Did:**

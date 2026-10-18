@@ -651,6 +651,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, false, None, Some('F')) => "focusurl".into(),
         (false, false, None, Some('J')) => "downloads".into(),
         (false, false, None, Some('T')) => "new".into(),
+        (false, false, None, Some('R')) => "reload".into(),
         (false, false, None, Some('W')) => "close".into(),
         (false, false, None, Some('L')) => "focusurl".into(),
         (false, false, None, Some('K')) => "overview".into(),
@@ -2736,7 +2737,7 @@ impl App {
             "update_check" => {
                 let proxy = self.proxy.clone();
                 std::thread::spawn(move || {
-                    let (state, up) = updater::check(edition::REPO);
+                    let (state, up) = updater::check(edition::REPO, None);
                     let _ = proxy.send_event(UserEvent::UpdateChecked(state, up));
                 });
             }
@@ -3247,7 +3248,7 @@ impl App {
         } else if matches!(
             msg,
             "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat"
-                | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads"
+                | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload"
         ) {
             self.command(msg, &Value::Null);
         }

@@ -4,6 +4,11 @@
 //! the running one, checked, and swapped in by renaming (Windows lets a running exe be renamed,
 //! not overwritten), then ULTRA restarts from the same path, so taskbar pins and shortcuts keep
 //! working. On a Mac the download page opens instead (an app bundle is replaced by hand).
+//!
+//! The experimental build lives in a private repository, which GitHub only shows to someone
+//! signed in. On Windows the tester connects once by pasting a read-only GitHub token; it is
+//! kept encrypted for this Windows user (DPAPI) and only ever sent to api.github.com, through
+//! curl's standard input (never on a command line other programs can see).
 
 use std::path::{Path, PathBuf};
 
@@ -42,12 +47,58 @@ const ASSET: &str = "ULTRA-macos.zip";
 pub struct Update {
     pub url: String,
     pub size: u64,
+    /// The GitHub token for a private repository's download.
+    token: Option<String>,
+}
+
+/// The saved GitHub token, encrypted for this Windows user.
+#[cfg(windows)]
+const TOKEN_FILE: &str = "github-token";
+
+/// A GitHub personal access token: fine-grained (github_pat_…) or classic (ghp_…).
+pub fn valid_token(t: &str) -> bool {
+    (t.starts_with("github_pat_") || t.starts_with("ghp_"))
+        && (30..=255).contains(&t.len())
+        && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+#[cfg(windows)]
+pub fn load_token(dir: &Path) -> Option<String> {
+    let raw = std::fs::read(dir.join(TOKEN_FILE)).ok()?;
+    let t = String::from_utf8(crate::identity::unprotect(&raw)?).ok()?;
+    valid_token(&t).then_some(t)
+}
+
+/// Keep the token for next time; refuses (false) unless Windows can encrypt it.
+#[cfg(windows)]
+pub fn save_token(dir: &Path, t: &str) -> bool {
+    let (data, sealed) = crate::identity::protect(t.as_bytes());
+    sealed && crate::library::write_atomic(&dir.join(TOKEN_FILE), &data).is_ok()
+}
+
+#[cfg(windows)]
+pub fn forget_token(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(TOKEN_FILE));
+}
+
+/// GitHub's "new token" page, filled in: read-only access to code and releases, for the owner
+/// of the repository (the tester still picks the repository itself).
+pub fn token_page(repo: &str) -> String {
+    let owner = repo.split('/').next().unwrap_or("");
+    format!(
+        "https://github.com/settings/personal-access-tokens/new?name=ULTRA%20Experimental%20updates\
+         &description=Lets%20ULTRA%20Experimental%20download%20its%20own%20updates\
+         &target_name={owner}&expires_in=none&contents=read"
+    )
 }
 
 /// Short form of a commit, as shown in settings.
 pub fn short(c: &str) -> &str {
     &c[..c.len().min(7)]
 }
+
+/// Whether this platform can sign in to a private repository and install from it.
+const CAN_AUTH: bool = cfg!(windows);
 
 pub fn releases_page(repo: &str) -> String {
     format!("https://github.com/{repo}/releases/latest")
@@ -69,20 +120,40 @@ fn curl() -> std::process::Command {
     }
 }
 
+/// Run curl, handing it the token (if any) as a header through its standard input.
+fn run(mut c: std::process::Command, token: Option<&str>) -> std::io::Result<std::process::Output> {
+    use std::io::Write;
+    use std::process::Stdio;
+    if token.is_some() {
+        c.args(["-K", "-"]);
+    }
+    let mut child = c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
+    if let (Some(t), Some(mut stdin)) = (token, child.stdin.take()) {
+        let _ = writeln!(stdin, "header = \"Authorization: Bearer {t}\"");
+    }
+    child.wait_with_output()
+}
+
 /// Ask GitHub about the latest release. Blocking: run it off the UI thread. Returns the state
 /// for the settings UI, and the update to install if there is one.
-pub fn check(repo: &str) -> (Value, Option<Update>) {
-    let out = curl()
-        .args(["-sS", "-L", "--max-time", "20", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: ULTRA-updater", "-w", "\n%{http_code}"])
-        .arg(format!("https://api.github.com/repos/{repo}/releases/latest"))
-        .output();
+pub fn check(repo: &str, token: Option<String>) -> (Value, Option<Update>) {
+    let linked = token.is_some();
+    let mut c = curl();
+    c.args(["-sS", "-L", "--max-time", "20", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: ULTRA-updater", "-w", "\n%{http_code}"])
+        .arg(format!("https://api.github.com/repos/{repo}/releases/latest"));
+    let out = run(c, token.as_deref());
     let Ok(out) = out else { return (json!({ "s": "failed", "m": "couldn't run curl to reach GitHub" }), None) };
     let text = String::from_utf8_lossy(&out.stdout);
     let (body, code) = text.rsplit_once('\n').unwrap_or((&text, ""));
     match code.trim() {
         "200" => {}
         // A private repository (the experimental build) can't be read without signing in.
-        "404" => return (json!({ "s": "private", "m": "updates for this build are on its private GitHub page", "page": releases_page(repo) }), None),
+        "401" if linked => return (json!({ "s": "private", "linked": true, "canauth": CAN_AUTH, "m": "GitHub didn't accept the saved token (expired?) · connect again below" }), None),
+        "404" if linked => return (json!({ "s": "private", "linked": true, "canauth": CAN_AUTH, "m": "the saved token can't see this repository · make one with ULTRA-experimental picked under repository access" }), None),
+        "404" => {
+            let m = if CAN_AUTH { "this build updates from a private GitHub repository · connect once below and updates install by themselves" } else { "updates for this build are on its private GitHub page" };
+            return (json!({ "s": "private", "canauth": CAN_AUTH, "m": m, "page": releases_page(repo) }), None);
+        }
         "" | "000" => return (json!({ "s": "failed", "m": "couldn't reach GitHub · check your connection" }), None),
         c => return (json!({ "s": "failed", "m": format!("GitHub answered {c} · try again later") }), None),
     }
@@ -93,19 +164,22 @@ pub fn check(repo: &str) -> (Value, Option<Update>) {
         return (json!({ "s": "failed", "m": "the latest release has no download for this computer" }), None);
     };
     if !COMMIT.is_empty() && latest == COMMIT {
-        return (json!({ "s": "uptodate", "m": "you have the latest version" }), None);
+        return (json!({ "s": "uptodate", "linked": linked, "m": "you have the latest version" }), None);
     }
-    let up = Update {
-        url: asset["browser_download_url"].as_str().unwrap_or("").to_string(),
-        size: asset["size"].as_u64().unwrap_or(0),
+    // A private repository's file comes through the API (signed in); a public one from its page.
+    let url = match (&token, asset["id"].as_u64()) {
+        (Some(_), Some(id)) => format!("https://api.github.com/repos/{repo}/releases/assets/{id}"),
+        _ => asset["browser_download_url"].as_str().unwrap_or("").to_string(),
     };
+    let up = Update { url, size: asset["size"].as_u64().unwrap_or(0), token };
     // Only ever download from this repository's own releases, over HTTPS.
-    if !up.url.starts_with(&format!("https://github.com/{repo}/releases/download/")) || up.size == 0 {
+    let ours = [format!("https://github.com/{repo}/releases/download/"), format!("https://api.github.com/repos/{repo}/releases/assets/")];
+    if !ours.iter().any(|p| up.url.starts_with(p.as_str())) || up.size == 0 {
         return (json!({ "s": "failed", "m": "the latest release's download doesn't look right · nothing was changed" }), None);
     }
     let when = rel["published_at"].as_str().unwrap_or("").split('T').next().unwrap_or("").to_string();
     let name = rel["name"].as_str().filter(|n| !n.is_empty() && !n.contains("latest build")).map(str::to_string).unwrap_or_else(|| format!("a new build ({})", short(&latest)));
-    (json!({ "s": "available", "m": format!("{name} is out ({when})"), "page": releases_page(repo) }), Some(up))
+    (json!({ "s": "available", "linked": linked, "m": format!("{name} is out ({when})"), "page": releases_page(repo) }), Some(up))
 }
 
 /// Where the exe sits while it's being replaced.
@@ -121,12 +195,12 @@ pub fn install(up: &Update) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|_| "couldn't find where ULTRA is running from".to_string())?;
     let (new, old) = (sibling(&exe, "new"), sibling(&exe, "old"));
     let _ = std::fs::remove_file(&new);
-    let ok = curl()
-        .args(["-sS", "-L", "-f", "--max-time", "300", "-H", "User-Agent: ULTRA-updater", "-o"])
+    // (curl never forwards the token to the storage server GitHub redirects the download to.)
+    let mut c = curl();
+    c.args(["-sS", "-L", "-f", "--max-time", "300", "-H", "User-Agent: ULTRA-updater", "-H", "Accept: application/octet-stream", "-o"])
         .arg(&new)
-        .arg(&up.url)
-        .status()
-        .is_ok_and(|s| s.success());
+        .arg(&up.url);
+    let ok = run(c, up.token.as_deref()).is_ok_and(|o| o.status.success());
     let fail = |m: &str| {
         let _ = std::fs::remove_file(&new);
         Err(m.to_string())
@@ -194,5 +268,15 @@ mod tests {
         assert_eq!(sibling(exe, "old"), Path::new(r"C:\Apps\ULTRA\ultra-exp.old.exe"));
         assert_eq!(short("0123456789abcdef"), "0123456");
         assert_eq!(short("ab"), "ab");
+    }
+
+    #[test]
+    fn tokens() {
+        assert!(valid_token("github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz"));
+        assert!(valid_token("ghp_0123456789abcdefghijABCDEFGHIJ123456"));
+        assert!(!valid_token("ghp_short"));
+        assert!(!valid_token("github_pat_abc def\"ghi jklmnopqrstuvwxyz0123456789"), "no spaces or quotes");
+        assert!(!valid_token("password1234567890123456789012345"));
+        assert!(token_page("skhshths/ULTRA-experimental").contains("&target_name=skhshths&"));
     }
 }

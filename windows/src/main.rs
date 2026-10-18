@@ -819,6 +819,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, false, None, Some('F')) => "focusurl".into(),
         (false, false, None, Some('J')) => "downloads".into(),
         (false, false, None, Some('T')) => "new".into(),
+        (false, false, None, Some('R')) => "reload".into(),
         (false, false, None, Some('W')) => "close".into(),
         (false, false, None, Some('L')) => "focusurl".into(),
         (false, false, None, Some('K')) => "overview".into(),
@@ -2465,7 +2466,7 @@ impl App {
             }
             match msg {
                 "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
-                | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" => {
+                | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
                     self.command(msg, &Value::Null)
                 }
                 _ => {}
@@ -3059,9 +3060,10 @@ impl App {
                 self.sync();
             }
             "update_check" => {
+                let token = updater::load_token(&self.data_dir);
                 let proxy = self.proxy.clone();
                 std::thread::spawn(move || {
-                    let (state, up) = updater::check(edition::REPO);
+                    let (state, up) = updater::check(edition::REPO, token);
                     let _ = proxy.send_event(UserEvent::UpdateChecked(state, up));
                 });
             }
@@ -3072,6 +3074,31 @@ impl App {
                         let _ = proxy.send_event(UserEvent::UpdateInstalled(updater::install(&up)));
                     });
                 }
+            }
+            // Connect the experimental build to its private repository with a read-only token.
+            "gh_connect" => {
+                let ws = if self.ws == PRIVATE_WS { self.last_ws } else { self.ws };
+                self.open_in(ws, updater::token_page(edition::REPO));
+                self.command("settings", &json!(false));
+            }
+            "gh_token" => {
+                let t = arg.as_str().unwrap_or("").trim().to_string();
+                let st = if !updater::valid_token(&t) {
+                    json!({ "s": "private", "canauth": true, "m": "that doesn't look like a GitHub token (they start with github_pat_)" })
+                } else if !updater::save_token(&self.data_dir, &t) {
+                    json!({ "s": "private", "canauth": true, "m": "couldn't store the token safely · nothing was saved" })
+                } else {
+                    json!({ "s": "checking", "m": "connected · asking GitHub…" })
+                };
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({st})"));
+                if st["s"] == "checking" {
+                    self.command("update_check", &Value::Null);
+                }
+            }
+            "gh_forget" => {
+                updater::forget_token(&self.data_dir);
+                self.update = None;
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "", "m": "GitHub disconnected · the token was removed from this computer" })));
             }
             "update_page" => {
                 let ws = if self.ws == PRIVATE_WS { self.last_ws } else { self.ws };
@@ -4029,9 +4056,10 @@ mod tests {
         assert_eq!(shortcut(k('R'), true, true, false).as_deref(), Some("blankat"));
         assert_eq!(shortcut(k('F'), true, false, false).as_deref(), Some("focusurl"));
         assert_eq!(shortcut(k('J'), true, false, false).as_deref(), Some("downloads"));
-        // Not ours: plain keys, ctrl+c, ctrl+r (reload) pass through.
+        // ctrl+r reloads the tab (ULTRA's own, so it works whatever the page does with keys).
+        assert_eq!(shortcut(k('R'), true, false, false).as_deref(), Some("reload"));
+        // Not ours: plain keys and ctrl+c pass through.
         assert_eq!(shortcut(k('T'), false, false, false), None);
         assert_eq!(shortcut(k('C'), true, false, false), None);
-        assert_eq!(shortcut(k('R'), true, false, false), None);
     }
 }

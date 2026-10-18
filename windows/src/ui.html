@@ -586,8 +586,12 @@ body.noscs .hp .scs { display: none; }
   <div class="sec" id="keys-sec">KEYBOARD SHORTCUTS</div>
   <div class="keylist" id="keylist"></div>
   <div class="sec">HELP</div>
-  <div class="row"><div><div class="name">updates</div><div class="desc"><span id="upd-ver"></span><br><span id="upd-msg">ULTRA updates itself in place: your taskbar pin and shortcuts keep working.</span></div></div>
+  <div class="row"><div><div class="name">updates</div><div class="desc"><span id="upd-ver"></span><br><span id="upd-msg">ULTRA updates itself in place: your taskbar pin and shortcuts keep working.</span> <a id="upd-forget" style="display:none">disconnect GitHub</a></div></div>
     <div class="ctl"><button class="run" id="upd-btn">check for updates</button></div></div>
+  <div class="row idrow" id="upd-gh" style="display:none"><div><div class="name">connect GitHub</div>
+    <div class="desc">1. <b>get a token</b> opens GitHub with a read-only token filled in: under repository access pick <b>ULTRA-experimental</b>, then generate it.<br>
+    2. paste it here. it stays encrypted on this computer and is only ever sent to GitHub.</div>
+    <div class="idform"><button class="run" id="gh-get">get a token</button><input id="gh-tok" type="password" placeholder="github_pat_…" spellcheck="false" autocomplete="off"><button class="run" id="gh-save">connect</button></div></div></div>
   <div class="row"><div><div class="name">tutorial</div><div class="desc">the tour shows once, the first time ULTRA starts.<br>switch on to see it every time.</div></div>
     <div class="ctl"><button class="run" id="run-tour">run now</button><div class="sw" id="sw-tour"></div></div></div>
   <div class="ft">saved automatically · esc to close</div>
@@ -876,16 +880,22 @@ function drawUpd() {
   const st = updState || {};
   setText($('#upd-ver'), S.version ? 'you have ' + S.version : 'development build');
   if (st.m) setText($('#upd-msg'), st.m);
-  const label = { checking: 'checking…', installing: 'updating…', available: window.__ultraMac ? 'download update' : 'update now', private: 'open releases' }[st.s] || 'check for updates';
+  const label = { checking: 'checking…', installing: 'updating…', available: window.__ultraMac ? 'download update' : 'update now', private: st.canauth ? 'check again' : 'open releases' }[st.s] || 'check for updates';
+  $('#upd-gh').style.display = st.s === 'private' && st.canauth ? '' : 'none';
+  $('#upd-forget').style.display = st.linked && st.s !== 'private' ? '' : 'none';
   setText($('#upd-btn'), label);
   $('#upd-btn').disabled = st.s === 'checking' || st.s === 'installing';
 }
 ultra.updateState = (st) => { updState = st; drawUpd(); };
+$('#gh-get').onclick = () => send('gh_connect');
+$('#gh-save').onclick = () => { const t = $('#gh-tok').value.trim(); $('#gh-tok').value = ''; send('gh_token', t); };
+$('#gh-tok').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') $('#gh-save').click(); });
+$('#upd-forget').onclick = () => { if (confirm('remove the GitHub token from this computer?')) send('gh_forget'); };
 function checkUpdates() { ultra.updateState({ s: 'checking', m: 'asking GitHub…' }); send('update_check'); }
 $('#upd-btn').onclick = () => {
   const s = (updState || {}).s;
   if (s === 'available') { ultra.updateState({ s: window.__ultraMac ? 'available' : 'installing', m: window.__ultraMac ? '' : 'downloading the new build… ULTRA restarts by itself once it is in place' }); send('update_install'); }
-  else if (s === 'private') send('update_page');
+  else if (s === 'private' && !(updState || {}).canauth) send('update_page');
   else checkUpdates();
 };
 // ── downloads (ctrl+j): everything downloaded, live progress, open / show in folder ──
