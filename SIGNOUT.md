@@ -186,6 +186,15 @@ before every push that touches `mac/`.
 - **`blocker.rs`:** ad/tracker filters; `content.js` is injected into pages (declutter,
   page protocol).
 
+## 7b. Mac stability rules (learned the hard way)
+
+- **Never call wry's `v.url()` on Mac.** It panics on a webview that hasn't loaded anything (a
+  spare, a blank page). Use `macos::url(v)`, which returns `None`. This was the crash in
+  ULTRA Experimental 10 on the owner's friend's Mac, in `save_session`.
+- **Never pass an address to `load_url` / `with_url` on Mac without `macos::safe_url`.** wry
+  panics if WebKit's URL parser rejects it (spaces, braces, non-ASCII on older macOS).
+- Mac `crash.log` backtraces name the function (`strip = "debuginfo"`). Ask testers for it.
+
 ## 8. Open threads and ideas
 
 - **Friends & chat (built 2026-10-18):**
@@ -267,6 +276,20 @@ Newest first. Copy the template for your entry.
 **Verified:** what you tested and how; what you could NOT verify.
 **Left off:** the exact next step, anything half-done, open questions for the owner.
 ```
+
+### 2026-10-18 (evening) — Claude (Opus 5.5)
+**Did:**
+- Fixed the Mac crash (wry `url()` on webviews with no page) and the bad-address crash.
+- Chat now connects when a name resolves to IPv6 first: ULTRA tries every address, and the
+  relay listens on IPv6 as well (redeployed to the Pi).
+- True page fullscreen on Windows.
+- F1/F2 for back/forward, and the new-tab "new in this build" list.
+
+**Verified:**
+- A test ULTRA signed in to the Pi.
+- Fullscreen covers 2560×1440 and restores.
+- Mac type-checks. It hasn't been run on a real Mac: get the friend's `crash.log` after the
+  update.
 
 ### 2026-10-18 (afternoon) — Claude (Opus 5.5)
 **Did:**

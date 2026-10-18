@@ -47,7 +47,7 @@ use tao::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
     platform::windows::{IconExtWindows, WindowExtWindows},
-    window::{Icon, ResizeDirection, Window, WindowBuilder},
+    window::{Fullscreen, Icon, ResizeDirection, Window, WindowBuilder},
 };
 use webview2_com::{
     AddScriptToExecuteOnDocumentCreatedCompletedHandler,
@@ -65,6 +65,7 @@ use webview2_com::{
     },
     take_pwstr, AcceleratorKeyPressedEventHandler, BytesReceivedChangedEventHandler, DownloadStartingEventHandler,
     ProcessFailedEventHandler, StateChangedEventHandler, TrySuspendCompletedHandler, CallDevToolsProtocolMethodCompletedHandler,
+    ContainsFullScreenElementChangedEventHandler,
 };
 use windows_core::{Interface, BOOL, HSTRING};
 use wry::{
@@ -184,6 +185,8 @@ enum UserEvent {
     UpdateChecked(Value, Option<updater::Update>),
     /// A frame from the friends & chat server (or the connection's status).
     Social(Value),
+    /// A page entered (true) or left (false) fullscreen, e.g. a YouTube video.
+    PageFullscreen(u64, bool),
     /// An update was downloaded and swapped in (the exe to restart from), or failed.
     UpdateInstalled(Result<PathBuf, String>),
     /// A ULTRA shortcut caught natively in a page's webview: (slot, message).
@@ -448,6 +451,8 @@ struct App {
     me: Option<identity::Identity>,
     /// Friends & chat (needs an ULTRA ID).
     social: social::Social,
+    /// The tab whose page is fullscreen right now: it covers the whole screen, chrome and all.
+    page_full: Option<u64>,
     /// A newer build found by "check for updates", ready to install.
     update: Option<updater::Update>,
     /// Other browsers found on this computer, offered for importing bookmarks.
@@ -691,6 +696,26 @@ fn try_suspend(v: &WebView) {
         unsafe {
             let _ = w.TrySuspend(&h);
         }
+    }
+}
+
+/// Tell the event loop when this webview's page enters or leaves fullscreen (a video's
+/// fullscreen button, F11 in a game…). WebView2 only stretches the element over the webview's
+/// own bounds; ULTRA makes that the whole screen.
+fn watch_fullscreen(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
+    let h = ContainsFullScreenElementChangedEventHandler::create(Box::new(move |sender, _| {
+        if let Some(wv) = sender {
+            let mut on = BOOL(0);
+            unsafe {
+                let _ = wv.ContainsFullScreenElement(&mut on);
+            }
+            let _ = proxy.send_event(UserEvent::PageFullscreen(slot, on.as_bool()));
+        }
+        Ok(())
+    }));
+    let mut token = 0i64;
+    unsafe {
+        let _ = v.webview().add_ContainsFullScreenElementChanged(&h, &mut token);
     }
 }
 
@@ -1088,6 +1113,7 @@ impl App {
         match res {
             Ok(v) => {
                 watch_failures(&v, self.proxy.clone(), slot);
+                watch_fullscreen(&v, self.proxy.clone(), slot);
                 watch_keys(&v, self.proxy.clone(), slot);
                 watch_downloads(&v, self.proxy.clone(), slot);
                 blocker::install(&v, slot, self.shields.clone(), self.block_on.clone());
@@ -1292,6 +1318,28 @@ impl App {
         } else {
             self.shown = targets;
         }
+        // A fullscreen page covers the whole window (which is fullscreen too); everything else
+        // hides. A panel opening over it ends fullscreen.
+        if let Some(fid) = self.page_full {
+            let on_screen = self.shown.iter().any(|(x, _)| *x == fid) || self.glance == Some(fid);
+            match self.idx(fid).filter(|_| !hidden && on_screen) {
+                Some(fi) => {
+                    self.anim = None;
+                    let full = self.full_rect();
+                    for (k, t) in self.tabs.iter().enumerate() {
+                        if let Some(v) = &t.view {
+                            if k == fi {
+                                let _ = v.set_bounds(full);
+                                let _ = v.set_visible(true);
+                            } else {
+                                let _ = v.set_visible(false);
+                            }
+                        }
+                    }
+                }
+                None => self.end_page_full(),
+            }
+        }
         // Put the least-recently-used hidden tabs to sleep until we're under budget,
         // never cutting off a tab that is playing audio.
         while self.live_count() > self.cfg.warm + self.shown.len() + usize::from(glance.is_some()) {
@@ -1370,6 +1418,9 @@ impl App {
     fn activate(&mut self, i: usize) {
         // Showing another tab closes any glance (removing it can shift indices, so go by id).
         let Some(id) = self.tabs.get(i).map(|t| t.id) else { return };
+        if self.page_full.is_some_and(|f| f != id) {
+            self.end_page_full();
+        }
         self.drop_glance(Some(id));
         let Some(i) = self.idx(id) else { return };
         let Some((id, ws)) = self.tabs.get(i).map(|t| (t.id, t.ws)) else { return };
@@ -1890,6 +1941,38 @@ impl App {
     fn layout(&mut self) {
         let _ = self.ui.set_bounds(self.full_rect());
         self.apply_layout(false);
+    }
+
+    /// A page went fullscreen (or came back): the window follows, and the layout puts that page
+    /// over everything (or back in its pane).
+    fn on_page_fullscreen(&mut self, slot: u64, on: bool) {
+        let Some(i) = self.idx_slot(slot) else { return };
+        let id = self.tabs[i].id;
+        if on {
+            let visible = self.shown.iter().any(|(x, _)| *x == id) || self.glance == Some(id);
+            if !visible || self.overlay {
+                return;
+            }
+            self.page_full = Some(id);
+            self.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+            self.apply_layout(false);
+            self.focus_active();
+        } else if self.page_full == Some(id) {
+            self.page_full = None;
+            self.window.set_fullscreen(None);
+            self.layout();
+        }
+    }
+
+    /// Leave page fullscreen from ULTRA's side (switching tabs, opening a panel…): tell the page,
+    /// and put the window back straight away.
+    fn end_page_full(&mut self) {
+        let Some(fid) = self.page_full.take() else { return };
+        if let Some(v) = self.idx(fid).and_then(|i| self.tabs[i].view.as_ref()) {
+            let _ = v.evaluate_script("document.fullscreenElement && document.exitFullscreen().catch(() => {})");
+        }
+        self.window.set_fullscreen(None);
+        let _ = self.ui.set_bounds(self.full_rect());
     }
 
     /// Connect friends & chat (again), e.g. after the ULTRA ID is made or the server changes.
@@ -3651,6 +3734,7 @@ impl App {
                 }
             }
             UserEvent::Procs(p) => self.on_procs(p),
+            UserEvent::PageFullscreen(slot, on) => self.on_page_fullscreen(slot, on),
             UserEvent::Social(v) => {
                 if let social::Effect::Toast(m) = self.social.on_event(&v) {
                     self.toast(&m);
@@ -3968,6 +4052,7 @@ fn main() {
         win_focused: true,
         me: None,
         social: social::Social::new(&social_dir),
+        page_full: None,
         update: None,
         browsers: library::installed_browsers(),
         settings_save_at: None,

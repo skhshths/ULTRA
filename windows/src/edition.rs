@@ -25,5 +25,6 @@ pub const NEW_HERE: &[&str] = &[
     "friends & chat by @handle, end-to-end encrypted (the @ in the top bar)",
     "tabs open and wake much faster (web views are reused)",
     "f1 / f2: back and forward",
+    "true fullscreen: videos and games that go fullscreen cover the whole screen",
     "updates install straight from the private repo (connect GitHub once in settings)",
 ];

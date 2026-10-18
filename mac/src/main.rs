@@ -786,7 +786,7 @@ impl App {
         let opened = std::sync::Mutex::new(Vec::new());
         let mut b = WebViewBuilder::new_with_web_context(&mut self.ctx);
         if let Some(u) = url {
-            b = b.with_url(u);
+            b = b.with_url(macos::safe_url(u));
         }
         if let Some(w) = profile.filter(|_| macos::separate_stores()) {
             // A workspace with its own logins: its own persistent WebKit data store (macOS 14+).
@@ -906,7 +906,7 @@ impl App {
         let got = match spare {
             Some((slot, v)) => {
                 let _ = v.set_bounds(bounds);
-                let _ = v.load_url(&url);
+                let _ = v.load_url(&macos::safe_url(&url));
                 Some((slot, v))
             }
             None => {
@@ -961,7 +961,7 @@ impl App {
     fn sleep(&mut self, i: usize) {
         let t = &mut self.tabs[i];
         if let Some(v) = t.view.take() {
-            if let Ok(u) = v.url() {
+            if let Some(u) = macos::url(&v) {
                 if !u.is_empty() && u != "about:blank" {
                     t.url = u;
                 }
@@ -1493,7 +1493,7 @@ impl App {
         } else {
             t.url = url.clone();
             if let Some(v) = &t.view {
-                let _ = v.load_url(&url);
+                let _ = v.load_url(&macos::safe_url(&url));
                 t.loading = true;
             }
         }
@@ -1682,7 +1682,7 @@ impl App {
                     let url = t
                         .view
                         .as_ref()
-                        .and_then(|v| v.url().ok())
+                        .and_then(macos::url)
                         .filter(|u| !u.is_empty() && u != "about:blank")
                         .unwrap_or_else(|| t.url.clone());
                     (url, t.title.clone())
@@ -2173,7 +2173,7 @@ impl App {
                     .filter_map(|&id| self.idx(id))
                     .map(|i| {
                         let t = &self.tabs[i];
-                        let url = t.view.as_ref().and_then(|v| v.url().ok()).filter(|u| !u.is_empty() && u != "about:blank");
+                        let url = t.view.as_ref().and_then(macos::url).filter(|u| !u.is_empty() && u != "about:blank");
                         (url.unwrap_or_else(|| t.url.clone()), t.title.clone())
                     })
                     .collect();
@@ -2356,7 +2356,7 @@ impl App {
                 t.url = url.to_string();
                 t.title.clear();
                 if let Some(v) = &t.view {
-                    let _ = v.load_url(url);
+                    let _ = v.load_url(&macos::safe_url(url));
                     t.loading = true;
                 }
             }
@@ -3108,7 +3108,7 @@ impl App {
         if msg == "url" {
             // Never trust a url reported by the page itself (address bar spoofing):
             // ask WebView2 for the real one.
-            if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
+            if let Some(u) = self.tabs[i].view.as_ref().and_then(macos::url) {
                 if !u.is_empty() && u != self.tabs[i].url {
                     self.tabs[i].url = u;
                     self.remember(i);
@@ -3207,7 +3207,7 @@ impl App {
                         self.lib.retitle(&self.tabs[i].url, &title);
                     }
                     self.tabs[i].title = title;
-                    if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
+                    if let Some(u) = self.tabs[i].view.as_ref().and_then(macos::url) {
                         if !u.is_empty() {
                             self.tabs[i].url = u;
                         }
@@ -3223,7 +3223,7 @@ impl App {
                     if started {
                         if let Some(v) = &self.tabs[i].view {
                             self.shields.reset(macos::id(v));
-                            let url = v.url().unwrap_or_default();
+                            let url = macos::url(v).unwrap_or_default();
                             blocker::set_filters(v, self.cfg.block && !self.shields.allowed(&url));
                         }
                     }
@@ -3232,7 +3232,7 @@ impl App {
                             let _ = v.evaluate_script("window.__ultraGlance = true;");
                         }
                     }
-                    if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
+                    if let Some(u) = self.tabs[i].view.as_ref().and_then(macos::url) {
                         if !u.is_empty() && u != "about:blank" {
                             self.tabs[i].url = u;
                         }

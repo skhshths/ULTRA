@@ -372,7 +372,11 @@ async fn main() {
         .route("/ws", get(ws))
         .route("/", get(|| async { "ULTRA friends & chat relay\n" }))
         .with_state(hub);
-    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await.expect("bind");
+    // "::" takes IPv6 and (on Linux, dual-stack) IPv4 too; fall back to IPv4 only if IPv6 is off.
+    let listener = match tokio::net::TcpListener::bind(("::", port)).await {
+        Ok(l) => l,
+        Err(_) => tokio::net::TcpListener::bind(("0.0.0.0", port)).await.expect("bind"),
+    };
     println!("ULTRA relay listening on port {port}");
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.expect("serve");
 }

@@ -159,8 +159,14 @@ fn session(dir: &Path, server: &str, rx: &mpsc::Receiver<String>, deliver: &impl
     let id = crate::identity::load(dir).ok_or("no ULTRA ID")?;
     let rest = server.strip_prefix("ws://").ok_or("the chat server address must start with ws://")?;
     let host = rest.split('/').next().unwrap_or("");
-    let addr = host.to_socket_addrs().map_err(|_| format!("can't find {host}"))?.next().ok_or("no address")?;
-    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|_| format!("can't reach {host}"))?;
+    // A name can resolve to several addresses (IPv6 and IPv4, like a Raspberry Pi's .local name):
+    // try each, IPv4 first, since a server may listen on only one of them.
+    let mut addrs: Vec<_> = host.to_socket_addrs().map_err(|_| format!("can't find {host}"))?.collect();
+    addrs.sort_by_key(|a| a.is_ipv6());
+    let tcp = addrs
+        .iter()
+        .find_map(|a| TcpStream::connect_timeout(a, Duration::from_secs(4)).ok())
+        .ok_or_else(|| format!("can't reach {host}"))?;
     let (mut ws, _) = tungstenite::client(server, tcp).map_err(|e| format!("handshake failed ({e})"))?;
     ws.get_ref().set_read_timeout(Some(Duration::from_millis(150))).ok();
     let mut last_ping = std::time::Instant::now();
