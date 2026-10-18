@@ -63,7 +63,7 @@ use webview2_com::{
         COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
     },
     take_pwstr, AcceleratorKeyPressedEventHandler, BytesReceivedChangedEventHandler, DownloadStartingEventHandler,
-    ProcessFailedEventHandler, StateChangedEventHandler, TrySuspendCompletedHandler,
+    ProcessFailedEventHandler, StateChangedEventHandler, TrySuspendCompletedHandler, CallDevToolsProtocolMethodCompletedHandler,
 };
 use windows_core::{Interface, BOOL, HSTRING};
 use wry::{
@@ -131,10 +131,11 @@ const STATS_EVERY: Duration = Duration::from_millis(1500);
 /// Layout animation length and frame pacing.
 const ANIM: Duration = Duration::from_millis(170);
 const FRAME: Duration = Duration::from_millis(8);
-/// The spare webview is rebuilt only after this much quiet, so its creation stall goes unnoticed.
-const SPARE_IDLE: Duration = Duration::from_millis(1200);
+/// A spare webview is built only after this much quiet, so its creation stall (~60 ms) goes
+/// unnoticed. Most spares don't need building at all: tabs put to sleep hand theirs back.
+const SPARE_IDLE: Duration = Duration::from_millis(600);
 /// Pre-built blank webviews kept ready (creating one costs ~80 ms of UI-thread time).
-const SPARES: usize = 2;
+const SPARES: usize = 3;
 /// Must be identical for every webview so they all share one WebView2 environment.
 /// SmartScreen (phishing/malware protection) is deliberately left on.
 const BROWSER_ARGS: &str = "--enable-features=msSmartScreenProtection";
@@ -666,6 +667,15 @@ fn valid_zap(sel: &str) -> bool {
     !sel.trim().is_empty() && sel.len() <= 300 && !sel.contains(['{', '}', '<', ';', '\n'])
 }
 
+/// Forget a webview's back/forward list (all but the page it's on), so a webview handed from one
+/// tab to another carries nothing over.
+fn reset_history(v: &WebView) {
+    let h = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
+    unsafe {
+        let _ = v.webview().CallDevToolsProtocolMethod(&HSTRING::from("Page.resetNavigationHistory"), &HSTRING::from("{}"), &h);
+    }
+}
+
 /// Freeze a hidden tab's renderer; WebView2 resumes it automatically when shown.
 fn try_suspend(v: &WebView) {
     if let Ok(w) = v.webview().cast::<ICoreWebView2_3>() {
@@ -1094,9 +1104,18 @@ impl App {
         let profile = self.profile_of(self.tabs[i].ws);
         // Spares are default-profile webviews, so private tabs and workspaces with their own
         // logins always get a fresh webview in the right profile.
-        let spare = if private || profile.is_some() { None } else { self.spares.pop() };
+        let spare = if private || profile.is_some() {
+            None
+        } else {
+            // Only a spare already showing its blank page (a reused one may still be leaving the
+            // last tab's page).
+            let blank = |v: &WebView| v.url().is_ok_and(|u| u.is_empty() || u == "about:blank");
+            self.spares.iter().rposition(|(_, v)| blank(v)).map(|k| self.spares.remove(k))
+        };
         let got = match spare {
             Some((slot, v)) => {
+                // A reused webview must not offer the last tab's pages under back/forward.
+                reset_history(&v);
                 let _ = v.set_bounds(bounds);
                 let _ = v.load_url(&url);
                 Some((slot, v))
@@ -1151,14 +1170,29 @@ impl App {
     }
 
     fn sleep(&mut self, i: usize) {
+        // A default-profile webview that isn't frozen goes back to the spare pool as a blank page
+        // rather than being destroyed: waking the next tab then skips starting a new webview and
+        // page process (~0.5 s). Private and per-workspace-profile webviews are never reused.
+        let reuse = self.spares.len() < SPARES
+            && self.tabs[i].ws != PRIVATE_WS
+            && self.profile_of(self.tabs[i].ws).is_none()
+            && !self.tabs[i].suspended;
         let t = &mut self.tabs[i];
+        let slot = t.slot;
         if let Some(v) = t.view.take() {
             if let Ok(u) = v.url() {
                 if !u.is_empty() && u != "about:blank" {
                     t.url = u;
                 }
             }
+            if reuse {
+                let _ = v.set_visible(false);
+                let _ = v.zoom(1.0);
+                let _ = v.load_url("about:blank");
+                self.spares.insert(0, (slot, v));
+            }
         }
+        let t = &mut self.tabs[i];
         t.loading = false;
         t.suspended = false;
         t.slot = 0;

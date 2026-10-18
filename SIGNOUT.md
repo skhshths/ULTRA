@@ -235,10 +235,14 @@ before every push that touches `mac/`.
      re-entrant", at startup, under a test harness. Something re-enters the event loop from
      inside a handler (a modal dialog? synchronous WebView2 creation?). It is a strong
      candidate for the owner's 0xc0000409 crashes.
-4. **Faster waking of sleeping tabs.** The pool of 2 spare webviews only refills after 1.2 s of
-   quiet (`SPARES`, `SPARE_IDLE` in `main.rs`). Back-to-back wakes then cost about 0.5–0.65 s
-   instead of about 80 ms. Opening many tabs at once is also ~1.7× slower than Neo, for the
-   same reason (webview creation per tab).
+4. **Spare pool (done on Windows, 2026-10-18).** A tab put to sleep hands its webview back to
+   the spare pool as a blank page, with its history reset via `Page.resetNavigationHistory`
+   and zoom reset. Private and per-profile views aren't reused. `SPARES` is 3, `SPARE_IDLE`
+   600 ms.
+   - Opening 50 tabs: 7.0 s → 3.2 s (Edge 2.3 s, Neo 4.4 s).
+   - Switching to a sleeping tab: ~0.5 s → ~55 ms.
+   - Mac doesn't have this yet: WKWebView can't clear its back/forward list, so reuse would
+     need a different trick.
 
 ---
 
