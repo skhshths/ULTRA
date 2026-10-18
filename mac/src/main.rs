@@ -132,6 +132,8 @@ enum UserEvent {
     Slide(String, String),
     /// A page's WebContent process died: slot (0 = the chrome UI).
     Failed(u64),
+    /// A page couldn't load: (webview pointer, WebKit error code, message).
+    LoadFailed(usize, isize, String),
     /// "Check for updates" finished: state for settings, and the update to install if any.
     UpdateChecked(Value, Option<updater::Update>, bool),
     /// An update finished installing (or failed); true when auto-update did it.
@@ -2288,6 +2290,35 @@ impl App {
     /// Self-healing when a page's WebContent process dies. (WebKit restarts its shared
     /// Networking and GPU processes by itself, so unlike WebView2 there is no
     /// "whole engine gone" case that needs ULTRA to relaunch.)
+    /// A page couldn't load: show what happened and what to do, instead of a blank tab. (Cancelled
+    /// loads, -999, and loads handed over to a download, 102, aren't failures.)
+    fn on_load_failed(&mut self, view: usize, code: isize, msg: String) {
+        if code == -999 || code == 102 || code == 204 {
+            return;
+        }
+        let Some(i) = self.tabs.iter().position(|t| t.view.as_ref().is_some_and(|v| macos::id(v) == view)) else { return };
+        let url = self.tabs[i].url.clone();
+        let host = library::host(&url).unwrap_or_else(|| url.clone());
+        let (title, hint) = match code {
+            -1003 => (format!("can't find {host}"), "check the address for a typo.".to_string()),
+            -1009 => ("you're offline".to_string(), "check your internet connection.".to_string()),
+            -1004 | -1001 => (format!("{host} isn't answering"), "it may be down; try again in a moment.".to_string()),
+            -1200 | -1201 | -1202 | -1203 | -1204 | -1205 | -1206 => (format!("{host}'s secure connection failed"), "the site's certificate isn't valid, so ULTRA didn't open it.".to_string()),
+            _ => (format!("{host} didn't load"), msg.clone()),
+        };
+        let search = format!("{}{}", search_url(&self.cfg.search), library::host(&url).unwrap_or_default());
+        let esc = |t: &str| t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
+        let html = format!(
+            r#"<!doctype html><meta charset="utf-8"><title>{t}</title><style>body{{margin:0;height:100vh;display:grid;place-items:center;background:#141414;color:#ddd;font:15px -apple-system,system-ui,sans-serif}}div{{max-width:480px;padding:24px}}h1{{font-size:20px;font-weight:600;margin:0 0 8px}}p{{color:#999;margin:0 0 18px;line-height:1.5}}a{{display:inline-block;margin-right:10px;padding:7px 14px;border:1px solid #333;border-radius:6px;color:#9fe3d0;text-decoration:none}}a:hover{{border-color:#9fe3d0}}code{{color:#777;font-size:12px}}</style><div><h1>{t}</h1><p>{h}</p><a href="{u}">try again</a><a href="{s}">search for it</a><p><code>{m}</code></p></div>"#,
+            t = esc(&title), h = esc(&hint), u = esc(&macos::safe_url(&url)), s = esc(&macos::safe_url(&search)), m = esc(&msg)
+        );
+        if let Some(v) = &self.tabs[i].view {
+            let _ = v.load_html(&html);
+        }
+        self.tabs[i].loading = false;
+        self.sync();
+    }
+
     fn on_failed(&mut self, slot: u64) {
         if slot == 0 {
             // The chrome UI itself: reload it; it re-sends `ready` and gets full state.
@@ -3366,6 +3397,7 @@ impl App {
                 }
             }
             UserEvent::Failed(slot) => self.on_failed(slot),
+            UserEvent::LoadFailed(view, code, msg) => self.on_load_failed(view, code, msg),
             UserEvent::Native(view, msg) => self.on_native(view, msg),
             UserEvent::Folder(dir) => {
                 if let Some(dir) = dir {
@@ -3621,6 +3653,11 @@ fn main() {
     let shields = Rc::new(blocker::Shields::default());
     // Before any page exists: lets WebKit report blocked requests (per page and for the digest).
     blocker::install_counter(&ui, shields.clone());
+    // Pages that can't load (a typo'd address, offline) get an error page instead of a blank tab.
+    let pfailed = proxy.clone();
+    macos::watch_load_failures(&ui, move |view, code, msg| {
+        let _ = pfailed.send_event(UserEvent::LoadFailed(view, code, msg));
+    });
     let prules = proxy.clone();
     blocker::compile(move || {
         let _ = prules.send_event(UserEvent::RulesReady);

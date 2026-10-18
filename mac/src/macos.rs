@@ -40,6 +40,45 @@ const VK_RBRACKET: u32 = 0xDD;
 /// (WebView2's DefaultBackgroundColor on Windows): #141414.
 const BACKDROP: (f64, f64, f64) = (20.0 / 255.0, 20.0 / 255.0, 20.0 / 255.0);
 
+thread_local! {
+    static ON_LOAD_FAIL: std::cell::RefCell<Option<Box<dyn Fn(usize, isize, String)>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// WebKit reports a page that couldn't load (no such site, offline, refused…) to the navigation
+/// delegate's `webView:didFailProvisionalNavigation:withError:` (and `didFailNavigation` for one
+/// that broke off later). wry's delegate doesn't implement them, so the tab just stayed blank.
+/// Teach its class both, reporting (webview pointer, error code, message) to `on_fail`.
+/// Call after the first webview exists and before any page (like blocker::install_counter).
+pub fn watch_load_failures(any_view: &WebView, on_fail: impl Fn(usize, isize, String) + 'static) {
+    use objc2::runtime::{AnyClass, Imp};
+    ON_LOAD_FAIL.with(|f| *f.borrow_mut() = Some(Box::new(on_fail)));
+    let Some(delegate) = (unsafe { any_view.webview().navigationDelegate() }) else { return };
+    let obj: &AnyObject = delegate.as_ref();
+    let cls: *const AnyClass = obj.class();
+    unsafe extern "C-unwind" fn failed(_this: *mut AnyObject, _cmd: Sel, wv: *mut AnyObject, _nav: *mut AnyObject, err: *mut AnyObject) {
+        if err.is_null() {
+            return;
+        }
+        let err = unsafe { &*err };
+        let code: isize = unsafe { msg_send![err, code] };
+        let desc: Option<Retained<NSString>> = unsafe { msg_send![err, localizedDescription] };
+        let desc = desc.map(|d| d.to_string()).unwrap_or_default();
+        ON_LOAD_FAIL.with(|f| {
+            if let Some(f) = f.borrow().as_ref() {
+                f(wv as usize, code, desc);
+            }
+        });
+    }
+    type Method = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject, *mut AnyObject);
+    unsafe {
+        let imp: Imp = std::mem::transmute::<Method, Imp>(failed);
+        for name in [sel!(webView:didFailProvisionalNavigation:withError:), sel!(webView:didFailNavigation:withError:)] {
+            // Fails harmlessly (returns NO) if wry ever adds the method itself.
+            let _ = objc2::ffi::class_addMethod(cls as *mut AnyClass, name, imp, c"v@:@@@".as_ptr());
+        }
+    }
+}
+
 /// The page address a webview is showing, if it has one. (wry's `url()` panics on a webview
 /// that hasn't loaded anything yet, such as a spare; WebKit's own `URL` is simply nil then.)
 pub fn url(v: &WebView) -> Option<String> {
