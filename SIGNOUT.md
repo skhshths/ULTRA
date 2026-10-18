@@ -31,7 +31,7 @@ built-in ad/tracker blocking.
 | Look | normal icon | same colors as public; only the app icon is inverted, plus an `EXP` tag |
 | Monetization | **none**: no coffee strip, no `SUPPORT_URL` | coffee strip on 5th launch (`SUPPORT_URL` empty for now) |
 | DevTools test switch | off (`TEST_SWITCHES = false`) | on: `ULTRA_DEVTOOLS_PORT=9333` |
-| Release on push | new **food-named** release (`v2-banana`, "ULTRA 2 · Banana") | rolling release; Mac build only for `[mac]` commits |
+| Release on push | new **food-named** release (`v2-banana`, "ULTRA 2 · Banana") | food-named too ("ULTRA Experimental 1 · Apple"); Mac build only for `[mac]` commits, otherwise the newest Mac zip is carried over |
 | Updates | in place from public releases | in place too, after a one-time "connect GitHub" in settings (read-only token, DPAPI-encrypted `github-token` in the data folder, sent only to api.github.com via curl stdin) |
 | Experimental-only files | none | `BUGS.md`, `SIGNOUT.md` (this file) |
 
@@ -221,26 +221,18 @@ platform errors. Mac code is checked by the release workflow.
    coveryourtracks.eff.org, show no protection). Probably the same root cause as #1, plus no
    fingerprinting or third-party-cookie protection. Ask the owner which checks they ran if
    unclear.
-3. **ULTRA crashes with no trace.** Regular ULTRA crashed at 7:48 PM on 2026-10-17 and
-   experimental at 2:02 PM. Both were Rust panics (0xc0000409; a dump is in
-   `%LOCALAPPDATA%\CrashDumps`). Nothing records the panic message.
-   - Add a panic hook that writes the message and a backtrace to `crash.log` in the data
-     folder, on both platforms.
-   - Then find the panic. Look at `unwrap`/`expect`/indexing on the UI thread first.
+3. **Find today's crashes.** Every panic is now written to `crash.log` in the data folder
+   (palette: **crash log**); the next launch says so once.
+   - `crash.log` has file:line in local builds, which have the .pdb, plus `exe+offset` frames
+     for downloaded builds.
+   - One real crash was caught while testing: tao `event_loop/runner.rs:246` "event handler is
+     re-entrant", at startup, under a test harness. Something re-enters the event loop from
+     inside a handler (a modal dialog? synchronous WebView2 creation?). It is a strong
+     candidate for the owner's 0xc0000409 crashes.
 4. **Faster waking of sleeping tabs.** The pool of 2 spare webviews only refills after 1.2 s of
    quiet (`SPARES`, `SPARE_IDLE` in `main.rs`). Back-to-back wakes then cost about 0.5–0.65 s
    instead of about 80 ms. Opening many tabs at once is also ~1.7× slower than Neo, for the
    same reason (webview creation per tab).
-5. **Ctrl+Shift+E on a full grid** (owner report): new tabs reportedly end up hidden behind
-   other tabs.
-   - The `mvnew` guard (no split room → toast, no tab) held in every scripted repro, with the
-     cursor outside the window and over a pane.
-   - Get the exact steps from the owner (zoom on? a glance open? which pane under the cursor?)
-     before changing it.
-6. **Arc cleanup.** The Arc run crashed at 50 tabs and left ~50 "Site N" test tabs in the
-   owner's Arc sidebar. Closing them by script crashes Arc after 17 every time, and the state
-   rolls back. The owner should use Arc's **Clear** button above the unpinned tabs. Don't
-   re-run the Arc benchmark.
 
 ---
 
@@ -254,6 +246,22 @@ Newest first. Copy the template for your entry.
 **Verified:** what you tested and how; what you could NOT verify.
 **Left off:** the exact next step, anything half-done, open questions for the owner.
 ```
+
+### 2026-10-17 (night) — Claude (Opus 5.5)
+**Did (experimental):**
+- Crash log with a next-launch notice and a `crash log` palette command; release builds keep
+  line tables in the .pdb.
+- Experimental releases are food-named.
+- "Disconnect GitHub" is a real button.
+- The owner fixed Ctrl+Shift+E and cleared the Arc sidebar themselves.
+
+**Verified:**
+- A deliberate crash (`test_panic`, testing builds only) logged file:line.
+- The flag showed once on relaunch.
+- Tests pass.
+
+**Note:** the owner's experimental settings still have a light-pink `bgcolor` (`#ead4d4`), picked
+while the UI was inverted. They were told to set it back to black in settings.
 
 ### 2026-10-17 (evening) — Claude (Opus 5.5)
 **Did (experimental):**

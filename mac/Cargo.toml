@@ -35,4 +35,5 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
-strip = true
+# Keep function names (not debug info) so crash.log backtraces are readable.
+strip = "debuginfo"

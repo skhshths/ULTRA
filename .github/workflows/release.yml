@@ -1,7 +1,10 @@
-# Experimental builds. Windows is built on every push to main. The Mac build costs ten times
-# the Actions minutes in a private repo, so it only runs for a batch of changes worth shipping:
-# a commit message containing [mac], or a manual run with "build mac" ticked. Otherwise the
-# release keeps the previous Mac download.
+# Experimental builds. Every push to main is a new release named after a food in alphabetical
+# order, like the public ones but marked experimental (ULTRA Experimental 1 · Apple, 2 · Banana…),
+# and it becomes GitHub's "latest" release, which ULTRA's "check for updates" installs.
+# Windows is built on every push. The Mac build costs ten times the Actions minutes in a private
+# repo, so it only runs for a batch of changes worth shipping: a commit message containing
+# [mac], or a manual run with "build mac" ticked. Otherwise the release carries over the
+# previous Mac download.
 name: release
 
 on:
@@ -19,11 +22,37 @@ permissions:
 
 concurrency:
   group: release
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  name:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      title: ${{ steps.pick.outputs.title }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          foods=(Apple Banana Cherry Dumpling Eclair Fig Gelato Honeydew Icecream Jalapeno Kiwi Lemon Mango
+                 Nectarine Olive Pancake Quiche Ramen Sushi Taco Udon Vanilla Waffle Xigua Yam Ziti)
+          # Releases so far are tagged v<number>-<food>; the next number is one more.
+          last=$(gh release list --limit 1000 --json tagName --jq '.[].tagName' | sed -n 's/^v\([0-9]\+\)-.*/\1/p' | sort -n | tail -1)
+          n=$(( ${last:-0} + 1 ))
+          food=${foods[$(( (n - 1) % 26 ))]}
+          round=$(( (n - 1) / 26 + 1 ))
+          [ "$round" -gt 1 ] && food="$food $round"
+          slug=$(echo "$food" | tr 'A-Z ' 'a-z-')
+          echo "tag=v$n-$slug" >> "$GITHUB_OUTPUT"
+          echo "title=ULTRA Experimental $n · $food" >> "$GITHUB_OUTPUT"
+
   windows:
+    needs: name
     runs-on: windows-latest
+    env:
+      ULTRA_RELEASE: ${{ needs.name.outputs.title }}
     defaults:
       run:
         working-directory: windows
@@ -42,8 +71,11 @@ jobs:
           path: ULTRA-windows-x64.exe
 
   macos:
+    needs: name
     if: ${{ inputs.mac || contains(github.event.head_commit.message, '[mac]') }}
     runs-on: macos-latest
+    env:
+      ULTRA_RELEASE: ${{ needs.name.outputs.title }}
     defaults:
       run:
         working-directory: mac
@@ -63,33 +95,36 @@ jobs:
           path: ULTRA-macos.zip
 
   release:
-    needs: [windows, macos]
+    needs: [name, windows, macos]
     # Runs when the Mac build was skipped too; never ships a half-failed build.
-    if: ${{ always() && needs.windows.result == 'success' && needs.macos.result != 'failure' && needs.macos.result != 'cancelled' }}
+    if: ${{ always() && needs.name.result == 'success' && needs.windows.result == 'success' && needs.macos.result != 'failure' && needs.macos.result != 'cancelled' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-      - name: Replace the "latest" release
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.name.outputs.tag }}
+          TITLE: ${{ needs.name.outputs.title }}
         run: |
-          # No new Mac build this time: carry the previous one over.
+          # No new Mac build this time: carry the newest one over.
           if [ ! -f ULTRA-macos.zip ]; then
-            gh release download latest -p ULTRA-macos.zip || true
+            gh release download -p ULTRA-macos.zip || true
           fi
           files="ULTRA-windows-x64.exe"
           [ -f ULTRA-macos.zip ] && files="$files ULTRA-macos.zip"
-          gh release delete latest --yes --cleanup-tag || true
-          gh release create latest $files \
-            --title "ULTRA experimental (latest build)" \
+          # The old rolling "latest" release (from before releases had names) goes away.
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" $files \
+            --title "$TITLE" \
             --target "$GITHUB_SHA" \
             --latest \
-            --notes "Newest build of ULTRA, from commit ${GITHUB_SHA::7}.
+            --notes "**$TITLE**, built from commit ${GITHUB_SHA::7}.
 
-          - **Windows 10/11:** download \`ULTRA-windows-x64.exe\` and run it. If SmartScreen appears, click *More info → Run anyway*.
+          - **Windows 10/11:** download \`ULTRA-windows-x64.exe\` and run it. If SmartScreen appears, click *More info → Run anyway*. Already using it? Settings → updates → **update now** installs it in place (connect GitHub there once).
           - **macOS 11+ (early preview):** download \`ULTRA-macos.zip\`, drag the app to Applications, then right-click → Open the first time.
 
           Experimental build: for invited testers only. See the README for help getting started."

@@ -15,6 +15,7 @@
 
 mod audio;
 mod blocker;
+mod crash;
 mod default_browser;
 mod edition;
 mod identity;
@@ -444,6 +445,8 @@ struct App {
     last_ws: usize,
     /// Link ULTRA was started with, opened once the chrome is ready.
     pending_open: Option<String>,
+    /// The last run ended in a crash (said once the chrome is ready).
+    crashed: bool,
     /// Whether Windows opens web links in ULTRA (shown in settings).
     is_default: bool,
     timing: Option<(String, Instant)>,
@@ -3059,6 +3062,17 @@ impl App {
                 self.toast("ULTRA ID removed from this computer");
                 self.sync();
             }
+            // Test scripts check the crash log with a deliberate crash (testing builds only).
+            "test_panic" if edition::TEST_SWITCHES => panic!("deliberate test crash"),
+            // Palette "crash log": the file in Explorer / Finder (or a note that there's none).
+            "crashlog" => {
+                let log = self.data_dir.join("crash.log");
+                if log.exists() {
+                    downloads::reveal(&log.to_string_lossy());
+                } else {
+                    self.toast("no crashes recorded");
+                }
+            }
             "update_check" => {
                 let token = updater::load_token(&self.data_dir);
                 let proxy = self.proxy.clone();
@@ -3327,6 +3341,9 @@ impl App {
             "ready" => {
                 if let Some(u) = self.pending_open.take() {
                     self.open_external(&u);
+                }
+                if std::mem::take(&mut self.crashed) {
+                    self.toast("ULTRA closed unexpectedly last time · what happened is saved in crash.log (palette: crash log)");
                 }
                 // No tip page yet: no strip (its button would go nowhere).
                 if !SUPPORT_URL.is_empty() && self.cfg.launches == COFFEE_LAUNCH && self.coffee_at.is_none() && !self.coffee {
@@ -3668,6 +3685,8 @@ fn main() {
     updater::clean_up();
     let data_dir = data_dir();
     let _ = fs::create_dir_all(&data_dir);
+    // Any panic from here on is written to crash.log before ULTRA goes down.
+    crash::install(data_dir.clone(), format!("{} {}", edition::NAME, updater::version()));
     // A link from another app (ULTRA as the default browser), or a plain second launch:
     // if ULTRA is already running, hand it over and leave.
     let link = std::env::args().skip(1).find(|a| !a.starts_with("--")).and_then(|a| default_browser::link_to_url(&a));
@@ -3818,6 +3837,7 @@ fn main() {
         start_place: None,
         last_ws: 0,
         pending_open: None,
+        crashed: false,
         is_default: false,
         timing: None,
         last_blocked: 0,
@@ -3871,6 +3891,7 @@ fn main() {
     std::thread::spawn(library::clear_stale_imports);
     app.me = identity::load(&app.data_dir);
     app.pending_open = link;
+    app.crashed = crash::take_notice(&app.data_dir);
     app.is_default = default_browser::is_default();
     app.dls = downloads::Downloads::load(&app.data_dir);
     app.booting = app.cfg.boot && !app.cfg.ultraspeed;

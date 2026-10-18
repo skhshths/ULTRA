@@ -13,6 +13,7 @@
 
 mod audio;
 mod blocker;
+mod crash;
 mod downloads;
 mod edition;
 mod identity;
@@ -409,6 +410,8 @@ struct App {
     last_ws: usize,
     /// Links macOS handed over before the chrome was ready (opened on "ready").
     pending_open: Vec<String>,
+    /// The last run ended in a crash (said once the chrome is ready).
+    crashed: bool,
     ui_ready: bool,
     /// Whether macOS opens web links in ULTRA (shown in settings).
     is_default: bool,
@@ -2734,6 +2737,17 @@ impl App {
                 self.toast("ULTRA ID removed from this computer");
                 self.sync();
             }
+            // Test scripts check the crash log with a deliberate crash (testing builds only).
+            "test_panic" if edition::TEST_SWITCHES => panic!("deliberate test crash"),
+            // Palette "crash log": the file in Explorer / Finder (or a note that there's none).
+            "crashlog" => {
+                let log = self.data_dir.join("crash.log");
+                if log.exists() {
+                    downloads::reveal(&log.to_string_lossy());
+                } else {
+                    self.toast("no crashes recorded");
+                }
+            }
             "update_check" => {
                 let proxy = self.proxy.clone();
                 std::thread::spawn(move || {
@@ -2963,6 +2977,9 @@ impl App {
                 self.ui_ready = true;
                 for u in std::mem::take(&mut self.pending_open) {
                     self.open_external(&u);
+                }
+                if std::mem::take(&mut self.crashed) {
+                    self.toast("ULTRA closed unexpectedly last time · what happened is saved in crash.log (palette: crash log)");
                 }
                 // No tip page yet: no strip (its button would go nowhere).
                 if !SUPPORT_URL.is_empty() && self.cfg.launches == COFFEE_LAUNCH && self.coffee_at.is_none() && !self.coffee {
@@ -3326,6 +3343,8 @@ fn main() {
     let bench_mode = std::env::args().any(|a| a == "--bench");
     let data_dir = data_dir();
     let _ = fs::create_dir_all(&data_dir);
+    // Any panic from here on is written to crash.log before ULTRA goes down.
+    crash::install(data_dir.clone(), format!("{} {}", edition::NAME, updater::version()));
     let cfg: Settings = fs::read_to_string(data_dir.join("settings.json"))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -3434,6 +3453,7 @@ fn main() {
     });
 
     let now = Instant::now();
+    let crashed = crash::take_notice(&data_dir);
     let mut app = App {
         window,
         ui,
@@ -3480,6 +3500,7 @@ fn main() {
         win_normal: None,
         last_ws: 0,
         pending_open: Vec::new(),
+        crashed,
         ui_ready: false,
         is_default: false,
         user_agent: macos::safari_user_agent(),

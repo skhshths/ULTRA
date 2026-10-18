@@ -590,8 +590,8 @@ body.noscs .hp .scs { display: none; }
   <div class="sec" id="keys-sec">KEYBOARD SHORTCUTS</div>
   <div class="keylist" id="keylist"></div>
   <div class="sec">HELP</div>
-  <div class="row"><div><div class="name">updates</div><div class="desc"><span id="upd-ver"></span><br><span id="upd-msg">ULTRA updates itself in place: your taskbar pin and shortcuts keep working.</span> <a id="upd-forget" style="display:none">disconnect GitHub</a></div></div>
-    <div class="ctl"><button class="run" id="upd-btn">check for updates</button></div></div>
+  <div class="row"><div><div class="name">updates</div><div class="desc"><span id="upd-ver"></span><br><span id="upd-msg">ULTRA updates itself in place: your taskbar pin and shortcuts keep working.</span></div></div>
+    <div class="ctl"><button class="run" id="upd-forget" style="display:none">disconnect GitHub</button><button class="run" id="upd-btn">check for updates</button></div></div>
   <div class="row idrow" id="upd-gh" style="display:none"><div><div class="name">connect GitHub</div>
     <div class="desc">1. <b>get a token</b> opens GitHub with a read-only token filled in: under repository access pick <b>ULTRA-experimental</b>, then generate it.<br>
     2. paste it here. it stays encrypted on this computer and is only ever sent to GitHub.</div>
@@ -1172,6 +1172,7 @@ const CMDS = [
   { k: 'lock', d: 'lock the private workspace now (cmd+opt+l)', run: () => send('lock') },
   { k: 'wipe private', d: 'close every private tab', run: () => send('wipe') },
   { k: 'reload', d: 'reload the focused page', run: () => send('reload') },
+  { k: 'crash log', d: 'show the crash log (it stays on this computer)', run: () => send('crashlog') },
   { k: 'reopen', d: 'reopen the last closed tab', run: () => send('reopen') },
   { k: 'devtools', d: 'developer tools for the focused page', run: () => send('devtools') },
   { k: 'theme', a: '<name>', d: Object.keys(THEMES).join(' · '), opts: Object.keys(THEMES), run: (x) => THEMES[x] && send('set', ['theme', x]) },
