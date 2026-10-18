@@ -14,7 +14,9 @@ export async function socket(wsUrl) {
   let id = 0;
   const wait = new Map();
   ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d.id && wait.has(d.id)) { wait.get(d.id)(d); wait.delete(d.id); } };
-  await new Promise((ok, bad) => { ws.onopen = ok; ws.onerror = bad; });
+  // Node's WebSocket doesn't keep the process alive while it connects: hold it open meanwhile.
+  const keep = setInterval(() => {}, 1000);
+  await new Promise((ok, bad) => { ws.onopen = ok; ws.onerror = bad; ws.onclose = () => bad(new Error('closed')); }).finally(() => clearInterval(keep));
   const call = (method, params = {}) => new Promise((r) => { wait.set(++id, r); ws.send(JSON.stringify({ id, method, params })); });
   return { call, close: () => ws.close() };
 }
