@@ -1,10 +1,12 @@
 """Generate ULTRA's app icons for both platforms.
 
-The mark: a bold, round-bottomed U in ULTRA's mint on a dark tile, with a soft glow. Big and
-flat on purpose, so it stays recognizable down to 16px in the taskbar.
+The mark: a dark rounded tile holding a swirl of mint ASCII characters, the same vortex the
+browser draws as its background, spiralling into a glowing core. Each size is drawn on its
+own (supersampled): from 96px up the arms are made of real glyphs, below that, where letters
+can't be read, they become smooth tapered strokes so the swirl stays crisp at 16px.
 
-Two variants: the normal icon (mint U on a dark tile), and an inverted one (dark U on a light
-tile) for the experimental build.
+Two variants: the normal icon, and for the experimental build the exact same image with its
+colors inverted (each pixel's colour flipped; transparency kept).
 
 Writes windows/assets/ultra.ico, ultra-inv.ico and mac/assets/ultra.icns, ultra-inv.icns,
 plus 256px PNGs (ultra.png; on the Mac also ultra-inv.png, for the Dock) and a contact sheet
@@ -18,30 +20,43 @@ import math
 import struct
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 WIN_SIZES = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
 MAC_SIZES = [16, 32, 64, 128, 256, 512, 1024]
+GLYPHS = '0123456789abcdefghijklmnopqrstuvwxyz'
+ARMS = 3
+TURNS = 1.15  # how far each arm winds around the core
 
 DARK = {
-    'tile_top': (34, 34, 34), 'tile_bot': (12, 12, 12), 'edge': (159, 227, 208, 70),
-    'u_top': (196, 255, 238), 'u_bot': (110, 200, 176), 'glow': (159, 227, 208),
+    'tile_top': (30, 30, 30), 'tile_bot': (12, 12, 12), 'edge': (159, 227, 208, 90),
+    'arm_hi': (196, 255, 238), 'arm_lo': (63, 125, 110), 'core': (230, 255, 248), 'glow': (159, 227, 208),
 }
 LIGHT = {
-    'tile_top': (246, 246, 246), 'tile_bot': (216, 216, 216), 'edge': (20, 80, 68, 90),
-    'u_top': (20, 92, 78), 'u_bot': (6, 48, 40), 'glow': (40, 120, 102),
+    'tile_top': (242, 242, 242), 'tile_bot': (214, 214, 214), 'edge': (20, 80, 68, 110),
+    'arm_hi': (10, 60, 50), 'arm_lo': (90, 150, 136), 'core': (6, 40, 33), 'glow': (40, 120, 102),
 }
+
+
+def font(px):
+    for f in ['C:/Windows/Fonts/consolab.ttf', 'C:/Windows/Fonts/CascadiaMono.ttf',
+              '/System/Library/Fonts/Menlo.ttc', '/Library/Fonts/Menlo.ttc']:
+        try:
+            return ImageFont.truetype(f, max(1, int(px)))
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
 
 def mix(a, b, t):
     return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
 
-def gradient(S, top, bot):
-    g = Image.new('RGBA', (1, S))
-    for y in range(S):
-        g.putpixel((0, y), mix(top, bot, y / (S - 1)) + (255,))
-    return g.resize((S, S))
+def spiral(arm, t, R):
+    """Point on arm `arm` at 0..1 along it (0 = outer end, 1 = core). Returns x, y, radius."""
+    theta = arm * 2 * math.pi / ARMS + t * TURNS * 2 * math.pi
+    r = R * (1 - t) ** 1.35  # tightens toward the core
+    return 0.5 + r * math.cos(theta), 0.5 + r * math.sin(theta), r
 
 
 def render(size, pal):
@@ -49,45 +64,73 @@ def render(size, pal):
     S = size * ss
     img = Image.new('RGBA', (S, S), (0, 0, 0, 0))
 
-    # Tile: rounded square, soft vertical gradient, faint accent edge.
-    m = 0.03 if size <= 32 else 0.07
+    # Tile: rounded square with a soft vertical gradient and a faint accent edge.
+    m = 0.04 if size <= 32 else 0.07
     box = [m * S, m * S, (1 - m) * S, (1 - m) * S]
     rad = 0.22 * (1 - 2 * m) * S
     tile = Image.new('L', (S, S), 0)
     ImageDraw.Draw(tile).rounded_rectangle(box, rad, fill=255)
-    img.paste(gradient(S, pal['tile_top'], pal['tile_bot']), (0, 0), tile)
+    grad = Image.new('RGBA', (1, S))
+    for y in range(S):
+        grad.putpixel((0, y), mix(pal['tile_top'], pal['tile_bot'], y / (S - 1)) + (255,))
+    img.paste(grad.resize((S, S)), (0, 0), tile)
+    edge_w = max(ss * 0.9, S * 0.008)
     edge = Image.new('RGBA', (S, S), (0, 0, 0, 0))
-    ImageDraw.Draw(edge).rounded_rectangle(box, rad, outline=pal['edge'], width=int(max(ss * 0.9, S * 0.008)))
+    ImageDraw.Draw(edge).rounded_rectangle(box, rad, outline=pal['edge'], width=int(edge_w))
     img.alpha_composite(edge)
 
-    # The U: thick, with a round bottom; bolder at small sizes.
-    k = 1 - 2 * m
-    small = size <= 32
-    w = (0.60 if small else 0.52) * k             # overall width
-    h = (0.62 if small else 0.56) * k             # overall height
-    st = (0.205 if small else 0.155) * k          # stroke
-    x0, y0 = 0.5 - w / 2, 0.5 - h / 2
-    x1, y1 = x0 + w, y0 + h
-    P = lambda *v: [c * S for c in v]
-    mask = Image.new('L', (S, S), 0)
-    d = ImageDraw.Draw(mask)
-    d.rectangle(P(x0, y0 + st / 2, x1, y1 - w / 2), fill=255)
-    d.ellipse(P(x0, y1 - w, x1, y1), fill=255)
-    d.rectangle(P(x0 + st, y0 - 0.01, x1 - st, y1 - w / 2), fill=0)
-    d.ellipse(P(x0 + st, y1 - w + st, x1 - st, y1 - st), fill=0)
-    # rounded tops on both arms
-    d.ellipse(P(x0, y0, x0 + st, y0 + st), fill=255)
-    d.ellipse(P(x1 - st, y0, x1, y0 + st), fill=255)
+    R = 0.365 * (1 - 2 * m) / (1 - 2 * 0.07)  # swirl radius (fraction of S)
+    layer = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    if size >= 96:
+        # Arms of glyphs: big and dim on the outside, small and bright near the core.
+        seed = 7
+        for arm in range(ARMS):
+            t = 0.0
+            while t < 0.93:
+                x, y, r = spiral(arm, t, R)
+                px = S * (0.020 + 0.13 * r)
+                f = font(px)
+                seed = (seed * 1103515245 + 12345) & 0x7fffffff
+                ch = GLYPHS[seed % len(GLYPHS)]
+                col = mix(pal['arm_lo'], pal['arm_hi'], t ** 0.8)
+                alpha = int(110 + 145 * t)
+                d.text((x * S, y * S), ch, font=f, fill=col + (alpha,), anchor='mm')
+                # step so neighbouring glyphs don't overlap: proportional to glyph size
+                t += (px * 0.62) / (S * max(0.02, 2 * math.pi * TURNS * r * 0.55 + 0.25 * R))
+        # faint dust between the arms, like the background's scattered glyphs
+        for i in range(70):
+            seed = (seed * 1103515245 + 12345) & 0x7fffffff
+            a = (seed % 3600) / 3600 * 2 * math.pi
+            r = R * (0.25 + 0.75 * ((seed >> 12) % 1000) / 1000)
+            x, y = 0.5 + r * math.cos(a), 0.5 + r * math.sin(a)
+            d.text((x * S, y * S), GLYPHS[seed % len(GLYPHS)], font=font(S * 0.028),
+                   fill=pal['arm_lo'] + (55,), anchor='mm')
+    else:
+        # Small sizes: each arm is one tapered stroke, thick outside, thin at the core.
+        for arm in range(ARMS):
+            steps = 60
+            for i in range(steps):
+                t0, t1 = i / steps * 0.92, (i + 1) / steps * 0.92
+                x0, y0, r0 = spiral(arm, t0, R)
+                x1, y1, _ = spiral(arm, t1, R)
+                w = S * (0.026 + 0.15 * r0)
+                col = mix(pal['arm_lo'], pal['arm_hi'], t0 ** 0.7)
+                d.line([(x0 * S, y0 * S), (x1 * S, y1 * S)], fill=col + (255,), width=max(1, int(w)))
+                d.ellipse([x1 * S - w / 2, y1 * S - w / 2, x1 * S + w / 2, y1 * S + w / 2], fill=col + (255,))
+    # keep the swirl inside the tile
+    layer.putalpha(ImageChops.multiply(layer.getchannel('A'), tile))
+    img.alpha_composite(layer)
 
-    # soft glow behind the U (not at tiny sizes, where it would just blur)
-    if size >= 32:
-        glow = Image.new('RGBA', (S, S), pal['glow'] + (0,))
-        glow.putalpha(mask.filter(ImageFilter.GaussianBlur(S * 0.045)).point(lambda a: int(a * 0.45)))
-        glow.putalpha(ImageChops.multiply(glow.getchannel('A'), tile))
-        img.alpha_composite(glow)
-    u = gradient(S, pal['u_top'], pal['u_bot'])
-    u.putalpha(mask)
-    img.alpha_composite(u)
+    # Core: a soft glow with a bright centre.
+    glow = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+    gr = S * 0.11
+    ImageDraw.Draw(glow).ellipse([S / 2 - gr, S / 2 - gr, S / 2 + gr, S / 2 + gr], fill=pal['glow'] + (150,))
+    glow = glow.filter(ImageFilter.GaussianBlur(S * 0.05))
+    glow.putalpha(ImageChops.multiply(glow.getchannel('A'), tile))
+    img.alpha_composite(glow)
+    cr = S * (0.055 if size <= 32 else 0.038)
+    ImageDraw.Draw(img).ellipse([S / 2 - cr, S / 2 - cr, S / 2 + cr, S / 2 + cr], fill=pal['core'] + (255,))
     return img.resize((size, size), Image.LANCZOS)
 
 
@@ -144,10 +187,17 @@ if __name__ == '__main__':
     root = Path(__file__).resolve().parent.parent
     win, mac = root / 'windows' / 'assets', root / 'mac' / 'assets'
     rows = []
-    for pal, suffix in [(DARK, ''), (LIGHT, '-inv')]:
-        wi = [render(s, pal) for s in WIN_SIZES]
+    def invert(im):
+        r, g, b, a = im.split()
+        rgb = ImageOps.invert(Image.merge('RGB', (r, g, b)))
+        return Image.merge('RGBA', (*rgb.split(), a))
+
+    for inv, suffix in [(False, ''), (True, '-inv')]:
+        draw = (lambda s, pal: invert(render(s, pal))) if inv else render
+        pal = DARK
+        wi = [draw(s, pal) for s in WIN_SIZES]
         write_ico(wi, win / f'ultra{suffix}.ico')
-        mi = [render(s, pal) if s not in WIN_SIZES else wi[WIN_SIZES.index(s)] for s in MAC_SIZES]
+        mi = [draw(s, pal) if s not in WIN_SIZES else wi[WIN_SIZES.index(s)] for s in MAC_SIZES]
         write_icns(mi, mac / f'ultra{suffix}.icns')
         if not suffix:
             wi[-1].save(win / 'ultra.png')
