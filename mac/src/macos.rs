@@ -87,6 +87,8 @@ fn vk(e: &NSEvent) -> Option<u32> {
         0x4E => Some(0x6D), // keypad -
         0x60 => Some(VK_F5),
         0x65 => Some(0x78), // F9
+        0x7A => Some(0x70), // F1
+        0x78 => Some(0x71), // F2
         0x6F => Some(VK_F12),
         _ => None,
     };

@@ -68,7 +68,11 @@ git config merge.ours.driver true
 7. **Keep the user's local copies current.** After pushing, rebuild the release exe in each
    worktree you touched. `C:\Users\olive\code\ULTRA.lnk` and `ULTRA Experimental.lnk` point at
    those builds.
-8. **Commit only when asked or when it's part of the task the owner gave.** Never on public
+8. **Keep the "new in this experimental build" list current.** It's `NEW_HERE` in each
+   platform's `edition.rs`, shown on the new-tab page. Add a line for every experimental-only
+   feature, and remove lines once public ships them. Public's `edition.rs` must have
+   `pub const NEW_HERE: &[&str] = &[];` (add it when merging if it's missing).
+9. **Commit only when asked or when it's part of the task the owner gave.** Never on public
    without a release request. End commit messages with the `Co-Authored-By` line your harness
    gives you.
 

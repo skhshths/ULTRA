@@ -804,6 +804,9 @@ fn window_vk(k: tao::keyboard::KeyCode) -> Option<u32> {
         K::ArrowDown => 0x28,
         K::Tab => 0x09,
         K::Comma => 0xBC,
+        K::F1 => 0x70,
+        K::F2 => 0x71,
+        K::F9 => 0x78,
         _ => return None,
     })
 }
@@ -812,6 +815,9 @@ fn window_vk(k: tao::keyboard::KeyCode) -> Option<u32> {
 fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
     if vk == 0x78 && !ctrl && !shift && !alt {
         return Some("reader".into()); // F9
+    }
+    if (vk == 0x70 || vk == 0x71) && !ctrl && !shift && !alt {
+        return Some(if vk == 0x70 { "back" } else { "fwd" }.into()); // F1 / F2
     }
     if !ctrl {
         return None;
@@ -2545,7 +2551,7 @@ impl App {
                 return;
             }
             match msg {
-                "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
+                "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "focusurl" | "overview" | "settings"
                 | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
                     self.command(msg, &Value::Null)
                 }
@@ -3888,8 +3894,9 @@ fn main() {
             .with_html(UI_HTML)
             // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
             .with_initialization_script(format!(
-                "window.__ultraCfg = {};",
+                "window.__ultraCfg = {}; window.__ultraNew = {};",
                 ui_cfg(&cfg),
+                json!(edition::NEW_HERE),
             ))
             .with_bounds(Rect {
                 position: LogicalPosition::new(0.0, 0.0).into(),

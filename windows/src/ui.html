@@ -111,6 +111,9 @@ input::selection { background: var(--acc-sel); }
 .hp pre { color: #d6d6d6; font: 13px/1.05 Consolas, "Cascadia Mono", monospace;
   text-shadow: 0 0 18px color-mix(in srgb, var(--acc) 15%, transparent); }
 .hp .hphint { color: #4a4a4a; font-size: 10px; letter-spacing: .08em; }
+.hp .hpnew { max-width: min(520px, 92%); margin-top: -4px; color: #5a5a5a; font-size: 10px; line-height: 1.7; text-align: left; }
+.hp .hpnew b { color: var(--acc); font-weight: 600; letter-spacing: .08em; }
+.hp .hpnew li { margin-left: 14px; }
 .hp .mini { color: #d6d6d6; letter-spacing: .6em; font-weight: 700; font-size: 15px; }
 .hp input { width: min(560px, 90%); height: 34px; background: rgba(12,12,12,.85); border: 1px solid #2c2c2c; color: var(--fg);
   font: 13px Consolas, monospace; padding: 0 12px; outline: 0; transition: border-color var(--fast); }
@@ -1106,7 +1109,7 @@ $('#dl-clear').onclick = () => send('dl', ['clear', 0]);
     ['WORKSPACES', [[`${M}+${A}+1‥9`, 'switch workspace'], [`${M}+${A}+shift+1‥9`, 'send tab to workspace'],
       [`${M}+${A}+0`, 'private workspace'], [`${M}+${A}+l`, 'lock private workspace']]],
     ['PAGES', [[`${M}+l` + ' / ' + `${M}+f`, 'search or go to a site'], ['just type', 'search from anywhere'], [MAC ? 'cmd+[ / cmd+]' : 'alt+← / alt+→', 'back / forward'],
-      [`${M}+d`, 'bookmark page'], [`${M}+r`, 'reload']]],
+      [`${M}+d`, 'bookmark page'], [`${M}+r`, 'reload'], ['f1 / f2', 'back / forward']]],
     ['PANELS', [[`${M}+j`, 'downloads'], [`${M}+k`, 'all tabs overview'], [`${M}+shift+p`, 'command palette'], [`${M}+,`, 'settings']]],
   ];
   $('#keylist').innerHTML = groups.map(([g, rows]) => `<div class="kg"><h4>${g}</h4>` +
@@ -1673,7 +1676,7 @@ function homeContent(e, id, big, tall) {
   const keep = e.hp.querySelector('input');
   const val = keep ? keep.value : '';
   e.hp.innerHTML = `${big ? $('#logo').innerHTML : '<div class="mini">ULTRA</div>'}` +
-    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big ? '<div class="scs"></div>' : ''}${big && tall ? '<div class="digest"></div>' : ''}${big ? '<div class="hphint"><kbd>ctrl+,</kbd> every shortcut &amp; help</div>' : ''}`;
+    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big ? '<div class="scs"></div>' : ''}${big && tall ? '<div class="digest"></div>' : ''}${big ? '<div class="hphint"><kbd>ctrl+,</kbd> every shortcut &amp; help</div>' : ''}${big ? newHereHTML() : ''}`;
   const q = e.hp.querySelector('input'); q.value = val;
   e.big = big + ':' + tall;
 }
@@ -1767,6 +1770,12 @@ function applyPendingFocus() {
 }
 
 // ── new-tab shortcuts ──
+// Experimental builds: what this build has that the public version doesn't yet.
+function newHereHTML() {
+  const items = window.__ultraNew || [];
+  if (!items.length) return '';
+  return `<div class="hpnew"><b>NEW IN THIS EXPERIMENTAL BUILD${S.version ? ' · ' + esc(S.version.toUpperCase()) : ''}</b><ul>${items.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>`;
+}
 function shortcutsHTML() {
   const sc = S.sc || { list: [] }, list = sc.list || [];
   const tile = (x) => {
@@ -2045,6 +2054,7 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'escape' && S.glance && !anyOverlay()) { e.preventDefault(); send('glance', 'close'); return; }
   else if (k === 'enter' && c && S.glance && !anyOverlay()) { e.preventDefault(); send('glance', 'split'); return; }
   else if (k === 'f5' || (c && code === 'KeyR')) m = 'reload';
+  else if (!c && !e.altKey && !e.shiftKey && (k === 'f1' || k === 'f2')) m = k === 'f1' ? 'back' : 'fwd';
   else if (e.altKey && k === 'arrowleft') m = 'back';
   else if (e.altKey && k === 'arrowright') m = 'fwd';
   // Shortcuts keep the tour open (it practises on the live layout) but close the other panels.

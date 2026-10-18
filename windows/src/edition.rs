@@ -16,3 +16,14 @@ pub const INVERT: bool = true;
 pub const REPO: &str = "skhshths/ULTRA-experimental";
 /// Developer switches for test scripts (ULTRA_DEVTOOLS_PORT). Never in the public build.
 pub const TEST_SWITCHES: bool = true;
+
+/// What this build has that the public one doesn't yet, listed under the help hint on the
+/// new-tab page. Add a line with every experimental feature; remove it once public ships it.
+/// (Public's edition.rs has this list empty.)
+pub const NEW_HERE: &[&str] = &[
+    "a real ad blocker: Brave's engine with uBlock's lists, and the ◆ shield to switch it off per site",
+    "friends & chat by @handle, end-to-end encrypted (the @ in the top bar)",
+    "tabs open and wake much faster (web views are reused)",
+    "f1 / f2: back and forward",
+    "updates install straight from the private repo (connect GitHub once in settings)",
+];
