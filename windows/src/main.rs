@@ -1006,6 +1006,9 @@ impl App {
         let res = b
             .with_bounds(bounds)
             .with_visible(false)
+            // Built in the background (spares, waking tabs): never take keyboard focus, or typing
+            // in the page in front stops mid-word. Focus moves only when a tab is shown.
+            .with_focused(false)
             .with_background_color((20, 20, 20, 255))
             .with_devtools(true)
             // Private tabs use WebView2's InPrivate profile: nothing reaches disk.
