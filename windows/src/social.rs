@@ -25,8 +25,9 @@ use rand_core::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-/// The relay everyone signs in to. The experimental build talks to the owner's Raspberry Pi.
-pub const DEFAULT_SERVER: &str = "ws://oliverbarnet.local:7777/ws";
+/// The relays ULTRA tries, in order, unless settings name one: the owner's Raspberry Pi over
+/// the internet (a Cloudflare Tunnel, TLS), then the same Pi directly on the home network.
+pub const DEFAULT_SERVERS: &[&str] = &["wss://chat.oliverbar.net/ws", "ws://oliverbarnet.local:7777/ws"];
 const AUTH_PREFIX: &[u8] = b"ultra-chat-auth-v1:";
 const KEEP: usize = 500;
 const CHATS: &str = "chats.json";
@@ -132,15 +133,20 @@ fn open_sealed(key: &[u8; 32], from: &str, to: &str, n: &str, c: &str) -> Option
 /// The connection thread: connect, sign in, pass every server frame to `deliver`, send what
 /// the UI thread queues; on any failure wait a little and start over. Ends when the UI side
 /// drops its sender.
-fn run(dir: PathBuf, server: String, rx: mpsc::Receiver<String>, deliver: impl Fn(Value) + Send + 'static) {
+fn run(dir: PathBuf, servers: Vec<String>, rx: mpsc::Receiver<String>, deliver: impl Fn(Value) + Send + 'static) {
     std::thread::spawn(move || {
         let mut backoff = 2;
         loop {
             deliver(json!({ "t": "_status", "s": "connecting" }));
-            match session(&dir, &server, &rx, &deliver) {
-                Ok(()) => return, // the app stopped chat
-                Err(e) => deliver(json!({ "t": "_status", "s": "offline", "m": e })),
+            // Each server in turn; the first that answers is used until the connection drops.
+            let mut last = String::new();
+            for server in &servers {
+                match session(&dir, server, &rx, &deliver) {
+                    Ok(()) => return, // the app stopped chat
+                    Err(e) => last = e,
+                }
             }
+            deliver(json!({ "t": "_status", "s": "offline", "m": last }));
             // Drain anything queued while offline (it would be stale), unless chat was stopped.
             loop {
                 match rx.try_recv() {
@@ -157,8 +163,14 @@ fn run(dir: PathBuf, server: String, rx: mpsc::Receiver<String>, deliver: impl F
 
 fn session(dir: &Path, server: &str, rx: &mpsc::Receiver<String>, deliver: &impl Fn(Value)) -> Result<(), String> {
     let id = crate::identity::load(dir).ok_or("no ULTRA ID")?;
-    let rest = server.strip_prefix("ws://").ok_or("the chat server address must start with ws://")?;
+    let (rest, port) = match server.split_once("://") {
+        Some(("wss", r)) => (r, 443),
+        Some(("ws", r)) => (r, 80),
+        _ => return Err("the chat server address must start with ws:// or wss://".into()),
+    };
     let host = rest.split('/').next().unwrap_or("");
+    let host = if host.contains(':') { host.to_string() } else { format!("{host}:{port}") };
+    let host = host.as_str();
     // A name can resolve to several addresses (IPv6 and IPv4, like a Raspberry Pi's .local name):
     // try each, IPv4 first, since a server may listen on only one of them.
     let mut addrs: Vec<_> = host.to_socket_addrs().map_err(|_| format!("can't find {host}"))?.collect();
@@ -167,8 +179,13 @@ fn session(dir: &Path, server: &str, rx: &mpsc::Receiver<String>, deliver: &impl
         .iter()
         .find_map(|a| TcpStream::connect_timeout(a, Duration::from_secs(4)).ok())
         .ok_or_else(|| format!("can't reach {host}"))?;
-    let (mut ws, _) = tungstenite::client(server, tcp).map_err(|e| format!("handshake failed ({e})"))?;
-    ws.get_ref().set_read_timeout(Some(Duration::from_millis(150))).ok();
+    // TLS for wss:// (the system's own: SChannel on Windows, Secure Transport on a Mac).
+    let (mut ws, _) = tungstenite::client_tls_with_config(server, tcp, None, None).map_err(|e| format!("couldn't connect securely to {host} ({e})"))?;
+    match ws.get_ref() {
+        tungstenite::stream::MaybeTlsStream::Plain(t) => t.set_read_timeout(Some(Duration::from_millis(150))).ok(),
+        tungstenite::stream::MaybeTlsStream::NativeTls(t) => t.get_ref().set_read_timeout(Some(Duration::from_millis(150))).ok(),
+        _ => None,
+    };
     let mut last_ping = std::time::Instant::now();
     loop {
         match ws.read() {
@@ -229,7 +246,7 @@ impl Social {
     }
 
     /// Connect (if there's an ULTRA ID): server events reach the app through `deliver`.
-    pub fn start(&mut self, server: &str, deliver: impl Fn(Value) + Send + 'static) {
+    pub fn start(&mut self, servers: Vec<String>, deliver: impl Fn(Value) + Send + 'static) {
         self.stop();
         if crate::identity::load(&self.dir).is_none() {
             return;
@@ -237,7 +254,7 @@ impl Social {
         let (tx, rx) = mpsc::channel();
         self.out = Some(tx);
         self.status = "connecting".into();
-        run(self.dir.clone(), server.to_string(), rx, deliver);
+        run(self.dir.clone(), servers, rx, deliver);
     }
 
     pub fn stop(&mut self) {

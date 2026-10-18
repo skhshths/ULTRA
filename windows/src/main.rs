@@ -182,13 +182,13 @@ enum UserEvent {
     /// Download `key` changed state (final file path once known).
     DlState(u64, downloads::State, String),
     /// "Check for updates" finished: state for settings, and the update to install if any.
-    UpdateChecked(Value, Option<updater::Update>),
+    UpdateChecked(Value, Option<updater::Update>, bool),
     /// A frame from the friends & chat server (or the connection's status).
     Social(Value),
     /// A page entered (true) or left (false) fullscreen, e.g. a YouTube video.
     PageFullscreen(u64, bool),
     /// An update was downloaded and swapped in (the exe to restart from), or failed.
-    UpdateInstalled(Result<PathBuf, String>),
+    UpdateInstalled(Result<PathBuf, String>, bool),
     /// A ULTRA shortcut caught natively in a page's webview: (slot, message).
     Key(u64, String),
     /// A WebView2 process died: (slot, 0 = the chrome UI; failure kind).
@@ -286,6 +286,8 @@ struct Settings {
     stats: bool,
     /// Ad & tracker blocking.
     block: bool,
+    /// Check for updates now and then and install them by themselves.
+    autoupdate: bool,
     /// The friends & chat server (ws://host:port/ws).
     chatserver: String,
     /// Sites where blocking is switched off (host names).
@@ -343,7 +345,8 @@ impl Default for Settings {
             tour: true,
             stats: false,
             block: true,
-            chatserver: social::DEFAULT_SERVER.into(),
+            autoupdate: true,
+            chatserver: String::new(),
             blockoff: Vec::new(),
             theme: "mint".into(),
             scanlines: false,
@@ -455,6 +458,10 @@ struct App {
     page_full: Option<u64>,
     /// A newer build found by "check for updates", ready to install.
     update: Option<updater::Update>,
+    /// When the next automatic update check is due.
+    next_update_check: Instant,
+    /// An update installed in the background: the app to restart into (restart now in settings).
+    pending_restart: Option<PathBuf>,
     /// Other browsers found on this computer, offered for importing bookmarks.
     browsers: Vec<(&'static str, &'static str)>,
     /// Settings changed and not yet written (saved shortly after the last change).
@@ -871,6 +878,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('F')) => "zoom".into(),
         (false, true, None, Some('P')) => "palette".into(),
         (false, true, None, Some('E')) => "mvnew".into(),
+        (false, true, None, Some('C')) => "friends".into(),
         (false, true, None, Some('W')) => "closeat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
         (false, true, None, Some('R')) => "blankat".into(),
@@ -1975,11 +1983,74 @@ impl App {
         let _ = self.ui.set_bounds(self.full_rect());
     }
 
+    /// Ask GitHub for a newer build in the background. `auto`: the periodic check (or auto-update
+    /// just switched on), which installs what it finds by itself.
+    fn check_updates(&mut self, auto: bool) {
+        let token = updater::load_token(&self.data_dir);
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let (state, up) = updater::check(edition::REPO, token);
+            let _ = proxy.send_event(UserEvent::UpdateChecked(state, up, auto));
+        });
+    }
+
+    fn on_update_checked(&mut self, state: Value, up: Option<updater::Update>, auto: bool) {
+        self.update = up.clone();
+        match up {
+            // Auto-update: install it now; the new version starts the next time ULTRA opens.
+            Some(up) if auto && self.cfg.autoupdate && self.pending_restart.is_none() => {
+                let what = state["m"].as_str().unwrap_or("a new version").to_string();
+                let st = json!({ "s": "installing", "m": format!("auto updating · {what}") });
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({st})"));
+                self.toast("auto updating ULTRA…");
+                let proxy = self.proxy.clone();
+                std::thread::spawn(move || {
+                    let _ = proxy.send_event(UserEvent::UpdateInstalled(updater::install(&up), true));
+                });
+            }
+            _ => {
+                // A quiet periodic check doesn't disturb a message the user is looking at.
+                if !(auto && state["s"] != "available") || state["s"] == "uptodate" {
+                    let _ = self.ui.evaluate_script(&format!("ultra.updateState({state})"));
+                }
+            }
+        }
+    }
+
+    /// An update is in place. Asked for: restart into it now. Auto-update: leave the user be; the
+    /// new version starts next time (or straight away with "restart now" in settings).
+    fn on_update_installed(&mut self, exe: PathBuf, auto: bool, flow: &mut ControlFlow) {
+        if auto {
+            self.pending_restart = Some(exe);
+            let st = json!({ "s": "restart", "m": "updated · the new version starts next time you open ULTRA" });
+            let _ = self.ui.evaluate_script(&format!("ultra.updateState({st})"));
+            self.toast("ULTRA updated · it starts with the new version next time (or restart now in settings)");
+            return;
+        }
+        self.restart_into(&exe, flow);
+    }
+
+    /// Hand the session over to the new build: save everything, start it, close.
+    fn restart_into(&mut self, exe: &std::path::Path, flow: &mut ControlFlow) {
+        self.save_settings();
+        self.save_session();
+        if updater::restart(exe) {
+            *flow = ControlFlow::Exit;
+        } else {
+            let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "failed", "m": "updated · restart ULTRA to use the new build" })));
+        }
+    }
+
     /// Connect friends & chat (again), e.g. after the ULTRA ID is made or the server changes.
     fn start_social(&mut self) {
         let proxy = self.proxy.clone();
-        let server = if self.cfg.chatserver.is_empty() { social::DEFAULT_SERVER.to_string() } else { self.cfg.chatserver.clone() };
-        self.social.start(&server, move |v| {
+        // An address in settings is used on its own; otherwise the internet relay, then the home one.
+        let servers = if self.cfg.chatserver.is_empty() || social::DEFAULT_SERVERS.iter().any(|d| *d == self.cfg.chatserver) {
+            social::DEFAULT_SERVERS.iter().map(|s| s.to_string()).collect()
+        } else {
+            vec![self.cfg.chatserver.clone()]
+        };
+        self.social.start(servers, move |v| {
             let _ = proxy.send_event(UserEvent::Social(v));
         });
     }
@@ -2036,6 +2107,10 @@ impl App {
     }
 
     fn tick(&mut self) {
+        if self.cfg.autoupdate && Instant::now() >= self.next_update_check {
+            self.next_update_check = Instant::now() + Duration::from_secs(4 * 3600);
+            self.check_updates(true);
+        }
         let now = Instant::now();
         for i in 0..self.tabs.len() {
             let t = &self.tabs[i];
@@ -2261,6 +2336,13 @@ impl App {
                 self.cfg.stats = v.as_bool().unwrap_or(false);
                 self.pane_stats.clear();
                 self.stats_at = Instant::now();
+            }
+            "autoupdate" => {
+                self.cfg.autoupdate = v.as_bool().unwrap_or(true);
+                // Switched on: look right away (and say "auto updating" if there's something).
+                if self.cfg.autoupdate {
+                    self.check_updates(true);
+                }
             }
             "block" => {
                 self.cfg.block = v.as_bool().unwrap_or(true);
@@ -2634,7 +2716,7 @@ impl App {
                 return;
             }
             match msg {
-                "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "focusurl" | "overview" | "settings"
+                "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings"
                 | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
                     self.command(msg, &Value::Null)
                 }
@@ -3279,19 +3361,12 @@ impl App {
                     self.toast("no crashes recorded");
                 }
             }
-            "update_check" => {
-                let token = updater::load_token(&self.data_dir);
-                let proxy = self.proxy.clone();
-                std::thread::spawn(move || {
-                    let (state, up) = updater::check(edition::REPO, token);
-                    let _ = proxy.send_event(UserEvent::UpdateChecked(state, up));
-                });
-            }
+            "update_check" => self.check_updates(false),
             "update_install" => {
                 if let Some(up) = self.update.clone() {
                     let proxy = self.proxy.clone();
                     std::thread::spawn(move || {
-                        let _ = proxy.send_event(UserEvent::UpdateInstalled(updater::install(&up)));
+                        let _ = proxy.send_event(UserEvent::UpdateInstalled(updater::install(&up), false));
                     });
                 }
             }
@@ -3663,6 +3738,12 @@ impl App {
                     *flow = ControlFlow::Exit;
                     return;
                 }
+                if cmd == "update_restart" {
+                    if let Some(exe) = self.pending_restart.clone() {
+                        self.restart_into(&exe, flow);
+                    }
+                    return;
+                }
                 self.command(cmd, &v["arg"]);
             }
             // A shortcut caught natively in a page's webview (a real keypress), or a message the
@@ -3742,21 +3823,9 @@ impl App {
                 self.social.save();
                 self.sync();
             }
-            UserEvent::UpdateChecked(state, up) => {
-                self.update = up;
-                let _ = self.ui.evaluate_script(&format!("ultra.updateState({state})"));
-            }
-            UserEvent::UpdateInstalled(Ok(exe)) => {
-                // Hand the session over to the new build: save everything, start it, close.
-                self.save_settings();
-                self.save_session();
-                if updater::restart(&exe) {
-                    *flow = ControlFlow::Exit;
-                } else {
-                    let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "failed", "m": "updated · restart ULTRA to use the new build" })));
-                }
-            }
-            UserEvent::UpdateInstalled(Err(m)) => {
+            UserEvent::UpdateChecked(state, up, auto) => self.on_update_checked(state, up, auto),
+            UserEvent::UpdateInstalled(Ok(exe), auto) => self.on_update_installed(exe, auto, flow),
+            UserEvent::UpdateInstalled(Err(m), _) => {
                 let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "failed", "m": m })));
             }
             UserEvent::Open(u) => self.open_external(&u),
@@ -4054,6 +4123,8 @@ fn main() {
         social: social::Social::new(&social_dir),
         page_full: None,
         update: None,
+        next_update_check: Instant::now() + Duration::from_secs(90),
+        pending_restart: None,
         browsers: library::installed_browsers(),
         settings_save_at: None,
         start_place: None,

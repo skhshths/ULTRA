@@ -23,12 +23,31 @@
   // It listens in the bubble phase, so the page's own single-key shortcuts (YouTube's f/k/j/l,
   // GitHub's t, ...) run first, and it steps aside if the page used the key, while anything is
   // fullscreen, or on pages with video, where single keys are player controls.
+  // Video players hide in iframes and web components too: look there, and for embeds by name.
+  const PLAYER = /player|video|embed|youtube|vimeo|brightcove|kaltura|jwplayer|wistia|panopto|twitch|dailymotion/i;
+  const hasMedia = () => {
+    if (document.querySelector('video, audio')) return true;
+    for (const f of document.querySelectorAll('iframe')) {
+      if (f.offsetWidth * f.offsetHeight > 200 * 120 && PLAYER.test((f.src || '') + ' ' + (f.title || '') + ' ' + (f.className || '') + ' ' + (f.id || ''))) return true;
+      try { if (f.contentDocument && f.contentDocument.querySelector('video')) return true; } catch (_) {}
+    }
+    let n = 0;
+    for (const el of document.querySelectorAll('*')) {
+      if (el.shadowRoot && el.shadowRoot.querySelector('video, audio')) return true;
+      if (++n > 4000) break;
+    }
+    return false;
+  };
   addEventListener('keydown', (e) => {
     if (!window.__ultraType || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
     if (e.key.length !== 1 || !/[\p{L}\p{N}]/u.test(e.key) || typing()) return;
-    if (document.fullscreenElement || document.querySelector('video')) return;
-    e.preventDefault();
-    send('type:' + e.key);
+    if (document.fullscreenElement || hasMedia()) return;
+    // The page's own key handlers may run after this one: only take the key if, once they've
+    // all run, none of them used it and nothing went fullscreen.
+    const key = e.key;
+    setTimeout(() => {
+      if (!e.defaultPrevented && !document.fullscreenElement && !typing()) send('type:' + key);
+    }, 120);
   });
   addEventListener('pointerdown', () => send('focus'), true);
   addEventListener('focus', () => send('focus'));

@@ -277,6 +277,25 @@ Newest first. Copy the template for your entry.
 **Left off:** the exact next step, anything half-done, open questions for the owner.
 ```
 
+### 2026-10-18 (night) — Claude (Opus 5.5)
+**Did:**
+- Auto-update (setting, on by default; checks 90 s after launch and every 4 h, installs in the
+  background, "restart now").
+- Mac installs updates in place: downloads the zip, unpacks with ditto, swaps the bundle by
+  renaming, relaunches. Mac can connect GitHub too (token in a 0600 file).
+- Chat over `wss://` with a server list: `wss://chat.oliverbar.net/ws`, then
+  `ws://oliverbarnet.local:7777/ws`.
+- Ctrl/Cmd+Shift+C opens chat; the @ button works (it was a window-drag area); gear icon.
+- Address-bar autofill.
+- Type-to-search no longer steals single keys on pages with players in iframes or web
+  components.
+
+**Global chat:** needs the owner to add `chat.oliverbar.net` to the Pi's Cloudflare tunnel
+(sudo): an ingress rule for `http://localhost:7777`, then
+`cloudflared tunnel route dns pi-terminal chat.oliverbar.net`.
+
+**Not verified:** Mac in-place update on a real Mac.
+
 ### 2026-10-18 (evening) — Claude (Opus 5.5)
 **Did:**
 - Fixed the Mac crash (wry `url()` on webviews with no page) and the bad-address crash.

@@ -21,7 +21,5 @@ pub const TEST_SWITCHES: bool = true;
 /// new-tab page. Add a line with every experimental feature; remove it once public ships it.
 /// (Public's edition.rs has this list empty.)
 pub const NEW_HERE: &[&str] = &[
-    "a real ad blocker: Brave's lists as WebKit rules, and the ◆ shield to switch it off per site",
-    "friends & chat by @handle, end-to-end encrypted (the @ in the top bar)",
-    "f1 / f2: back and forward",
+    "updates install straight from the private repo (connect GitHub once in settings)",
 ];
