@@ -279,6 +279,8 @@ struct Settings {
     stats: bool,
     /// Ad & tracker blocking.
     block: bool,
+    /// Sites where blocking is switched off (host names).
+    blockoff: Vec<String>,
     theme: String,
     scanlines: bool,
     /// Accent used by the "custom" theme (#rrggbb).
@@ -332,6 +334,7 @@ impl Default for Settings {
             tour: true,
             stats: false,
             block: true,
+            blockoff: Vec::new(),
             theme: "mint".into(),
             scanlines: false,
             accent: "#9fe3d0".into(),
@@ -412,7 +415,10 @@ struct App {
     anim: Option<Anim>,
     /// Rects currently on screen (mid-animation values while animating).
     shown: Vec<(u64, R)>,
-    blocked: Rc<Cell<u64>>,
+    /// What the ad blocker has done (counts, sites switched off), shared with every webview.
+    shields: Rc<blocker::Shields>,
+    /// Blocking on (settings), as the webviews' handlers see it.
+    block_on: Rc<Cell<bool>>,
     /// Latest (MB, CPU %) per tab id, and process CPU times for deltas.
     pane_stats: HashMap<u64, (f64, f64)>,
     cpu_prev: HashMap<u32, (u64, Instant)>,
@@ -1060,7 +1066,7 @@ impl App {
                 watch_failures(&v, self.proxy.clone(), slot);
                 watch_keys(&v, self.proxy.clone(), slot);
                 watch_downloads(&v, self.proxy.clone(), slot);
-                blocker::install(&v, self.blocked.clone());
+                blocker::install(&v, slot, self.shields.clone(), self.block_on.clone());
                 if self.cfg.block {
                     blocker::set_filters(&v, true);
                 }
@@ -1798,7 +1804,8 @@ impl App {
             "ps": ps,
             "mem": self.total_mb,
             "cpu": self.total_cpu,
-            "blocked": self.blocked.get(),
+            "blocked": self.shields.total.get(),
+            "shield": self.shield_state(),
             "cfg": ui_cfg(&self.cfg),
             "locked": self.locked,
             "gate": self.gate(),
@@ -2116,6 +2123,7 @@ impl App {
             }
             "block" => {
                 self.cfg.block = v.as_bool().unwrap_or(true);
+                self.block_on.set(self.cfg.block);
                 for view in self.all_views() {
                     blocker::set_filters(view, self.cfg.block);
                 }
@@ -2315,11 +2323,25 @@ impl App {
         self.apply_layout(false);
     }
 
+    /// The address bar's shield: blocked on the focused page, and whether its site is exempt.
+    fn shield_state(&self) -> Value {
+        let t = self.tabs.get(self.cur());
+        let site = t.and_then(|t| library::host(&t.url)).filter(|_| t.is_some_and(|t| t.url.starts_with("http")));
+        json!({
+            "n": t.map(|t| self.shields.on_page(t.slot)).unwrap_or(0),
+            "site": site,
+            "off": site.as_ref().is_some_and(|h| self.cfg.blockoff.contains(h)),
+            "on": self.cfg.block,
+            "ready": blocker::ready(),
+            "rules": blocker::rules(),
+        })
+    }
+
     /// Daily digest bookkeeping: credit time to the page being looked at (focused window,
     /// recent input, a real page, not private) and add newly blocked trackers.
     fn track(&mut self) {
         let now = Instant::now();
-        let b = self.blocked.get();
+        let b = self.shields.total.get();
         if b > self.last_blocked {
             self.lib.add_blocked(b - self.last_blocked);
             self.last_blocked = b;
@@ -3067,6 +3089,25 @@ impl App {
             }
             // Test scripts check the crash log with a deliberate crash (testing builds only).
             "test_panic" if edition::TEST_SWITCHES => panic!("deliberate test crash"),
+            // The shield: switch blocking off (or back on) for the focused page's site, and reload.
+            "blocksite" => {
+                let i = self.cur();
+                let Some(h) = library::host(&self.tabs[i].url).filter(|_| self.tabs[i].url.starts_with("http")) else { return };
+                let off = if let Some(k) = self.cfg.blockoff.iter().position(|x| *x == h) {
+                    self.cfg.blockoff.remove(k);
+                    false
+                } else {
+                    self.cfg.blockoff.push(h.clone());
+                    true
+                };
+                *self.shields.off.borrow_mut() = self.cfg.blockoff.iter().cloned().collect();
+                self.save_settings();
+                if let Some(v) = &self.tabs[i].view {
+                    let _ = v.reload();
+                }
+                self.toast(&if off { format!("blocking off on {h} · reloaded") } else { format!("blocking back on for {h} · reloaded") });
+                self.sync();
+            }
             // Palette "crash log": the file in Explorer / Finder (or a note that there's none).
             "crashlog" => {
                 let log = self.data_dir.join("crash.log");
@@ -3481,6 +3522,9 @@ impl App {
                 }
             }
             UserEvent::Load(slot, started) => {
+                if started {
+                    self.shields.reset(slot);
+                }
                 if let Some(i) = self.idx_slot(slot) {
                     self.tabs[i].loading = started;
                     if self.glance == Some(self.tabs[i].id) {
@@ -3819,7 +3863,8 @@ fn main() {
         spare_at: Some(now + Duration::from_millis(1500)),
         anim: None,
         shown: Vec::new(),
-        blocked: Rc::new(Cell::new(0)),
+        shields: Rc::new(blocker::Shields::default()),
+        block_on: Rc::new(Cell::new(true)),
         pane_stats: HashMap::new(),
         cpu_prev: HashMap::new(),
         total_mb: 0.0,
@@ -3890,6 +3935,10 @@ fn main() {
     app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
     app.lib = library::Library::load(&app.data_dir);
+    // The ad-block engine: from its cache, or built from the bundled lists, off this thread.
+    blocker::load(app.data_dir.clone());
+    app.block_on.set(app.cfg.block);
+    *app.shields.off.borrow_mut() = app.cfg.blockoff.iter().cloned().collect();
     // Copies of other browsers' history left by an interrupted import never linger.
     std::thread::spawn(library::clear_stale_imports);
     app.me = identity::load(&app.data_dir);

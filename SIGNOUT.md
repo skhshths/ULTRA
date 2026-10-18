@@ -204,20 +204,21 @@ platform errors. Mac code is checked by the release workflow.
 
 ## 9. To-do (from the owner, 2026-10-17): do these first
 
-1. **The ad blocker isn't working at all** (owner report).
-   - Code: `windows/src/blocker.rs` (WebView2 `WebResourceRequested` filters, one `*domain/*`
-     pattern per domain in `DOMAINS`). It's installed in `build_view` (`blocker::install` +
-     `set_filters` when `cfg.block`) in `main.rs`.
-   - Suspects to check first:
-     - whether the filter pattern matches at all (test `https://securepubads.g.doubleclick.net/…`
-       from a page and watch the `blocked` counter)
-     - spare webviews built before the setting loads
-     - the request-source-kinds overload failing silently
-     - the mac side (`mac/src/blocker.rs`, WKContentRuleList)
-   - The list is tiny (~70 domains). A real list (EasyList/EasyPrivacy compiled to domains) is
-     probably needed for blocker test sites to pass.
-   - Verify with d3ward's adblock tester, canyoublockit.com, and a news site, in an isolated
-     experimental profile.
+1. **Ad blocker, next phases.** Phase 1 shipped (Windows): Brave's `adblock` engine with
+   EasyList, EasyPrivacy, uBlock filters and privacy, and Peter Lowe's lists (about 151k rules).
+   - The lists live in `windows/assets/filters/` and are packed into the exe by `build.rs`. The
+     engine is cached as `adblock.dat` in the data folder.
+   - Coverage: every subresource, frames, each site's own hide rules, and the ◆ shield with a
+     per-site off switch.
+   - Still to do:
+     - generic element hiding (class/id rules)
+     - scriptlets / YouTube ads
+     - weekly list updates
+     - Mac parity (content rules)
+   - Don't set Edge tracking prevention to Strict: it blocks before ULTRA's handler, so the
+     shield can't count those.
+   - Note: requests started by DevTools `Runtime.evaluate` bypass WebResourceRequested. Test
+     with real page loads (`tools/bench/sites.mjs`).
 2. **The privacy checks aren't working either** (owner report: tracker/privacy test sites, e.g.
    coveryourtracks.eff.org, show no protection). Probably the same root cause as #1, plus no
    fingerprinting or third-party-cookie protection. Ask the owner which checks they ran if
@@ -247,6 +248,15 @@ Newest first. Copy the template for your entry.
 **Verified:** what you tested and how; what you could NOT verify.
 **Left off:** the exact next step, anything half-done, open questions for the owner.
 ```
+
+### 2026-10-18 — Claude (Opus 5.5)
+**Did:** the real ad blocker (phase 1, Windows) and hard numbers.
+- On 5 ad-heavy sites, 3 cold loads each, ULTRA let 2 of 33 requests to known ad/tracker
+  servers through. Edge (Chrome's engine) let 668 of 753 through; Neo let 168 of 293 through.
+- ULTRA made half the requests of Edge and loaded the five sites in 4.6 s in total, against
+  9.1 s for Edge and 12.4 s for Neo.
+- Memory at 50 tabs: ULTRA ~320 MB, Edge ~1.34 GB, Neo ~3.09 GB.
+- Chrome itself won't start on the owner's PC (blocked), so Edge stands in for it.
 
 ### 2026-10-17 (late night) — Claude (Opus 5.5)
 **Did:**

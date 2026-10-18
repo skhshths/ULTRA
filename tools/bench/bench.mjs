@@ -91,6 +91,8 @@ function ultra(awake) {
 
 const drivers = {
   neo: () => chromium(path.join(LOCAL, 'Neo', 'Application', 'neo.exe'), 9401, path.join(PROFILES, 'neo'), ['about:blank']),
+  // Edge: the same Chromium engine as Chrome, the closest stand-in where Chrome can't run.
+  edge: () => chromium('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 9404, path.join(PROFILES, 'edge'), ['about:blank']),
   // Arc keeps its sidebar (your real spaces) outside the profile: every tab opened here is closed again.
   arc: () => chromium(path.join(LOCAL, 'Microsoft', 'WindowsApps', 'Arc.exe'), 9402, path.join(PROFILES, 'arc')),
   ultra: () => ultra(false),
