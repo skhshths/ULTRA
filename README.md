@@ -10,6 +10,11 @@ tracker-free.
 
 ## ⬇ Download
 
+> **Download key:** the experimental download page at
+> **[oliverbar.net/experimental](https://oliverbar.net/experimental)** asks for a key. It's the
+> 32-character string in [`EXPERIMENTAL_KEY.txt`](EXPERIMENTAL_KEY.txt) in this repo — only people
+> with access to this private repo can see it. Changing that file changes the key instantly.
+
 | | |
 |---|---|
 | **Windows 10 / 11** | **[Download ULTRA for Windows (.exe)](https://github.com/skhshths/ULTRA-experimental/releases/latest/download/ULTRA-windows-x64.exe)** |
