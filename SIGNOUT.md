@@ -214,7 +214,10 @@ platform errors. Mac code is checked by the release workflow.
      - generic element hiding (class/id rules)
      - scriptlets / YouTube ads
      - weekly list updates
-     - Mac parity (content rules)
+   - Mac (2026-10-18): the same lists become WebKit content rules at build time
+     (`mac/build_rules.rs`, about 143k rules in 4 lists of up to 45k; every list ends with all
+     the exceptions). Shield and per-site switch work like Windows. Type-checked only: the owner
+     should try it on a real Mac.
    - Don't set Edge tracking prevention to Strict: it blocks before ULTRA's handler, so the
      shield can't count those.
    - Note: requests started by DevTools `Runtime.evaluate` bypass WebResourceRequested. Test
