@@ -3040,7 +3040,7 @@ impl App {
             // A real keypress from a page that has just left the screen (keyboard focus lags a
             // tab switch or close by a moment): still honour the shortcut, on the layout.
             if native {
-                self.shortcut_msg(&msg);
+                self.shortcut_cmd(&msg);
                 self.focus_active();
             }
             return;
