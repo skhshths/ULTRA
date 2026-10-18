@@ -4,7 +4,13 @@
 //!
 //! Messages are end-to-end encrypted: each pair of friends shares a key derived from their two
 //! ID keys (`identity::chat_key`), and every message is sealed with XChaCha20-Poly1305 bound to
-//! who sent it to whom. The relay only ever sees ciphertext. Chats are kept on this computer
+//! who sent it to whom. The relay only ever sees ciphertext.
+//!
+//! The relay also hands out friends' public keys, so a dishonest relay (or anyone in the middle
+//! of an unencrypted ws:// connection) could swap in its own. ULTRA therefore pins each friend's
+//! key the first time it sees it (chat-keys.json) and refuses to send to, or read from, a friend
+//! whose key later changes until the user confirms it; each chat shows a safety code (from both
+//! keys) that two friends can compare in person. Chats are kept on this computer
 //! (chats.json, the newest 500 messages per friend).
 
 use std::{
@@ -24,6 +30,7 @@ use chacha20poly1305::{
 use rand_core::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::Digest;
 
 /// The relays ULTRA tries, in order, unless settings name one: the owner's Raspberry Pi over
 /// the internet (a Cloudflare Tunnel, TLS), then the same Pi directly on the home network.
@@ -31,6 +38,7 @@ pub const DEFAULT_SERVERS: &[&str] = &["wss://chat.oliverbar.net/ws", "ws://oliv
 const AUTH_PREFIX: &[u8] = b"ultra-chat-auth-v1:";
 const KEEP: usize = 500;
 const CHATS: &str = "chats.json";
+const PINS: &str = "chat-keys.json";
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Msg {
@@ -48,8 +56,11 @@ pub struct Msg {
 pub struct Friend {
     pub handle: String,
     pub name: String,
+    /// The key to use: the pinned one (first seen), never a different one the relay reports later.
     key: String,
     pub online: bool,
+    /// The relay reported a key other than the pinned one: chat is paused until the user trusts it.
+    changed: Option<String>,
 }
 
 /// The UI thread's side: connection state, friends, requests and chats.
@@ -65,6 +76,8 @@ pub struct Social {
     /// Requests you've sent and that are still waiting.
     pub sent: Vec<String>,
     chats: HashMap<String, Vec<Msg>>,
+    /// Friends' keys as first seen (handle -> public key, hex).
+    pins: HashMap<String, String>,
     pub unread: HashMap<String, u32>,
     /// The conversation open in the panel.
     pub open: Option<String>,
@@ -239,6 +252,7 @@ impl Social {
             requests: Vec::new(),
             sent: Vec::new(),
             chats,
+            pins: std::fs::read_to_string(dir.join(PINS)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
             unread: HashMap::new(),
             open: None,
             dirty: false,
@@ -270,6 +284,50 @@ impl Social {
         if let Some(tx) = &self.out {
             let _ = tx.send(v.to_string());
         }
+    }
+
+    /// A friend as the relay describes them, checked against the pinned key: first sight pins it,
+    /// a different key later is held back (Friend::changed) instead of used.
+    fn checked(&mut self, f: &Value) -> Friend {
+        let handle: String = f["handle"].as_str().unwrap_or("").into();
+        let reported: String = f["key"].as_str().unwrap_or("").into();
+        let (key, changed) = match self.pins.get(&handle) {
+            Some(pinned) if *pinned != reported => (pinned.clone(), Some(reported)),
+            Some(pinned) => (pinned.clone(), None),
+            None => {
+                self.pins.insert(handle.clone(), reported.clone());
+                self.save_pins();
+                (reported, None)
+            }
+        };
+        Friend { handle, name: f["name"].as_str().unwrap_or("").into(), key, online: f["online"].as_bool().unwrap_or(false), changed }
+    }
+
+    fn save_pins(&self) {
+        if let Ok(s) = serde_json::to_string(&self.pins) {
+            let _ = crate::library::write_atomic(&self.dir.join(PINS), s);
+        }
+    }
+
+    /// The user confirmed a friend's new key (e.g. they made a new ULTRA ID): pin it.
+    pub fn trust(&mut self, handle: &str) {
+        if let Some(f) = self.friends.iter_mut().find(|f| f.handle == handle) {
+            if let Some(new) = f.changed.take() {
+                f.key = new.clone();
+                self.pins.insert(handle.to_string(), new);
+                self.save_pins();
+            }
+        }
+    }
+
+    /// A code two friends can read to each other to be sure nobody is in the middle: from both
+    /// keys, the same on both sides.
+    fn safety_code(&self, friend_key: &str) -> String {
+        let Some(mine) = crate::identity::load(&self.dir).map(|i| i.public) else { return String::new() };
+        let (a, b) = if mine < friend_key.to_string() { (mine, friend_key.to_string()) } else { (friend_key.to_string(), mine) };
+        let h = sha2::Sha256::digest(format!("ultra-safety-v1:{a}:{b}").as_bytes());
+        let digits: String = h.iter().take(10).map(|b| format!("{:02}", b % 100)).collect();
+        digits.as_bytes().chunks(5).map(|c| String::from_utf8_lossy(c).to_string()).collect::<Vec<_>>().join(" ")
     }
 
     fn friend(&self, handle: &str) -> Option<&Friend> {
@@ -308,7 +366,11 @@ impl Social {
         if text.is_empty() {
             return Ok(());
         }
-        let key = self.friend(&to).map(|f| f.key.clone()).ok_or("you can only message friends")?;
+        let f = self.friend(&to).ok_or("you can only message friends")?;
+        if f.changed.is_some() {
+            return Err(format!("@{to}'s ULTRA ID key changed · check the safety code with them before chatting"));
+        }
+        let key = f.key.clone();
         let key = crate::identity::chat_key(&self.dir, &key).ok_or("couldn't make the chat key")?;
         let (n, c) = seal(&key, &me, &to, &text);
         let mut idb = [0u8; 9];
@@ -344,12 +406,6 @@ impl Social {
     /// A frame from the server (or the connection thread's own status notes).
     pub fn on_event(&mut self, v: &Value) -> Effect {
         let h = |k: &str| v[k].as_str().unwrap_or("").to_string();
-        let friend_of = |f: &Value| Friend {
-            handle: f["handle"].as_str().unwrap_or("").into(),
-            name: f["name"].as_str().unwrap_or("").into(),
-            key: f["key"].as_str().unwrap_or("").into(),
-            online: f["online"].as_bool().unwrap_or(false),
-        };
         match v["t"].as_str().unwrap_or("") {
             "_status" => {
                 self.status = h("s");
@@ -364,7 +420,14 @@ impl Social {
                 self.status = "online".into();
                 self.error.clear();
                 self.me = Some(h("handle"));
-                self.friends = v["friends"].as_array().into_iter().flatten().map(friend_of).collect();
+                let list: Vec<Value> = v["friends"].as_array().cloned().unwrap_or_default();
+                self.friends = list.iter().map(|f| self.checked(f)).collect();
+                if let Some(f) = self.friends.iter().find(|f| f.changed.is_some()) {
+                    let who = f.handle.clone();
+                    self.requests = v["requests"].as_array().into_iter().flatten().map(|r| (r["handle"].as_str().unwrap_or("").into(), r["name"].as_str().unwrap_or("").into())).collect();
+                    self.sent = v["sent"].as_array().into_iter().flatten().filter_map(|s| s.as_str().map(String::from)).collect();
+                    return Effect::Toast(format!("@{who}'s ULTRA ID key changed · chat with them is paused until you check it"));
+                }
                 self.requests = v["requests"].as_array().into_iter().flatten().map(|r| (r["handle"].as_str().unwrap_or("").into(), r["name"].as_str().unwrap_or("").into())).collect();
                 self.sent = v["sent"].as_array().into_iter().flatten().filter_map(|s| s.as_str().map(String::from)).collect();
             }
@@ -390,7 +453,7 @@ impl Social {
                 return Effect::Toast(format!("@{who} wants to be friends · open friends to accept"));
             }
             "friend" => {
-                let f = friend_of(&v["friend"]);
+                let f = self.checked(&v["friend"]);
                 self.requests.retain(|(x, _)| *x != f.handle);
                 self.sent.retain(|x| *x != f.handle);
                 let msg = format!("you and @{} are friends now", f.handle);
@@ -431,7 +494,9 @@ impl Social {
                 if let Some(sid) = v["sid"].as_i64() {
                     self.send(json!({ "t": "got", "ids": [sid] }));
                 }
-                let Some(key) = self.friend(&from).and_then(|f| crate::identity::chat_key(&self.dir, &f.key)) else { return Effect::None };
+                let Some(key) = self.friend(&from).filter(|f| f.changed.is_none()).and_then(|f| crate::identity::chat_key(&self.dir, &f.key)) else {
+                    return Effect::Toast(format!("a message from @{from} was held back: their key changed and isn't confirmed"));
+                };
                 let Some(text) = open_sealed(&key, &from, &me, v["n"].as_str().unwrap_or(""), v["c"].as_str().unwrap_or("")) else {
                     return Effect::Toast(format!("a message from @{from} couldn't be decrypted"));
                 };
@@ -454,7 +519,7 @@ impl Social {
         let friends: Vec<Value> = self
             .friends
             .iter()
-            .map(|f| json!({ "handle": f.handle, "name": f.name, "online": f.online, "unread": self.unread.get(&f.handle).copied().unwrap_or(0), "last": last(&f.handle) }))
+            .map(|f| json!({ "handle": f.handle, "name": f.name, "online": f.online, "unread": self.unread.get(&f.handle).copied().unwrap_or(0), "last": last(&f.handle), "changed": f.changed.is_some() }))
             .collect();
         let msgs: Vec<&Msg> = self.open.as_ref().and_then(|h| self.chats.get(h)).map(|l| l.iter().rev().take(200).rev().collect()).unwrap_or_default();
         json!({
@@ -465,6 +530,7 @@ impl Social {
             "requests": self.requests.iter().map(|(h, n)| json!({ "handle": h, "name": n })).collect::<Vec<_>>(),
             "sent": self.sent,
             "open": self.open,
+            "safety": self.open.as_ref().and_then(|h| self.friend(h)).map(|f| self.safety_code(&f.key)).unwrap_or_default(),
             "msgs": msgs,
             "unread": self.unread.values().sum::<u32>(),
         })
@@ -482,6 +548,22 @@ mod tests {
             assert_eq!(b64::decode(&b64::encode(&data)).unwrap(), data);
         }
         assert_eq!(b64::encode(b"hello"), "aGVsbG8=");
+    }
+
+    #[test]
+    fn friend_keys_are_pinned_on_first_sight() {
+        let dir = std::env::temp_dir().join(format!("ultra-pin-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mut s = Social::new(&dir);
+        let f = s.checked(&json!({ "handle": "sam", "name": "Sam", "key": "aa11", "online": true }));
+        assert!(f.changed.is_none() && f.key == "aa11");
+        // the relay later claims a different key: it's held back, the pinned one stays in use
+        let f = s.checked(&json!({ "handle": "sam", "name": "Sam", "key": "bb22", "online": true }));
+        assert_eq!((f.key.as_str(), f.changed.as_deref()), ("aa11", Some("bb22")));
+        // and the pin survives a restart
+        let mut s2 = Social::new(&dir);
+        assert!(s2.checked(&json!({ "handle": "sam", "key": "bb22" })).changed.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
