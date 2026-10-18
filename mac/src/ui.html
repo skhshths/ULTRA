@@ -1042,13 +1042,19 @@ function renderFr() {
   }
   const fl = (so.friends || []).slice().sort((a, b) => (b.online - a.online) || (b.last - a.last) || a.handle.localeCompare(b.handle));
   h += '<div class="frsec">FRIENDS</div>' + (fl.length ? fl.map((f) => `<div class="fri${so.open === f.handle ? ' sel' : ''}" data-open="${esc(f.handle)}"><span class="dot${f.online ? ' on' : ''}"></span>` +
-    `<span class="who"><b>@${esc(f.handle)}</b><span>${esc(f.name)}</span></span>${f.unread ? `<span class="n">${f.unread}</span>` : ''}</div>`).join('') : '<div class="fri"><span class="who"><span>no friends yet · add one by their @handle above</span></span></div>');
+    `<span class="who"><b>@${esc(f.handle)}</b><span>${f.changed ? '⚠ key changed' : esc(f.name)}</span></span>${f.unread ? `<span class="n">${f.unread}</span>` : ''}</div>`).join('') : '<div class="fri"><span class="who"><span>no friends yet · add one by their @handle above</span></span></div>');
   if ((so.sent || []).length) h += '<div class="frsec">WAITING FOR</div>' + so.sent.map((s) => `<div class="fri"><span class="dot"></span><span class="who"><b>@${esc(s)}</b><span>request sent</span></span><span class="act bad" data-dec="${esc(s)}" title="cancel">✕</span></div>`).join('');
   setHTML($('#frlist'), h);
   const f = fl.find((x) => x.handle === so.open);
   $('#fr-say').disabled = !f || so.status !== 'online';
   if (!f) { setHTML($('#frhead'), ''); setHTML($('#frmsgs'), '<div class="frempty">pick a friend to chat.<br>only you and they can read your messages: ULTRA encrypts them before they leave this computer.</div>'); frShown = ''; return; }
-  setHTML($('#frhead'), `<span class="dot${f.online ? ' on' : ''}" style="width:7px;height:7px;border-radius:50%;background:${f.online ? 'var(--acc)' : '#333'}"></span><b>@${esc(f.handle)}</b><span>${esc(f.name)}${f.online ? ' · online' : ''}</span><span class="rm" data-rm="${esc(f.handle)}">remove friend</span>`);
+  setHTML($('#frhead'), `<span class="dot${f.online ? ' on' : ''}" style="width:7px;height:7px;border-radius:50%;background:${f.online ? 'var(--acc)' : '#333'}"></span><b>@${esc(f.handle)}</b><span>${esc(f.name)}${f.online ? ' · online' : ''}</span>` +
+    (so.safety ? `<span title="read this to @${esc(f.handle)} (in person or on a call): if theirs matches, nobody is in the middle" style="font-size:10px">safety code ${esc(so.safety)}</span>` : '') + `<span class="rm" data-rm="${esc(f.handle)}">remove friend</span>`);
+  if (f.changed) {
+    $('#fr-say').disabled = true;
+    setHTML($('#frmsgs'), `<div class="frempty"><b>@${esc(f.handle)}'s ULTRA ID key changed.</b><br>that happens if they made a new ULTRA ID, or if someone is trying to read your messages.<br>ask them (in person or on a call) before you trust the new key.<br><br><span class="run" data-trust="${esc(f.handle)}">I checked · trust the new key</span></div>`);
+    frShown = ''; return;
+  }
   const box = $('#frmsgs'), msgs = so.msgs || [];
   const sig = f.handle + ':' + msgs.length + ':' + msgs.filter((m) => m.sent).length;
   if (sig === frShown) return;
@@ -1073,6 +1079,7 @@ $('#frlist').addEventListener('click', (e) => {
   if (a) send('saccept', a.dataset.acc); else if (d) send('sdecline', d.dataset.dec);
   else if (o) { send('sopen', o.dataset.open); setTimeout(() => $('#fr-say').focus(), 0); }
 });
+$('#frmsgs').addEventListener('click', (e) => { const t = e.target.closest('[data-trust]'); if (t) send('strust', t.dataset.trust); });
 $('#frhead').addEventListener('click', (e) => { const r = e.target.closest('[data-rm]'); if (r && confirm(`remove @${r.dataset.rm} from your friends? your chat history with them stays on this computer.`)) send('sremove', r.dataset.rm); });
 for (const id of ['#fr-add', '#fr-say']) $(id).addEventListener('keydown', (e) => {
   e.stopPropagation();

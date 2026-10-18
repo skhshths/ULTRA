@@ -2852,6 +2852,10 @@ impl App {
                 self.sync();
             }
             "sremove" => self.social.remove(arg.as_str().unwrap_or("")),
+            "strust" => {
+                self.social.trust(arg.as_str().unwrap_or(""));
+                self.sync();
+            }
             "sopen" => {
                 self.social.open(arg.as_str().map(String::from));
                 self.sync();
