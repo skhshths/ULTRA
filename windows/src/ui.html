@@ -111,6 +111,9 @@ input::selection { background: var(--acc-sel); }
 .hp pre { color: #d6d6d6; font: 13px/1.05 Consolas, "Cascadia Mono", monospace;
   text-shadow: 0 0 18px color-mix(in srgb, var(--acc) 15%, transparent); }
 .hp .hphint { color: #4a4a4a; font-size: 10px; letter-spacing: .08em; }
+.hp .hpnew { max-width: min(520px, 92%); margin-top: -4px; color: #5a5a5a; font-size: 10px; line-height: 1.7; text-align: left; }
+.hp .hpnew b { color: var(--acc); font-weight: 600; letter-spacing: .08em; }
+.hp .hpnew li { margin-left: 14px; }
 .hp .mini { color: #d6d6d6; letter-spacing: .6em; font-weight: 700; font-size: 15px; }
 .hp input { width: min(560px, 90%); height: 34px; background: rgba(12,12,12,.85); border: 1px solid #2c2c2c; color: var(--fg);
   font: 13px Consolas, monospace; padding: 0 12px; outline: 0; transition: border-color var(--fast); }
@@ -187,7 +190,9 @@ body.sizing-h, body.sizing-h * { cursor: row-resize !important; }
 body.maxed .rz { display: none; }
 
 /* settings */
-#cfgbtn { color: var(--dim); font-size: 11px; padding: 4px 6px; transition: color var(--fast); }
+#cfgbtn { color: var(--dim); padding: 4px 6px; display: inline-flex; align-items: center; transition: color var(--fast); }
+#cfgbtn:hover svg { transform: rotate(45deg); }
+#cfgbtn svg { transition: transform var(--med); }
 #cfgbtn:hover, #cfgbtn.on { color: var(--acc); }
 #cfg { display: grid; place-items: center; background: rgba(20,20,20,.7); }
 .card { width: min(560px, 92%); max-height: calc(100% - 28px); overflow-y: auto; border: 1px solid #2c2c2c; background: #161616;
@@ -361,6 +366,9 @@ body.glance #glancebg, body.glance #glance { display: block; }
 
 /* address-bar suggestions + bookmark star */
 #star { color: var(--dim); cursor: default; transition: color var(--fast); }
+#shield { color: var(--acc); font-size: 11px; white-space: nowrap; cursor: default; padding: 0 2px; }
+#shield:hover { text-decoration: underline; }
+#shield.off { color: var(--dim); }
 #star:hover { color: var(--acc); }
 #star.on { color: var(--acc); }
 #sugg { position: fixed; z-index: 7; display: none; background: #161616; border: 1px solid #2c2c2c; border-top: 0;
@@ -412,6 +420,48 @@ body.bmbar #bmbar { display: flex; }
 #dlbtn.ping { animation: dlping .8s var(--ease) 2; }
 @keyframes dlping { 50% { color: var(--acc); text-shadow: 0 0 10px var(--acc); } }
 #dl { display: grid; place-items: center; background: rgba(20,20,20,.7); }
+#frbtn { position: relative; color: var(--dim); font-size: 12px; padding: 4px 6px; cursor: default; transition: color var(--fast); }
+#frbtn:hover, #frbtn.on { color: var(--acc); }
+#frbtn i { position: absolute; top: 0; right: -2px; min-width: 12px; height: 12px; padding: 0 3px; border-radius: 6px; background: var(--acc);
+  color: #111; font: 700 9px/12px Consolas, monospace; font-style: normal; text-align: center; display: none; }
+#frbtn.unread i { display: block; }
+#fr { display: grid; place-items: center; background: rgba(20,20,20,.7); }
+#fr.on .card { transform: none; }
+#fr .card { width: min(780px, 94vw); height: min(560px, 86vh); display: flex; flex-direction: column; }
+.frwrap { flex: 1; min-height: 0; display: grid; grid-template-columns: 250px minmax(0, 1fr); }
+.frside { border-right: 1px solid #1d1d1d; display: flex; flex-direction: column; min-height: 0; }
+.fradd { padding: 10px 12px; border-bottom: 1px solid #1d1d1d; }
+.fradd input, .frsay input { width: 100%; height: 28px; background: #101010; border: 1px solid #2c2c2c; color: var(--fg); font: 12px Consolas, monospace; padding: 0 8px; outline: 0; }
+.fradd input:focus, .frsay input:focus { border-color: var(--acc-dim); }
+#frlist { flex: 1; overflow: auto; }
+.frsec { padding: 10px 12px 4px; color: var(--dim); font-size: 10px; letter-spacing: .12em; }
+.fri { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: default; }
+.fri:hover { background: #191919; }
+.fri.sel { background: var(--acc-bg); }
+.fri .dot { width: 7px; height: 7px; border-radius: 50%; background: #333; flex: none; }
+.fri .dot.on { background: var(--acc); box-shadow: 0 0 6px var(--acc); }
+.fri .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fri .who b { color: var(--fg); font-weight: 600; }
+.fri .who span { color: var(--dim); margin-left: 6px; font-size: 11px; }
+.fri .n { background: var(--acc); color: #111; border-radius: 8px; padding: 0 6px; font-size: 10px; font-weight: 700; }
+.fri .act { color: var(--dim); padding: 0 4px; }
+.fri .act:hover { color: var(--acc); }
+.fri .act.bad:hover { color: var(--bad); }
+.frchat { display: flex; flex-direction: column; min-height: 0; }
+#frhead { padding: 10px 14px; border-bottom: 1px solid #1d1d1d; color: var(--dim); min-height: 38px; display: flex; align-items: center; gap: 8px; }
+#frhead b { color: var(--fg); }
+#frhead .rm { margin-left: auto; color: var(--dim); font-size: 11px; }
+#frhead .rm:hover { color: var(--bad); }
+#frmsgs { flex: 1; overflow: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+.frm { max-width: 78%; padding: 6px 10px; background: #1a1a1a; border: 1px solid #242424; white-space: pre-wrap; word-break: break-word; align-self: flex-start; }
+.frm.mine { align-self: flex-end; background: var(--acc-bg); border-color: var(--acc-dim); }
+.frm.mine.wait { opacity: .6; }
+.frm time { display: block; color: var(--dim); font-size: 9px; margin-top: 2px; }
+.frempty { margin: auto; text-align: center; color: var(--dim); line-height: 1.7; padding: 20px; }
+.frempty b { color: var(--fg); }
+.frsay { padding: 10px 14px; border-top: 1px solid #1d1d1d; }
+#frnote { padding: 6px 14px; color: var(--dim); font-size: 10px; border-top: 1px solid #1d1d1d; }
+#frnote.bad { color: var(--bad); }
 #dl.on .card { transform: none; }
 #dllist { min-height: 90px; }
 .dli { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 4px; align-items: center;
@@ -480,15 +530,23 @@ body.noscs .hp .scs { display: none; }
   <div id="wsbar"></div><span class="sep">│</span>
   <div id="navb"><span id="nback" class="off" title="back">‹</span><span id="nfwd" class="off" title="forward">›</span></div><span class="sep">│</span>
   <div id="tabs"></div><div id="plus" title="new tab (ctrl+t)">+</div>
-  <div id="urlwrap"><span class="p">›</span><input id="url" spellcheck="false" autocomplete="off"><span id="star" title="bookmark (ctrl+d)">☆</span></div>
+  <div id="urlwrap"><span class="p">›</span><input id="url" spellcheck="false" autocomplete="off"><span id="shield" style="display:none"></span><span id="star" title="bookmark (ctrl+d)">☆</span></div>
   <span id="zoomchip" class="chip" title="unzoom (ctrl+shift+f)">⛶ zoom</span>
   <span id="stats"></span><span id="trim" class="chip" title="put every hidden tab to sleep">trim</span>
-  <span id="clock"></span><span id="dlbtn" title="downloads (ctrl+j)"><i><b></b></i>↓</span><span id="cfgbtn" title="settings (ctrl+,)">cfg</span>
+  <span id="clock"></span><span id="frbtn" title="friends & chat (ctrl+shift+c)">@<i></i></span><span id="dlbtn" title="downloads (ctrl+j)"><i><b></b></i>↓</span><span id="cfgbtn" title="settings (ctrl+,)"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" style="display:block"><path fill="currentColor" d="M9.4 1.2l.4 1.7c.4.1.8.3 1.1.5l1.5-.9 1.3 1.3-.9 1.5c.2.3.4.7.5 1.1l1.7.4v1.9l-1.7.4c-.1.4-.3.8-.5 1.1l.9 1.5-1.3 1.3-1.5-.9c-.3.2-.7.4-1.1.5l-.4 1.7H7.5l-.4-1.7c-.4-.1-.8-.3-1.1-.5l-1.5.9-1.3-1.3.9-1.5c-.2-.3-.4-.7-.5-1.1L1.9 9V7.1l1.7-.4c.1-.4.3-.8.5-1.1l-.9-1.5 1.3-1.3 1.5.9c.3-.2.7-.4 1.1-.5l.4-1.7h1.9zM8.5 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"/></svg></span>
   <div class="wc"><div id="wmin">─</div><div id="wmax">□</div><div id="wq" class="q">✕</div></div>
 </div>
 <div id="bmbar"></div><div id="panes"></div><div id="glancebg"></div><div id="glance"><div class="gh"><span class="gt"></span>
   <span class="gb" id="g-split" title="keep it, tiled next to the focused pane (ctrl+enter)">⧉ split</span><span class="gb" id="g-tab" title="keep it as a background tab">keep as tab</span><span class="gb" id="g-x" title="close (esc)">✕</span></div></div>
 <div id="toast"></div><div id="sugg"></div>
+<div id="fr" class="ovl" tabindex="-1"><div class="card">
+  <div class="hd"><span>FRIENDS</span><span class="k" id="fr-me"></span></div>
+  <div class="frwrap">
+    <div class="frside"><div class="fradd"><input id="fr-add" placeholder="add a friend by @handle" maxlength="21" spellcheck="false" autocomplete="off"></div><div id="frlist"></div></div>
+    <div class="frchat"><div id="frhead"></div><div id="frmsgs"></div><div class="frsay"><input id="fr-say" placeholder="message · enter sends" maxlength="4000" spellcheck="true" autocomplete="off"></div></div>
+  </div>
+  <div id="frnote"></div>
+</div></div>
 <div id="dl" class="ovl" tabindex="-1"><div class="card">
   <div class="hd"><span>DOWNLOADS</span><span class="k">ctrl+j</span></div>
   <div id="dllist"></div>
@@ -498,7 +556,7 @@ body.noscs .hp .scs { display: none; }
   <div class="hd"><span>SETTINGS</span><span class="k">ctrl+,</span></div>
   <div class="sec">ULTRA ID</div>
   <div class="row idrow" id="id-new"><div><div class="name">create your ULTRA ID</div>
-    <div class="desc">who you'll be to other ULTRA users: friends, chat and shared workspaces are on the way.<br>it's made on this computer; nothing is sent anywhere yet.</div>
+    <div class="desc">who you are to other ULTRA users: friends add you by your @handle and chat with you (the @ in the top bar).<br>it's made on this computer and signs you in without a password; the private key never leaves it.</div>
     <div class="idform"><input id="id-name" placeholder="display name" maxlength="40" spellcheck="false" autocomplete="off"><input id="id-handle" placeholder="@handle" maxlength="21" spellcheck="false" autocomplete="off"><button class="run" id="id-make">create</button></div>
     <div class="desc iderr" id="id-err"></div></div></div>
   <div class="row idrow" id="id-card"><div class="idcard"><b id="id-av"></b><div><div class="name" id="id-who"></div><div class="desc"><span id="id-handle-show"></span> · since <span id="id-since"></span></div>
@@ -517,7 +575,7 @@ body.noscs .hp .scs { display: none; }
     <div class="desc">a slim header on every pane with its page's live memory, total memory &amp; cpu<br>in the bar, plus ↻ to rebuild a bloated page. sampled only while on.</div></div><div class="sw" id="sw-stats"></div></div>
   <div class="sec">PRIVACY</div>
   <div class="row" id="r-block"><div><div class="name">block ads &amp; trackers</div>
-    <div class="desc">ad networks and tracking beacons are refused at the network level.<br>sign-in providers are never blocked.</div></div><div class="sw" id="sw-block"></div></div>
+    <div class="desc">Brave's ad-block engine with EasyList, EasyPrivacy and uBlock's lists (<span id="blk-rules">100k+</span> rules).<br>ads, trackers and the empty boxes they leave are removed. the ◆ in the address bar shows what was blocked; click it to switch blocking off for that site.</div></div><div class="sw" id="sw-block"></div></div>
   <div class="row" id="r-declutter"><div><div class="name">hide cookie banners</div>
     <div class="desc">consent pop-ups from the common cookie tools are hidden and scrolling is given back.<br>the site sees no answer, so it treats you as having declined. "zap" in the palette hides anything else.</div></div><div class="sw" id="sw-declutter"></div></div>
   <div class="row"><div><div class="name">separate logins</div>
@@ -574,6 +632,7 @@ body.noscs .hp .scs { display: none; }
   <div class="sec">HELP</div>
   <div class="row"><div><div class="name">updates</div><div class="desc"><span id="upd-ver"></span><br><span id="upd-msg">ULTRA updates itself in place: your taskbar pin and shortcuts keep working.</span></div></div>
     <div class="ctl"><button class="run" id="upd-forget" style="display:none">disconnect GitHub</button><button class="run" id="upd-btn">check for updates</button></div></div>
+  <div class="row" id="r-autoupd"><div><div class="name">auto-update</div><div class="desc">checks for updates every few hours and installs them by itself.<br>the new version starts the next time you open ULTRA.</div></div><div class="sw" id="sw-autoupd"></div></div>
   <div class="row idrow" id="upd-gh" style="display:none"><div><div class="name">connect GitHub</div>
     <div class="desc">1. <b>get a token</b> opens GitHub with a read-only token filled in: under repository access pick <b>this build's repository</b> (the one you were invited to), then generate it.<br>
     2. paste it here. it stays encrypted on this computer and is only ever sent to GitHub.</div>
@@ -622,7 +681,7 @@ const $ = (s) => document.querySelector(s);
 const send = (cmd, arg) => { try { window.ipc.postMessage(JSON.stringify({ cmd, arg })); } catch (_) {} };
 const CFG0 = window.__ultraCfg || {};
 let S = { tabs: [], a: 0, panes: [], splits: [], live: 0, ws: 0, wss: [0], ps: {}, cfg: CFG0 };
-let ovOn = false, cfgOn = false, palOn = false, dlOn = false, ovSel = 0, ovList = [], splitSig = '', pendingFocus = null, lastWs = 0;
+let ovOn = false, cfgOn = false, palOn = false, dlOn = false, frOn = false, ovSel = 0, ovList = [], splitSig = '', pendingFocus = null, lastWs = 0;
 let SPEED = !!CFG0.ultraspeed;
 document.body.classList.toggle('speed', SPEED);
 const later = (f, ms) => SPEED ? f() : setTimeout(f, ms);
@@ -713,6 +772,14 @@ window.ultra = {
     $('#nfwd').classList.toggle('off', !(s.nav || [])[1]);
     $('#star').classList.toggle('on', !!s.bm); setText($('#star'), s.bm ? '★' : '☆');
     $('#star').style.display = cur.s === 'home' || cur.p ? 'none' : '';
+    // The shield: what the blocker caught on this page; a click switches it off for the site.
+    const sh = s.shield || {}, she = $('#shield');
+    she.style.display = sh.site && sh.on && cur.s !== 'home' ? '' : 'none';
+    she.classList.toggle('off', !!sh.off);
+    setText(she, sh.off ? '◇ off' : '◆ ' + (sh.n || 0));
+    she.title = sh.off ? `blocking is off on ${sh.site} · click to turn it back on`
+      : `${sh.n || 0} ads & trackers blocked on this page · click to switch blocking off on ${sh.site}`;
+    if (sh.rules) setText($('#blk-rules'), `${Math.round(sh.rules / 1000)}k`);
     $('#urlwrap').title = insecure ? 'not secure: this page is not encrypted. do not enter passwords here.' : '';
     const sleeping = s.tabs.filter((t) => t.s === 'sleep').length;
     let stats = `<b>${s.live}</b> live · <b>${sleeping}</b> asleep`;
@@ -724,6 +791,7 @@ window.ultra = {
     document.body.classList.toggle('maxed', !!s.max);
     renderGlance();
     renderDl();
+    renderFr();
     setText($('#wmax'), s.max ? '❐' : '□');
     renderPanes();
     if (ovOn) drawOv();
@@ -743,6 +811,7 @@ window.ultra = {
   settings(on) { setCfg(on); },
   palette(on) { setPal(on); },
   downloads(on) { setDl(on); },
+  friends(on) { setFr(on); },
   tour(on) { setTour(on); },
   // Type-to-search: put the first typed character into the focused pane's search field.
   typeUrl(ch) {
@@ -754,7 +823,7 @@ window.ultra = {
     sgTyped = true; sgAsk(q);
   },
 };
-const anyOverlay = () => ovOn || cfgOn || palOn || dlOn || tourOn || !!lockMode;
+const anyOverlay = () => ovOn || cfgOn || palOn || dlOn || frOn || tourOn || !!lockMode;
 // Glance: the page floats natively inside this frame; the strip above it names it and offers keep / close.
 function renderGlance() {
   const g = S.glance, on = !!g && !anyOverlay();
@@ -796,6 +865,7 @@ function applyCfg(c) {
   $('#sw-audio').classList.toggle('on', c.audio ?? true);
   $('#sw-bmbar').classList.toggle('on', c.bmbar ?? true);
   $('#sw-scs').classList.toggle('on', c.shortcuts ?? true);
+  $('#sw-autoupd').classList.toggle('on', c.autoupdate ?? true);
   document.body.classList.toggle('noscs', c.shortcuts === false);
   document.body.classList.toggle('bmbar', c.bmbar ?? true);
   $('#sw-type').classList.toggle('on', c.typeahead ?? true);
@@ -809,7 +879,7 @@ function setCfg(on) {
   cfgOn = on;
   $('#cfg').classList.toggle('on', on);
   $('#cfgbtn').classList.toggle('on', on);
-  if (on) { if (ovOn) setOv(false); if (palOn) setPal(false); if (dlOn) setDl(false); if (tourOn) setTour(false); setTimeout(() => $('#cfg').focus(), 0); }
+  if (on) { if (ovOn) setOv(false); if (palOn) setPal(false); if (dlOn) setDl(false); if (frOn) setFr(false); if (tourOn) setTour(false); setTimeout(() => $('#cfg').focus(), 0); }
   renderPanes();
 }
 function closeCfg() { setCfg(false); send('settings', false); }
@@ -820,6 +890,7 @@ $('#r-stats').onclick = () => toggle('stats', false);
 $('#r-block').onclick = () => toggle('block', true);
 $('#r-declutter').onclick = () => toggle('declutter', true);
 $('#r-scs').onclick = () => toggle('shortcuts', true);
+$('#r-autoupd').onclick = () => toggle('autoupdate', true);
 $('#memcap').onclick = (e) => { if (e.target.dataset.m != null) send('set', ['memcap', +e.target.dataset.m]); };
 $('#iso').onclick = (e) => { if (e.target.dataset.w != null) send('isolate', +e.target.dataset.w); };
 $('#r-scan').onclick = () => toggle('scanlines', false);
@@ -865,7 +936,7 @@ function drawUpd() {
   const st = updState || {};
   setText($('#upd-ver'), S.version ? 'you have ' + S.version : 'development build');
   if (st.m) setText($('#upd-msg'), st.m);
-  const label = { checking: 'checking…', installing: 'updating…', available: window.__ultraMac ? 'download update' : 'update now', private: st.canauth ? 'check again' : 'open releases' }[st.s] || 'check for updates';
+  const label = { checking: 'checking…', installing: 'updating…', available: 'update now', restart: 'restart now', private: st.canauth ? 'check again' : 'open releases' }[st.s] || 'check for updates';
   $('#upd-gh').style.display = st.s === 'private' && st.canauth ? '' : 'none';
   $('#upd-forget').style.display = st.linked && st.s !== 'private' ? '' : 'none';
   setText($('#upd-btn'), label);
@@ -879,7 +950,8 @@ $('#upd-forget').onclick = () => { if (confirm('remove the GitHub token from thi
 function checkUpdates() { ultra.updateState({ s: 'checking', m: 'asking GitHub…' }); send('update_check'); }
 $('#upd-btn').onclick = () => {
   const s = (updState || {}).s;
-  if (s === 'available') { ultra.updateState({ s: window.__ultraMac ? 'available' : 'installing', m: window.__ultraMac ? '' : 'downloading the new build… ULTRA restarts by itself once it is in place' }); send('update_install'); }
+  if (s === 'available') { ultra.updateState({ s: 'installing', m: 'downloading the new build… ULTRA restarts by itself once it is in place' }); send('update_install'); }
+  else if (s === 'restart') send('update_restart');
   else if (s === 'private' && !(updState || {}).canauth) send('update_page');
   else checkUpdates();
 };
@@ -934,10 +1006,74 @@ function setDl(on) {
   dlOn = on;
   $('#dl').classList.toggle('on', on);
   $('#dlbtn').classList.toggle('on', on);
-  if (on) { if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false); if (tourOn) setTour(false); renderDl(); setTimeout(() => $('#dl').focus(), 0); }
+  if (on) { if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false); if (frOn) setFr(false); if (tourOn) setTour(false); renderDl(); setTimeout(() => $('#dl').focus(), 0); }
   else renderDl();
   renderPanes();
 }
+// ── friends & chat (by @handle; messages are end-to-end encrypted by ULTRA itself) ──
+let frShown = '';
+const frTime = (t) => { const d = new Date(t * 1000); return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' }); };
+function renderFr() {
+  const so = S.social || {}, btn = $('#frbtn');
+  btn.classList.toggle('unread', !!so.unread);
+  setText(btn.querySelector('i'), so.unread > 9 ? '9+' : String(so.unread || ''));
+  if (!frOn) return;
+  const me = so.me || (S.me && S.me.handle);
+  setText($('#fr-me'), me ? '@' + me : '');
+  const note = $('#frnote');
+  const status = { online: 'connected · messages are end-to-end encrypted', connecting: 'connecting…', offline: 'offline · retrying' + (so.error ? ' (' + so.error + ')' : ''), error: so.error || 'couldn\'t sign in', off: '' }[so.status] ?? '';
+  setText(note, status); note.classList.toggle('bad', so.status === 'error' || so.status === 'offline');
+  if (!S.me) {
+    setHTML($('#frlist'), '');
+    setHTML($('#frmsgs'), '<div class="frempty">friends and chat use your <b>ULTRA ID</b>.<br>make one in settings (ctrl+,), then come back here.</div>');
+    setHTML($('#frhead'), ''); $('#fr-say').disabled = true; $('#fr-add').disabled = true; return;
+  }
+  $('#fr-add').disabled = so.status !== 'online';
+  let h = '';
+  if ((so.requests || []).length) {
+    h += '<div class="frsec">REQUESTS</div>' + so.requests.map((r) => `<div class="fri"><span class="dot"></span><span class="who"><b>@${esc(r.handle)}</b><span>${esc(r.name)}</span></span>` +
+      `<span class="act" data-acc="${esc(r.handle)}" title="accept">✓</span><span class="act bad" data-dec="${esc(r.handle)}" title="decline">✕</span></div>`).join('');
+  }
+  const fl = (so.friends || []).slice().sort((a, b) => (b.online - a.online) || (b.last - a.last) || a.handle.localeCompare(b.handle));
+  h += '<div class="frsec">FRIENDS</div>' + (fl.length ? fl.map((f) => `<div class="fri${so.open === f.handle ? ' sel' : ''}" data-open="${esc(f.handle)}"><span class="dot${f.online ? ' on' : ''}"></span>` +
+    `<span class="who"><b>@${esc(f.handle)}</b><span>${esc(f.name)}</span></span>${f.unread ? `<span class="n">${f.unread}</span>` : ''}</div>`).join('') : '<div class="fri"><span class="who"><span>no friends yet · add one by their @handle above</span></span></div>');
+  if ((so.sent || []).length) h += '<div class="frsec">WAITING FOR</div>' + so.sent.map((s) => `<div class="fri"><span class="dot"></span><span class="who"><b>@${esc(s)}</b><span>request sent</span></span><span class="act bad" data-dec="${esc(s)}" title="cancel">✕</span></div>`).join('');
+  setHTML($('#frlist'), h);
+  const f = fl.find((x) => x.handle === so.open);
+  $('#fr-say').disabled = !f || so.status !== 'online';
+  if (!f) { setHTML($('#frhead'), ''); setHTML($('#frmsgs'), '<div class="frempty">pick a friend to chat.<br>only you and they can read your messages: ULTRA encrypts them before they leave this computer.</div>'); frShown = ''; return; }
+  setHTML($('#frhead'), `<span class="dot${f.online ? ' on' : ''}" style="width:7px;height:7px;border-radius:50%;background:${f.online ? 'var(--acc)' : '#333'}"></span><b>@${esc(f.handle)}</b><span>${esc(f.name)}${f.online ? ' · online' : ''}</span><span class="rm" data-rm="${esc(f.handle)}">remove friend</span>`);
+  const box = $('#frmsgs'), msgs = so.msgs || [];
+  const sig = f.handle + ':' + msgs.length + ':' + msgs.filter((m) => m.sent).length;
+  if (sig === frShown) return;
+  const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30 || !frShown.startsWith(f.handle + ':');
+  setHTML(box, msgs.length ? msgs.map((m) => `<div class="frm${m.from === me ? ' mine' : ''}${m.from === me && !m.sent ? ' wait' : ''}">${esc(m.text)}<time>${frTime(m.ts)}${m.from === me && !m.sent ? ' · sending' : ''}</time></div>`).join('')
+    : `<div class="frempty">say hi to <b>@${esc(f.handle)}</b>.</div>`);
+  if (atEnd) box.scrollTop = box.scrollHeight;
+  frShown = sig;
+}
+function setFr(on) {
+  frOn = on;
+  $('#fr').classList.toggle('on', on);
+  $('#frbtn').classList.toggle('on', on);
+  if (on) { if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false); if (dlOn) setDl(false); if (tourOn) setTour(false); frShown = ''; renderFr(); setTimeout(() => ((S.social || {}).open ? $('#fr-say') : $('#fr-add')).focus(), 0); }
+  renderPanes();
+}
+function closeFr() { setFr(false); send('friends', false); }
+$('#frbtn').onclick = () => frOn ? closeFr() : send('friends', true);
+$('#fr').addEventListener('mousedown', (e) => { if (e.target.id === 'fr') closeFr(); });
+$('#frlist').addEventListener('click', (e) => {
+  const a = e.target.closest('[data-acc]'), d = e.target.closest('[data-dec]'), o = e.target.closest('[data-open]');
+  if (a) send('saccept', a.dataset.acc); else if (d) send('sdecline', d.dataset.dec);
+  else if (o) { send('sopen', o.dataset.open); setTimeout(() => $('#fr-say').focus(), 0); }
+});
+$('#frhead').addEventListener('click', (e) => { const r = e.target.closest('[data-rm]'); if (r && confirm(`remove @${r.dataset.rm} from your friends? your chat history with them stays on this computer.`)) send('sremove', r.dataset.rm); });
+for (const id of ['#fr-add', '#fr-say']) $(id).addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Escape') { closeFr(); return; }
+  if (e.key !== 'Enter' || !e.target.value.trim()) return;
+  send(id === '#fr-add' ? 'sadd' : 'ssend', e.target.value.trim()); e.target.value = '';
+});
 function closeDl() { setDl(false); send('downloads', false); }
 $('#dlbtn').onclick = () => dlOn ? closeDl() : send('downloads', true);
 $('#dl').addEventListener('mousedown', (e) => { if (e.target.id === 'dl') closeDl(); });
@@ -964,7 +1100,7 @@ $('#dl-clear').onclick = () => send('dl', ['clear', 0]);
     ['WORKSPACES', [[`${M}+${A}+1‥9`, 'switch workspace'], [`${M}+${A}+shift+1‥9`, 'send tab to workspace'],
       [`${M}+${A}+0`, 'private workspace'], [`${M}+${A}+l`, 'lock private workspace']]],
     ['PAGES', [[`${M}+l` + ' / ' + `${M}+f`, 'search or go to a site'], ['just type', 'search from anywhere'], [MAC ? 'cmd+[ / cmd+]' : 'alt+← / alt+→', 'back / forward'],
-      [`${M}+d`, 'bookmark page'], [`${M}+r`, 'reload']]],
+      [`${M}+d`, 'bookmark page'], [`${M}+r`, 'reload'], ['f1 / f2', 'back / forward'], [`${M}+shift+c`, 'friends & chat']]],
     ['PANELS', [[`${M}+j`, 'downloads'], [`${M}+k`, 'all tabs overview'], [`${M}+shift+p`, 'command palette'], [`${M}+,`, 'settings']]],
   ];
   $('#keylist').innerHTML = groups.map(([g, rows]) => `<div class="kg"><h4>${g}</h4>` +
@@ -1151,6 +1287,7 @@ const CMDS = [
   { k: 'lock', d: 'lock the private workspace now (ctrl+alt+l)', run: () => send('lock') },
   { k: 'wipe private', d: 'close every private tab', run: () => send('wipe') },
   { k: 'reload', d: 'reload the focused page', run: () => send('reload') },
+  { k: 'friends', d: 'friends & chat: add people by @handle', run: () => send('friends', true) },
   { k: 'crash log', d: 'show the crash log (it stays on this computer)', run: () => send('crashlog') },
   { k: 'reopen', d: 'reopen the last closed tab', run: () => send('reopen') },
   { k: 'devtools', d: 'developer tools for the focused page', run: () => send('devtools') },
@@ -1183,7 +1320,7 @@ function setPal(on) {
   palOn = on;
   $('#pal').classList.toggle('on', on);
   if (on) {
-    if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (dlOn) setDl(false); if (tourOn) setTour(false);
+    if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (dlOn) setDl(false); if (frOn) setFr(false); if (tourOn) setTour(false);
     $('#palq').value = ''; palSel = 0; drawPal(); setTimeout(() => $('#palq').focus(), 0);
   } else $('#palq').blur();
   renderPanes();
@@ -1530,7 +1667,7 @@ function homeContent(e, id, big, tall) {
   const keep = e.hp.querySelector('input');
   const val = keep ? keep.value : '';
   e.hp.innerHTML = `${big ? $('#logo').innerHTML : '<div class="mini">ULTRA</div>'}` +
-    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big ? '<div class="scs"></div>' : ''}${big && tall ? '<div class="digest"></div>' : ''}${big ? '<div class="hphint"><kbd>ctrl+,</kbd> every shortcut &amp; help</div>' : ''}`;
+    `<input data-id="${id}" placeholder="search or enter address" spellcheck="false" autocomplete="off">${big ? '<div class="scs"></div>' : ''}${big && tall ? '<div class="digest"></div>' : ''}${big ? '<div class="hphint"><kbd>ctrl+,</kbd> every shortcut &amp; help</div>' : ''}${big ? newHereHTML() : ''}`;
   const q = e.hp.querySelector('input'); q.value = val;
   e.big = big + ':' + tall;
 }
@@ -1624,6 +1761,12 @@ function applyPendingFocus() {
 }
 
 // ── new-tab shortcuts ──
+// Experimental builds: what this build has that the public version doesn't yet.
+function newHereHTML() {
+  const items = window.__ultraNew || [];
+  if (!items.length) return '';
+  return `<div class="hpnew"><b>NEW IN THIS EXPERIMENTAL BUILD${S.version ? ' · ' + esc(S.version.toUpperCase()) : ''}</b><ul>${items.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>`;
+}
 function shortcutsHTML() {
   const sc = S.sc || { list: [] }, list = sc.list || [];
   const tile = (x) => {
@@ -1764,11 +1907,14 @@ url.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { const v = sgPick(url); sgHide(); send('go', v); url.blur(); }
   else if (e.key === 'Escape') { sgHide(); url.blur(); ultra.render(S); send('content'); }
 });
-url.addEventListener('focus', () => url.select());
+// Focusing the address bar selects it, except when focus merely comes back while you're typing
+// (opening the suggestion list refocuses the chrome), which would select an autofill's typed part.
+let urlTypedAt = 0;
+url.addEventListener('focus', () => { if (Date.now() - urlTypedAt > 1500) url.select(); });
 
 // ── address-bar suggestions: history + bookmarks, ranked by Rust ──
 const sugg = $('#sugg');
-let sgItems = [], sgSel = -1, sgInput = null, sgTimer = 0, urlPanel = false, sgTyped = false;
+let sgItems = [], sgSel = -1, sgInput = null, sgTimer = 0, urlPanel = false, sgTyped = false, sgDel = false;
 function sgHide() {
   sugg.classList.remove('on'); sgItems = []; sgSel = -1;
   if (urlPanel) { urlPanel = false; send('urlpanel', false); }
@@ -1786,6 +1932,7 @@ ultra.suggestions = (r) => {
   if (!sgTyped || !sgInput || document.activeElement !== sgInput || r.q !== sgInput.value.trim()) return;
   sgItems = r.items; sgSel = -1;
   if (!sgItems.length) { sgHide(); return; }
+  sgAutofill(sgInput, r.q);
   // The address bar sits above the pages, so pages are hidden while its list is open.
   if (sgInput === url && !urlPanel) { urlPanel = true; send('urlpanel', true); }
   const b = (sgInput === url ? $('#urlwrap') : sgInput).getBoundingClientRect();
@@ -1795,6 +1942,24 @@ ultra.suggestions = (r) => {
 function sgDraw() {
   sugg.innerHTML = sgItems.map((it, i) => `<div class="sg${i === sgSel ? ' sel' : ''}" data-i="${i}"><span class="ic${it.b ? ' b' : ''}">${it.b ? '★' : '↺'}</span>` +
     `<span class="st">${esc(it.t || host(it.u))}</span><span class="su">${esc(it.u.replace(/^https?:\/\/(www\.)?/, ''))}</span></div>`).join('');
+}
+// Autofill: "yo" becomes "yo[utube.com]" (the rest selected) when the best match starts with what
+// you typed: enter goes there, typing on replaces it. Never while deleting, or mid-text.
+function sgAutofill(input, q) {
+  if (sgDel || /\s/.test(q) || input.selectionStart !== input.value.length || input.value !== q) return;
+  const lq = q.toLowerCase().replace(/^https?:\/\/(www\.)?/, '');
+  if (!lq) return;
+  const strip = (u) => u.replace(/^https?:\/\/(www\.)?/, '');
+  for (const it of sgItems) {
+    const full = strip(it.u), hostPart = full.split('/')[0];
+    // a host when you type a host; the address itself once you type a path
+    const target = lq.includes('/') ? full.replace(/\/$/, '') : hostPart;
+    if (target.toLowerCase().startsWith(lq) && target.length > lq.length) {
+      input.value = q + target.slice(lq.length);
+      input.setSelectionRange(q.length, input.value.length);
+      return;
+    }
+  }
 }
 // Shared keys for any input with suggestions; returns the value to navigate to on Enter.
 function sgKey(e) {
@@ -1813,12 +1978,14 @@ sugg.addEventListener('pointerdown', (e) => {
   sgHide();
   if (inp === url) { send('go', u); url.blur(); } else send('go', [+inp.dataset.id, u]);
 });
-url.addEventListener('input', () => { sgTyped = true; sgAsk(url); });
+url.addEventListener('input', () => { sgTyped = true; urlTypedAt = Date.now(); sgAsk(url); });
+document.addEventListener('beforeinput', (e) => { sgDel = (e.inputType || '').startsWith('delete'); }, true);
 // Moving focus to another box closes any list and waits for fresh typing.
 document.addEventListener('focusin', (e) => { if (e.target !== sgInput) { sgHide(); sgTyped = false; sgInput = null; } });
 url.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== url) sgHide(); }, 0));
 panesEl.addEventListener('input', (e) => { const q = e.target.closest('.hp input'); if (q) { sgTyped = true; sgAsk(q); } });
 $('#star').onclick = () => send('bookmark');
+$('#shield').onclick = () => send('blocksite');
 $('#nback').onclick = () => send('back');
 $('#nfwd').onclick = () => send('fwd');
 // Mouse side buttons over the chrome go back/forward too (pages handle them natively).
@@ -1846,10 +2013,10 @@ ultra.bars = (b) => barsFx.setBars(b);
 // ── window chrome ──
 $('#bar').addEventListener('mousedown', (e) => {
   if (e.button !== 0 || e.detail > 1) return;
-  if (e.target.closest('.tab,#plus,#navb,#urlwrap,.wc,.wsb,.chip,#cfgbtn,#dlbtn')) return;
+  if (e.target.closest('.tab,#plus,#navb,#urlwrap,.wc,.wsb,.chip,#cfgbtn,#dlbtn,#frbtn')) return;
   send('drag');
 });
-$('#bar').addEventListener('dblclick', (e) => { if (!e.target.closest('.tab,#plus,#navb,#urlwrap,.wc,.wsb,.chip,#cfgbtn,#dlbtn')) send('max'); });
+$('#bar').addEventListener('dblclick', (e) => { if (!e.target.closest('.tab,#plus,#navb,#urlwrap,.wc,.wsb,.chip,#cfgbtn,#dlbtn,#frbtn')) send('max'); });
 $('#wmin').onclick = () => send('min');
 $('#wmax').onclick = () => send('max');
 $('#wq').onclick = () => send('quit');
@@ -1866,6 +2033,7 @@ document.addEventListener('keydown', (e) => {
   else if (c && e.altKey && !e.shiftKey && (code === 'Digit0' || code === 'Numpad0')) { m = 'ws'; a = 9; }
   else if (c && e.altKey && code === 'KeyL') m = 'lock';
   else if (c && e.shiftKey && digit) { m = 'mv'; a = +digit[2] - 1; }
+  else if (c && e.shiftKey && code === 'KeyC') { if (frOn) closeFr(); else send('friends', true); e.preventDefault(); return; }
   else if (c && e.shiftKey && code === 'KeyE') m = 'mvnew';
   else if (c && e.shiftKey && code === 'KeyW') m = 'closeat';
   else if (c && e.shiftKey && code === 'KeyF') m = 'zoom';
@@ -1878,6 +2046,7 @@ document.addEventListener('keydown', (e) => {
   else if (c && !e.shiftKey && !e.altKey && code === 'KeyF') { ultra.focusUrl(); e.preventDefault(); return; }
   else if (c && !e.shiftKey && !e.altKey && code === 'KeyJ') { if (dlOn) closeDl(); else send('downloads', true); e.preventDefault(); return; }
   else if (k === 'escape' && dlOn) { closeDl(); e.preventDefault(); return; }
+  else if (k === 'escape' && frOn) { closeFr(); e.preventDefault(); return; }
   else if (c && e.shiftKey && !e.altKey && code === 'KeyR') { send('blankat'); e.preventDefault(); return; }
   else if (c && !e.shiftKey && !e.altKey && code === 'KeyD') { send('bookmark'); e.preventDefault(); return; }
   else if (c && code === 'Comma') { if (cfgOn) closeCfg(); else send('settings', true); e.preventDefault(); return; }
@@ -1896,6 +2065,7 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'escape' && S.glance && !anyOverlay()) { e.preventDefault(); send('glance', 'close'); return; }
   else if (k === 'enter' && c && S.glance && !anyOverlay()) { e.preventDefault(); send('glance', 'split'); return; }
   else if (k === 'f5' || (c && code === 'KeyR')) m = 'reload';
+  else if (!c && !e.altKey && !e.shiftKey && (k === 'f1' || k === 'f2')) m = k === 'f1' ? 'back' : 'fwd';
   else if (e.altKey && k === 'arrowleft') m = 'back';
   else if (e.altKey && k === 'arrowright') m = 'fwd';
   // Shortcuts keep the tour open (it practises on the live layout) but close the other panels.

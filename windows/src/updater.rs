@@ -3,12 +3,14 @@
 //! there's an update. On Windows it is installed in place: the new exe is downloaded next to
 //! the running one, checked, and swapped in by renaming (Windows lets a running exe be renamed,
 //! not overwritten), then ULTRA restarts from the same path, so taskbar pins and shortcuts keep
-//! working. On a Mac the download page opens instead (an app bundle is replaced by hand).
+//! working. On a Mac the new app bundle is downloaded next to the running one, unpacked with
+//! ditto and swapped in by renaming the same way, then ULTRA relaunches.
 //!
 //! The experimental build lives in a private repository, which GitHub only shows to someone
-//! signed in. On Windows the tester connects once by pasting a read-only GitHub token; it is
-//! kept encrypted for this Windows user (DPAPI) and only ever sent to api.github.com, through
-//! curl's standard input (never on a command line other programs can see).
+//! signed in. The tester connects once by pasting a read-only GitHub token: on Windows it's
+//! kept encrypted for this Windows user (DPAPI), on a Mac in a file only this user can read. It
+//! is only ever sent to api.github.com, through curl's standard input (never on a command line
+//! other programs can see).
 
 use std::path::{Path, PathBuf};
 
@@ -81,6 +83,28 @@ pub fn forget_token(dir: &Path) {
     let _ = std::fs::remove_file(dir.join(TOKEN_FILE));
 }
 
+#[cfg(not(windows))]
+const TOKEN_FILE: &str = "github-token";
+
+#[cfg(not(windows))]
+pub fn load_token(dir: &Path) -> Option<String> {
+    let t = std::fs::read_to_string(dir.join(TOKEN_FILE)).ok()?.trim().to_string();
+    valid_token(&t).then_some(t)
+}
+
+/// Keep the token for next time, readable by this user only.
+#[cfg(not(windows))]
+pub fn save_token(dir: &Path, t: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join(TOKEN_FILE);
+    crate::library::write_atomic(&path, t).is_ok() && std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).is_ok()
+}
+
+#[cfg(not(windows))]
+pub fn forget_token(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(TOKEN_FILE));
+}
+
 /// GitHub's "new token" page, filled in: read-only access to code and releases, for the owner
 /// of the repository (the tester still picks the repository itself).
 pub fn token_page(repo: &str) -> String {
@@ -97,8 +121,8 @@ pub fn short(c: &str) -> &str {
     &c[..c.len().min(7)]
 }
 
-/// Whether this platform can sign in to a private repository and install from it.
-const CAN_AUTH: bool = cfg!(windows);
+/// Every platform can sign in to a private repository and install from it.
+const CAN_AUTH: bool = true;
 
 pub fn releases_page(repo: &str) -> String {
     format!("https://github.com/{repo}/releases/latest")
@@ -186,6 +210,7 @@ pub fn check(repo: &str, token: Option<String>) -> (Value, Option<Update>) {
 }
 
 /// Where the exe sits while it's being replaced.
+#[cfg(windows)]
 fn sibling(exe: &Path, tag: &str) -> PathBuf {
     let stem = exe.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "ultra".into());
     exe.with_file_name(format!("{stem}.{tag}.exe"))
@@ -231,7 +256,6 @@ pub fn install(up: &Update) -> Result<PathBuf, String> {
 }
 
 /// Start the updated ULTRA; it waits for this one to close before taking over.
-#[cfg(windows)]
 pub fn restart(exe: &Path) -> bool {
     std::process::Command::new(exe).env("ULTRA_WAIT_PID", std::process::id().to_string()).spawn().is_ok()
 }
@@ -257,6 +281,86 @@ pub fn clean_up() {
     if let Ok(exe) = std::env::current_exe() {
         let _ = std::fs::remove_file(sibling(&exe, "old"));
         let _ = std::fs::remove_file(sibling(&exe, "new"));
+    }
+}
+
+/// The app bundle ULTRA is running from on a Mac (…/ULTRA.app).
+#[cfg(not(windows))]
+fn bundle() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|_| "couldn't find where ULTRA is running from".to_string())?;
+    exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")).map(Path::to_path_buf).ok_or_else(|| "ULTRA isn't running from an app bundle".into())
+}
+
+/// Download the update (a zipped app), unpack it beside the running app and swap it in by
+/// renaming, like Windows. Blocking. Returns the new app's executable to restart from.
+#[cfg(not(windows))]
+pub fn install(up: &Update) -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|_| "couldn't find where ULTRA is running from".to_string())?;
+    let app = bundle()?;
+    let dir = app.parent().ok_or("couldn't find ULTRA's folder")?.to_path_buf();
+    let work = dir.join(".ultra-update");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).map_err(|e| format!("couldn't write next to ULTRA ({e}) · move ULTRA into your Applications folder"))?;
+    let fail = |m: String| {
+        let _ = std::fs::remove_dir_all(&work);
+        Err(m)
+    };
+    let zip = work.join("update.zip");
+    let mut c = curl();
+    c.args(["-sS", "-L", "-f", "--max-time", "300", "-H", "User-Agent: ULTRA-updater", "-H", "Accept: application/octet-stream", "-o"])
+        .arg(&zip)
+        .arg(&up.url);
+    if !run(c, up.token.as_deref()).is_ok_and(|o| o.status.success()) {
+        return fail("the download didn't finish · try again".into());
+    }
+    // A whole zip: the size GitHub promised, starting with "PK".
+    let head = std::fs::read(&zip).map(|b| (b.len() as u64, b.get(..2) == Some(b"PK"))).unwrap_or((0, false));
+    if head.0 == 0 || (up.size > 0 && head.0 != up.size) || !head.1 {
+        return fail("the download looks damaged · nothing was changed".into());
+    }
+    let unpacked = std::process::Command::new("/usr/bin/ditto").args(["-x", "-k"]).arg(&zip).arg(&work).status();
+    if !unpacked.is_ok_and(|s| s.success()) {
+        return fail("couldn't unpack the update · nothing was changed".into());
+    }
+    let Some(new_app) = std::fs::read_dir(&work).ok().into_iter().flatten().flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|e| e == "app")) else {
+        return fail("the update had no app inside · nothing was changed".into());
+    };
+    // Swap: the running app steps aside (allowed while running), the new one takes its place.
+    let old = app.with_extension("app-old");
+    let _ = std::fs::remove_dir_all(&old);
+    if let Err(e) = std::fs::rename(&app, &old) {
+        return fail(format!("couldn't replace ULTRA ({e}) · is it in a folder you can't write to?"));
+    }
+    if let Err(e) = std::fs::rename(&new_app, &app) {
+        let _ = std::fs::rename(&old, &app); // put the old one back
+        return fail(format!("couldn't put the new version in place ({e})"));
+    }
+    let _ = std::fs::remove_dir_all(&work);
+    Ok(app.join("Contents/MacOS").join(exe.file_name().unwrap_or_default()))
+}
+
+/// A freshly updated ULTRA: wait (briefly) for the old one to finish closing.
+#[cfg(not(windows))]
+pub fn wait_for_previous() {
+    let Some(pid) = std::env::var("ULTRA_WAIT_PID").ok().and_then(|p| p.parse::<i32>().ok()) else { return };
+    std::env::remove_var("ULTRA_WAIT_PID");
+    for _ in 0..150 {
+        // Signal 0 only asks whether the process still exists.
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// Remove the previous app left beside this one by the last update (best effort).
+#[cfg(not(windows))]
+pub fn clean_up() {
+    if let Ok(app) = bundle() {
+        let _ = std::fs::remove_dir_all(app.with_extension("app-old"));
+        if let Some(dir) = app.parent() {
+            let _ = std::fs::remove_dir_all(dir.join(".ultra-update"));
+        }
     }
 }
 

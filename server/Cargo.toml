@@ -1,0 +1,19 @@
+[package]
+name = "ultra-server"
+version = "0.1.0"
+edition = "2021"
+description = "ULTRA ID friends and chat relay: friend requests by @handle, end-to-end encrypted messages it only passes on"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+ed25519-dalek = "2"
+rand = "0.8"
+base64 = "0.22"
+
+[profile.release]
+opt-level = 3

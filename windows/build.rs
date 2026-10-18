@@ -45,8 +45,31 @@ fn stamp_commit() {
     }
 }
 
+/// The ad-block filter lists, compressed into one blob the exe embeds (filters.bin in OUT_DIR):
+/// each list as a "name", "length" line pair followed by its text, the whole thing deflated.
+fn pack_filters() {
+    let dir = PathBuf::from("assets/filters");
+    println!("cargo:rerun-if-changed=assets/filters");
+    let mut names: Vec<_> = fs::read_dir(&dir).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "txt")).collect()).unwrap_or_default();
+    names.sort();
+    let mut raw = Vec::new();
+    for p in &names {
+        println!("cargo:rerun-if-changed={}", p.display());
+        let text = fs::read(p).unwrap_or_default();
+        let name = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        raw.extend(format!("{name}\n{}\n", text.len()).into_bytes());
+        raw.extend(text);
+    }
+    let packed = miniz_oxide::deflate::compress_to_vec(&raw, 9);
+    // A fingerprint of the lists, so a cached engine built from older lists is rebuilt.
+    let hash = raw.iter().fold(0xcbf29ce484222325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    println!("cargo:rustc-env=ULTRA_FILTERS_HASH={hash:016x}");
+    fs::write(PathBuf::from(env::var("OUT_DIR").unwrap()).join("filters.bin"), packed).unwrap();
+}
+
 fn main() {
     stamp_commit();
+    pack_filters();
     for f in ["assets/ultra.ico", "assets/ultra-inv.ico", "src/edition.rs"] {
         println!("cargo:rerun-if-changed={f}");
     }

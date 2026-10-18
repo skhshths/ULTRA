@@ -19,6 +19,7 @@ mod edition;
 mod identity;
 mod layout;
 mod library;
+mod social;
 mod macos;
 mod privacy;
 mod slideshow;
@@ -132,7 +133,11 @@ enum UserEvent {
     /// A page's WebContent process died: slot (0 = the chrome UI).
     Failed(u64),
     /// "Check for updates" finished: state for settings, and the update to install if any.
-    UpdateChecked(Value, Option<updater::Update>),
+    UpdateChecked(Value, Option<updater::Update>, bool),
+    /// An update finished installing (or failed); true when auto-update did it.
+    UpdateInstalled(Result<PathBuf, String>, bool),
+    /// A frame from the friends & chat server (or the connection's status).
+    Social(Value),
     /// A shortcut or mouse button caught natively: (WKWebView it was aimed at, 0 = none; message).
     Native(usize, String),
     /// The slideshow folder picker closed.
@@ -234,6 +239,12 @@ struct Settings {
     stats: bool,
     /// Ad & tracker blocking.
     block: bool,
+    /// Check for updates now and then and install them by themselves.
+    autoupdate: bool,
+    /// The friends & chat server (ws://host:port/ws).
+    chatserver: String,
+    /// Sites where blocking is switched off (host names).
+    blockoff: Vec<String>,
     theme: String,
     scanlines: bool,
     /// Accent used by the "custom" theme (#rrggbb).
@@ -285,6 +296,9 @@ impl Default for Settings {
             tour: true,
             stats: false,
             block: true,
+            autoupdate: true,
+            chatserver: String::new(),
+            blockoff: Vec::new(),
             theme: "mint".into(),
             scanlines: false,
             accent: "#9fe3d0".into(),
@@ -365,7 +379,8 @@ struct App {
     anim: Option<Anim>,
     /// Rects currently on screen (mid-animation values while animating).
     shown: Vec<(u64, R)>,
-    blocked: Rc<Cell<u64>>,
+    /// What the ad blocker has done (counts, sites switched off).
+    shields: Rc<blocker::Shields>,
     /// Latest (MB, CPU %) per tab id, and process CPU times for deltas.
     pane_stats: HashMap<u64, (f64, f64)>,
     cpu_prev: HashMap<u32, (u64, Instant)>,
@@ -386,8 +401,14 @@ struct App {
     win_focused: bool,
     /// This computer's ULTRA ID, once made.
     me: Option<identity::Identity>,
+    /// Friends & chat (needs an ULTRA ID).
+    social: social::Social,
     /// A newer build found by "check for updates", ready to install.
     update: Option<updater::Update>,
+    /// When the next automatic update check is due.
+    next_update_check: Instant,
+    /// An update installed in the background: the app to restart into (restart now in settings).
+    pending_restart: Option<PathBuf>,
     /// Other browsers found on this computer, offered for importing bookmarks.
     browsers: Vec<(&'static str, &'static str)>,
     /// Settings changed and not yet written (saved shortly after the last change).
@@ -600,6 +621,9 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
     if vk == 0x78 && !ctrl && !shift && !alt {
         return Some("reader".into()); // F9
     }
+    if (vk == 0x70 || vk == 0x71) && !ctrl && !shift && !alt {
+        return Some(if vk == 0x70 { "back" } else { "fwd" }.into()); // F1 / F2
+    }
     if !ctrl {
         return None;
     }
@@ -627,6 +651,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('F')) => "zoom".into(),
         (false, true, None, Some('P')) => "palette".into(),
         (false, true, None, Some('E')) => "mvnew".into(),
+        (false, true, None, Some('C')) => "friends".into(),
         (false, true, None, Some('W')) => "closeat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
         (false, true, None, Some('R')) => "blankat".into(),
@@ -750,7 +775,7 @@ impl App {
         let opened = std::sync::Mutex::new(Vec::new());
         let mut b = WebViewBuilder::new_with_web_context(&mut self.ctx);
         if let Some(u) = url {
-            b = b.with_url(u);
+            b = b.with_url(macos::safe_url(u));
         }
         if let Some(w) = profile.filter(|_| macos::separate_stores()) {
             // A workspace with its own logins: its own persistent WebKit data store (macOS 14+).
@@ -870,7 +895,7 @@ impl App {
         let got = match spare {
             Some((slot, v)) => {
                 let _ = v.set_bounds(bounds);
-                let _ = v.load_url(&url);
+                let _ = v.load_url(&macos::safe_url(&url));
                 Some((slot, v))
             }
             None => {
@@ -925,7 +950,7 @@ impl App {
     fn sleep(&mut self, i: usize) {
         let t = &mut self.tabs[i];
         if let Some(v) = t.view.take() {
-            if let Ok(u) = v.url() {
+            if let Some(u) = macos::url(&v) {
                 if !u.is_empty() && u != "about:blank" {
                     t.url = u;
                 }
@@ -1457,7 +1482,7 @@ impl App {
         } else {
             t.url = url.clone();
             if let Some(v) = &t.view {
-                let _ = v.load_url(&url);
+                let _ = v.load_url(&macos::safe_url(&url));
                 t.loading = true;
             }
         }
@@ -1570,7 +1595,8 @@ impl App {
             "ps": ps,
             "mem": self.total_mb,
             "cpu": self.total_cpu,
-            "blocked": self.blocked.get(),
+            "blocked": self.shields.total.get(),
+            "shield": self.shield_state(),
             "cfg": ui_cfg(&self.cfg),
             "locked": self.locked,
             "gate": self.gate(),
@@ -1586,6 +1612,7 @@ impl App {
             }),
             "max": self.window.is_maximized(),
             "me": self.me,
+            "social": self.social.state(),
             // New-tab shortcuts (or the most visited sites until there are some).
             "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>() },
             "version": updater::version(),
@@ -1607,6 +1634,78 @@ impl App {
     fn layout(&mut self) {
         let _ = self.ui.set_bounds(self.full_rect());
         self.apply_layout(false);
+    }
+
+    /// Ask GitHub for a newer build in the background. `auto`: the periodic check (or auto-update
+    /// just switched on), which installs what it finds by itself.
+    fn check_updates(&mut self, auto: bool) {
+        let token = updater::load_token(&self.data_dir);
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let (state, up) = updater::check(edition::REPO, token);
+            let _ = proxy.send_event(UserEvent::UpdateChecked(state, up, auto));
+        });
+    }
+
+    fn on_update_checked(&mut self, state: Value, up: Option<updater::Update>, auto: bool) {
+        self.update = up.clone();
+        match up {
+            // Auto-update: install it now; the new version starts the next time ULTRA opens.
+            Some(up) if auto && self.cfg.autoupdate && self.pending_restart.is_none() => {
+                let what = state["m"].as_str().unwrap_or("a new version").to_string();
+                let st = json!({ "s": "installing", "m": format!("auto updating · {what}") });
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({st})"));
+                self.toast("auto updating ULTRA…");
+                let proxy = self.proxy.clone();
+                std::thread::spawn(move || {
+                    let _ = proxy.send_event(UserEvent::UpdateInstalled(updater::install(&up), true));
+                });
+            }
+            _ => {
+                // A quiet periodic check doesn't disturb a message the user is looking at.
+                if !(auto && state["s"] != "available") || state["s"] == "uptodate" {
+                    let _ = self.ui.evaluate_script(&format!("ultra.updateState({state})"));
+                }
+            }
+        }
+    }
+
+    /// An update is in place. Asked for: restart into it now. Auto-update: leave the user be; the
+    /// new version starts next time (or straight away with "restart now" in settings).
+    fn on_update_installed(&mut self, exe: PathBuf, auto: bool, flow: &mut ControlFlow) {
+        if auto {
+            self.pending_restart = Some(exe);
+            let st = json!({ "s": "restart", "m": "updated · the new version starts next time you open ULTRA" });
+            let _ = self.ui.evaluate_script(&format!("ultra.updateState({st})"));
+            self.toast("ULTRA updated · it starts with the new version next time (or restart now in settings)");
+            return;
+        }
+        self.restart_into(&exe, flow);
+    }
+
+    /// Hand the session over to the new build: save everything, start it, close.
+    fn restart_into(&mut self, exe: &std::path::Path, flow: &mut ControlFlow) {
+        self.save_settings();
+        self.save_session();
+        if updater::restart(exe) {
+            *flow = ControlFlow::Exit;
+        } else {
+            let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "failed", "m": "updated · restart ULTRA to use the new build" })));
+        }
+    }
+
+    /// Connect friends & chat (again), e.g. after the ULTRA ID is made or the server changes.
+    fn start_social(&mut self) {
+        let proxy = self.proxy.clone();
+        // An address in settings is used on its own; otherwise the internet relay, then the home one.
+        let servers = if self.cfg.chatserver.is_empty() || social::DEFAULT_SERVERS.iter().any(|d| *d == self.cfg.chatserver) {
+            social::DEFAULT_SERVERS.iter().map(|s| s.to_string()).collect()
+        } else {
+            vec![self.cfg.chatserver.clone()]
+        };
+        self.social.start(servers, move |v| {
+            let _ = proxy.send_event(UserEvent::Social(v));
+        });
     }
 
     fn save_session(&self) {
@@ -1634,7 +1733,7 @@ impl App {
                     let url = t
                         .view
                         .as_ref()
-                        .and_then(|v| v.url().ok())
+                        .and_then(macos::url)
                         .filter(|u| !u.is_empty() && u != "about:blank")
                         .unwrap_or_else(|| t.url.clone());
                     (url, t.title.clone())
@@ -1661,6 +1760,10 @@ impl App {
     }
 
     fn tick(&mut self) {
+        if self.cfg.autoupdate && Instant::now() >= self.next_update_check {
+            self.next_update_check = Instant::now() + Duration::from_secs(4 * 3600);
+            self.check_updates(true);
+        }
         let now = Instant::now();
         for i in 0..self.tabs.len() {
             let t = &self.tabs[i];
@@ -1838,11 +1941,16 @@ impl App {
                 self.pane_stats.clear();
                 self.stats_at = Instant::now();
             }
+            "autoupdate" => {
+                self.cfg.autoupdate = v.as_bool().unwrap_or(true);
+                // Switched on: look right away (and say "auto updating" if there's something).
+                if self.cfg.autoupdate {
+                    self.check_updates(true);
+                }
+            }
             "block" => {
                 self.cfg.block = v.as_bool().unwrap_or(true);
-                for view in self.all_views() {
-                    blocker::set_filters(view, self.cfg.block);
-                }
+                self.apply_blocking();
             }
             "theme" => {
                 if let Some(t) = v.as_str().filter(|t| THEMES.contains(t)) {
@@ -2035,11 +2143,37 @@ impl App {
         self.apply_layout(false);
     }
 
+    /// Put the rules on every page (or take them off): the setting, and each page's site switch.
+    fn apply_blocking(&self) {
+        for t in &self.tabs {
+            if let Some(v) = &t.view {
+                blocker::set_filters(v, self.cfg.block && !self.shields.allowed(&t.url));
+            }
+        }
+        for (_, v) in &self.spares {
+            blocker::set_filters(v, self.cfg.block);
+        }
+    }
+
+    /// The address bar's shield: blocked on the focused page, and whether its site is exempt.
+    fn shield_state(&self) -> Value {
+        let t = self.tabs.get(self.cur());
+        let site = t.and_then(|t| library::host(&t.url)).filter(|_| t.is_some_and(|t| t.url.starts_with("http")));
+        json!({
+            "n": t.and_then(|t| t.view.as_ref()).map(|v| self.shields.on_page(macos::id(v))).unwrap_or(0),
+            "site": site,
+            "off": site.as_ref().is_some_and(|h| self.cfg.blockoff.contains(h)),
+            "on": self.cfg.block,
+            "ready": blocker::ready(),
+            "rules": blocker::RULE_COUNT,
+        })
+    }
+
     /// Daily digest bookkeeping: credit time to the page being looked at (focused window,
     /// recent input, a real page, not private) and add newly blocked trackers.
     fn track(&mut self) {
         let now = Instant::now();
-        let b = self.blocked.get();
+        let b = self.shields.total.get();
         if b > self.last_blocked {
             self.lib.add_blocked(b - self.last_blocked);
             self.last_blocked = b;
@@ -2098,7 +2232,7 @@ impl App {
                     .filter_map(|&id| self.idx(id))
                     .map(|i| {
                         let t = &self.tabs[i];
-                        let url = t.view.as_ref().and_then(|v| v.url().ok()).filter(|u| !u.is_empty() && u != "about:blank");
+                        let url = t.view.as_ref().and_then(macos::url).filter(|u| !u.is_empty() && u != "about:blank");
                         (url.unwrap_or_else(|| t.url.clone()), t.title.clone())
                     })
                     .collect();
@@ -2281,7 +2415,7 @@ impl App {
                 t.url = url.to_string();
                 t.title.clear();
                 if let Some(v) = &t.view {
-                    let _ = v.load_url(url);
+                    let _ = v.load_url(&macos::safe_url(url));
                     t.loading = true;
                 }
             }
@@ -2572,7 +2706,7 @@ impl App {
                 let _ = self.ui.focus();
                 let _ = self.ui.evaluate_script("ultra.focusUrl()");
             }
-            "overview" | "settings" | "palette" | "urlpanel" | "downloads" => {
+            "overview" | "settings" | "palette" | "urlpanel" | "downloads" | "friends" => {
                 // These panels cover the content area, so pages are hidden while open.
                 let on = arg.as_bool().unwrap_or(!self.overlay);
                 self.overlay = on;
@@ -2702,6 +2836,7 @@ impl App {
                     Ok(me) => {
                         self.toast(&format!("welcome, {} · your ULTRA ID is ready", me.name));
                         self.me = Some(me);
+                        self.start_social();
                     }
                     Err(e) => {
                         let _ = self.ui.evaluate_script(&format!("ultra.idError({})", json!(e)));
@@ -2709,14 +2844,54 @@ impl App {
                 }
                 self.sync();
             }
+            // Friends & chat, all by @handle.
+            "sadd" => self.social.add(arg.as_str().unwrap_or("")),
+            "saccept" => self.social.accept(arg.as_str().unwrap_or("")),
+            "sdecline" => {
+                self.social.decline(arg.as_str().unwrap_or(""));
+                self.sync();
+            }
+            "sremove" => self.social.remove(arg.as_str().unwrap_or("")),
+            "sopen" => {
+                self.social.open(arg.as_str().map(String::from));
+                self.sync();
+            }
+            "ssend" => {
+                if let Err(e) = self.social.say(arg.as_str().unwrap_or("")) {
+                    self.toast(&e);
+                }
+                self.social.save();
+                self.sync();
+            }
             "idremove" => {
                 identity::remove(&self.data_dir);
                 self.me = None;
+                self.social.stop();
                 self.toast("ULTRA ID removed from this computer");
                 self.sync();
             }
             // Test scripts check the crash log with a deliberate crash (testing builds only).
             "test_panic" if edition::TEST_SWITCHES => panic!("deliberate test crash"),
+            // The shield: switch blocking off (or back on) for the focused page's site, and reload.
+            "blocksite" => {
+                let i = self.cur();
+                let Some(h) = library::host(&self.tabs[i].url).filter(|_| self.tabs[i].url.starts_with("http")) else { return };
+                let off = if let Some(k) = self.cfg.blockoff.iter().position(|x| *x == h) {
+                    self.cfg.blockoff.remove(k);
+                    false
+                } else {
+                    self.cfg.blockoff.push(h.clone());
+                    true
+                };
+                *self.shields.off.borrow_mut() = self.cfg.blockoff.iter().cloned().collect();
+                self.save_settings();
+                self.apply_blocking();
+                if let Some(v) = &self.tabs[i].view {
+                    let _ = v.reload();
+                }
+                self.toast(&if off { format!("blocking off on {h} · reloaded") } else { format!("blocking back on for {h} · reloaded") });
+                self.sync();
+            }
             // Palette "crash log": the file in Explorer / Finder (or a note that there's none).
             "crashlog" => {
                 let log = self.data_dir.join("crash.log");
@@ -2726,18 +2901,39 @@ impl App {
                     self.toast("no crashes recorded");
                 }
             }
-            "update_check" => {
-                let proxy = self.proxy.clone();
-                std::thread::spawn(move || {
-                    let (state, up) = updater::check(edition::REPO, None);
-                    let _ = proxy.send_event(UserEvent::UpdateChecked(state, up));
-                });
-            }
+            "update_check" => self.check_updates(false),
             "update_install" => {
-                // A Mac app bundle is replaced by hand: open the download page.
+                if let Some(up) = self.update.clone() {
+                    let proxy = self.proxy.clone();
+                    std::thread::spawn(move || {
+                        let _ = proxy.send_event(UserEvent::UpdateInstalled(updater::install(&up), false));
+                    });
+                }
+            }
+            // Connect the experimental build to its private repository with a read-only token.
+            "gh_connect" => {
                 let ws = if self.ws == PRIVATE_WS { self.last_ws } else { self.ws };
-                self.open_in(ws, updater::releases_page(edition::REPO));
-                let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "available", "m": "download page opened · unzip it and drag the new app over the old one" })));
+                self.open_in(ws, updater::token_page(edition::REPO));
+                self.command("settings", &json!(false));
+            }
+            "gh_token" => {
+                let t = arg.as_str().unwrap_or("").trim().to_string();
+                let st = if !updater::valid_token(&t) {
+                    json!({ "s": "private", "canauth": true, "m": "that doesn't look like a GitHub token (they start with github_pat_)" })
+                } else if !updater::save_token(&self.data_dir, &t) {
+                    json!({ "s": "private", "canauth": true, "m": "couldn't store the token safely · nothing was saved" })
+                } else {
+                    json!({ "s": "checking", "m": "connected · asking GitHub…" })
+                };
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({st})"));
+                if st["s"] == "checking" {
+                    self.command("update_check", &Value::Null);
+                }
+            }
+            "gh_forget" => {
+                updater::forget_token(&self.data_dir);
+                self.update = None;
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "", "m": "GitHub disconnected · the token was removed from this computer" })));
             }
             "update_page" => {
                 let ws = if self.ws == PRIVATE_WS { self.last_ws } else { self.ws };
@@ -2976,7 +3172,7 @@ impl App {
         if msg == "url" {
             // Never trust a url reported by the page itself (address bar spoofing):
             // ask WebView2 for the real one.
-            if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
+            if let Some(u) = self.tabs[i].view.as_ref().and_then(macos::url) {
                 if !u.is_empty() && u != self.tabs[i].url {
                     self.tabs[i].url = u;
                     self.remember(i);
@@ -3064,6 +3260,12 @@ impl App {
                     *flow = ControlFlow::Exit;
                     return;
                 }
+                if cmd == "update_restart" {
+                    if let Some(exe) = self.pending_restart.clone() {
+                        self.restart_into(&exe, flow);
+                    }
+                    return;
+                }
                 self.command(cmd, &v["arg"]);
             }
             // A message the page's own script posted (untrusted: only the page protocol is accepted;
@@ -3075,7 +3277,7 @@ impl App {
                         self.lib.retitle(&self.tabs[i].url, &title);
                     }
                     self.tabs[i].title = title;
-                    if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
+                    if let Some(u) = self.tabs[i].view.as_ref().and_then(macos::url) {
                         if !u.is_empty() {
                             self.tabs[i].url = u;
                         }
@@ -3086,12 +3288,21 @@ impl App {
             UserEvent::Load(slot, started) => {
                 if let Some(i) = self.idx_slot(slot) {
                     self.tabs[i].loading = started;
+                    // A new page: its blocked count starts over, and a site switched off (or
+                    // back on) in the shield gets the rules taken off (or put back).
+                    if started {
+                        if let Some(v) = &self.tabs[i].view {
+                            self.shields.reset(macos::id(v));
+                            let url = macos::url(v).unwrap_or_default();
+                            blocker::set_filters(v, self.cfg.block && !self.shields.allowed(&url));
+                        }
+                    }
                     if self.glance == Some(self.tabs[i].id) {
                         if let Some(v) = &self.tabs[i].view {
                             let _ = v.evaluate_script("window.__ultraGlance = true;");
                         }
                     }
-                    if let Some(u) = self.tabs[i].view.as_ref().and_then(|v| v.url().ok()) {
+                    if let Some(u) = self.tabs[i].view.as_ref().and_then(macos::url) {
                         if !u.is_empty() && u != "about:blank" {
                             self.tabs[i].url = u;
                         }
@@ -3126,9 +3337,17 @@ impl App {
                 }
             }
             UserEvent::Procs(p) => self.on_procs(p),
-            UserEvent::UpdateChecked(state, up) => {
-                self.update = up;
-                let _ = self.ui.evaluate_script(&format!("ultra.updateState({state})"));
+            UserEvent::Social(v) => {
+                if let social::Effect::Toast(m) = self.social.on_event(&v) {
+                    self.toast(&m);
+                }
+                self.social.save();
+                self.sync();
+            }
+            UserEvent::UpdateChecked(state, up, auto) => self.on_update_checked(state, up, auto),
+            UserEvent::UpdateInstalled(Ok(exe), auto) => self.on_update_installed(exe, auto, flow),
+            UserEvent::UpdateInstalled(Err(m), _) => {
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "failed", "m": m })));
             }
             UserEvent::Slide(data, name) => {
                 self.slide_loading = false;
@@ -3148,11 +3367,7 @@ impl App {
                     self.sync();
                 }
             }
-            UserEvent::RulesReady => {
-                for view in self.all_views() {
-                    blocker::set_filters(view, self.cfg.block);
-                }
-            }
+            UserEvent::RulesReady => self.apply_blocking(),
             UserEvent::DownloadStarted(slot, url, path) => {
                 let private = self.tabs.iter().any(|t| t.slot == slot && t.ws == PRIVATE_WS);
                 self.dls.start(&url, &path, 0, private);
@@ -3226,7 +3441,7 @@ impl App {
             self.command("dir", &json!(d));
         } else if matches!(
             msg,
-            "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat"
+            "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat"
                 | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload"
         ) {
             self.command(msg, &Value::Null);
@@ -3304,9 +3519,13 @@ fn startup_failed(msg: &str) {
 fn main() {
     let bench_mode = std::env::args().any(|a| a == "--bench");
     let data_dir = data_dir();
+    let social_dir = data_dir.clone();
     let _ = fs::create_dir_all(&data_dir);
     // Any panic from here on is written to crash.log before ULTRA goes down.
     crash::install(data_dir.clone(), format!("{} {}", edition::NAME, updater::version()));
+    // Just updated: let the previous ULTRA finish closing, then tidy up after it.
+    updater::wait_for_previous();
+    updater::clean_up();
     let cfg: Settings = fs::read_to_string(data_dir.join("settings.json"))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -3363,8 +3582,9 @@ fn main() {
         .with_html(UI_HTML)
         // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
         .with_initialization_script(format!(
-            "window.__ultraCfg = {}; window.__ultraMac = true;",
+            "window.__ultraCfg = {}; window.__ultraMac = true; window.__ultraNew = {};",
             ui_cfg(&cfg),
+            json!(edition::NEW_HERE),
         ))
         .with_bounds(Rect {
             position: LogicalPosition::new(0.0, 0.0).into(),
@@ -3388,9 +3608,9 @@ fn main() {
             return;
         }
     };
-    let blocked = Rc::new(Cell::new(0));
-    // Before any page exists: lets WebKit report blocked requests to the digest.
-    blocker::install_counter(&ui, blocked.clone());
+    let shields = Rc::new(blocker::Shields::default());
+    // Before any page exists: lets WebKit report blocked requests (per page and for the digest).
+    blocker::install_counter(&ui, shields.clone());
     let prules = proxy.clone();
     blocker::compile(move || {
         let _ = prules.send_event(UserEvent::RulesReady);
@@ -3435,7 +3655,7 @@ fn main() {
         spare_at: Some(now + Duration::from_millis(1500)),
         anim: None,
         shown: Vec::new(),
-        blocked,
+        shields,
         pane_stats: HashMap::new(),
         cpu_prev: HashMap::new(),
         total_mb: 0.0,
@@ -3450,7 +3670,10 @@ fn main() {
         booting: false,
         win_focused: true,
         me: None,
+        social: social::Social::new(&social_dir),
         update: None,
+        next_update_check: Instant::now() + Duration::from_secs(90),
+        pending_restart: None,
         browsers: library::installed_browsers(),
         settings_save_at: None,
         win_normal: None,
@@ -3506,9 +3729,12 @@ fn main() {
     app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
     app.lib = library::Library::load(&app.data_dir);
+    *app.shields.off.borrow_mut() = app.cfg.blockoff.iter().cloned().collect();
     // Copies of other browsers' history left by an interrupted import never linger.
     std::thread::spawn(library::clear_stale_imports);
     app.me = identity::load(&app.data_dir);
+    // Friends & chat: sign in to the server in the background (only with an ULTRA ID).
+    app.start_social();
     app.is_default = macos::is_default();
     app.dls = downloads::Downloads::load(&app.data_dir);
     app.booting = app.cfg.boot && !app.cfg.ultraspeed;

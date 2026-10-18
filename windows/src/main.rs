@@ -23,6 +23,7 @@ mod downloads;
 mod instance;
 mod layout;
 mod library;
+mod social;
 mod privacy;
 mod slideshow;
 mod spectrum;
@@ -46,7 +47,7 @@ use tao::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
     platform::windows::{IconExtWindows, WindowExtWindows},
-    window::{Icon, ResizeDirection, Window, WindowBuilder},
+    window::{Fullscreen, Icon, ResizeDirection, Window, WindowBuilder},
 };
 use webview2_com::{
     AddScriptToExecuteOnDocumentCreatedCompletedHandler,
@@ -63,7 +64,8 @@ use webview2_com::{
         COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
     },
     take_pwstr, AcceleratorKeyPressedEventHandler, BytesReceivedChangedEventHandler, DownloadStartingEventHandler,
-    ProcessFailedEventHandler, StateChangedEventHandler, TrySuspendCompletedHandler,
+    ProcessFailedEventHandler, StateChangedEventHandler, TrySuspendCompletedHandler, CallDevToolsProtocolMethodCompletedHandler,
+    ContainsFullScreenElementChangedEventHandler,
 };
 use windows_core::{Interface, BOOL, HSTRING};
 use wry::{
@@ -122,10 +124,11 @@ const STATS_EVERY: Duration = Duration::from_millis(1500);
 /// Layout animation length and frame pacing.
 const ANIM: Duration = Duration::from_millis(170);
 const FRAME: Duration = Duration::from_millis(8);
-/// The spare webview is rebuilt only after this much quiet, so its creation stall goes unnoticed.
-const SPARE_IDLE: Duration = Duration::from_millis(1200);
+/// A spare webview is built only after this much quiet, so its creation stall (~60 ms) goes
+/// unnoticed. Most spares don't need building at all: tabs put to sleep hand theirs back.
+const SPARE_IDLE: Duration = Duration::from_millis(600);
 /// Pre-built blank webviews kept ready (creating one costs ~80 ms of UI-thread time).
-const SPARES: usize = 2;
+const SPARES: usize = 3;
 /// Must be identical for every webview so they all share one WebView2 environment.
 /// SmartScreen (phishing/malware protection) is deliberately left on.
 const BROWSER_ARGS: &str = "--enable-features=msSmartScreenProtection";
@@ -170,9 +173,13 @@ enum UserEvent {
     /// Download `key` changed state (final file path once known).
     DlState(u64, downloads::State, String),
     /// "Check for updates" finished: state for settings, and the update to install if any.
-    UpdateChecked(Value, Option<updater::Update>),
+    UpdateChecked(Value, Option<updater::Update>, bool),
+    /// A frame from the friends & chat server (or the connection's status).
+    Social(Value),
+    /// A page entered (true) or left (false) fullscreen, e.g. a YouTube video.
+    PageFullscreen(u64, bool),
     /// An update was downloaded and swapped in (the exe to restart from), or failed.
-    UpdateInstalled(Result<PathBuf, String>),
+    UpdateInstalled(Result<PathBuf, String>, bool),
     /// A ULTRA shortcut caught natively in a page's webview: (slot, message).
     Key(u64, String),
     /// A WebView2 process died: (slot, 0 = the chrome UI; failure kind).
@@ -270,6 +277,12 @@ struct Settings {
     stats: bool,
     /// Ad & tracker blocking.
     block: bool,
+    /// Check for updates now and then and install them by themselves.
+    autoupdate: bool,
+    /// The friends & chat server (ws://host:port/ws).
+    chatserver: String,
+    /// Sites where blocking is switched off (host names).
+    blockoff: Vec<String>,
     theme: String,
     scanlines: bool,
     /// Accent used by the "custom" theme (#rrggbb).
@@ -321,6 +334,9 @@ impl Default for Settings {
             tour: true,
             stats: false,
             block: true,
+            autoupdate: true,
+            chatserver: String::new(),
+            blockoff: Vec::new(),
             theme: "mint".into(),
             scanlines: false,
             accent: "#9fe3d0".into(),
@@ -400,7 +416,10 @@ struct App {
     anim: Option<Anim>,
     /// Rects currently on screen (mid-animation values while animating).
     shown: Vec<(u64, R)>,
-    blocked: Rc<Cell<u64>>,
+    /// What the ad blocker has done (counts, sites switched off), shared with every webview.
+    shields: Rc<blocker::Shields>,
+    /// Blocking on (settings), as the webviews' handlers see it.
+    block_on: Rc<Cell<bool>>,
     /// Latest (MB, CPU %) per tab id, and process CPU times for deltas.
     pane_stats: HashMap<u64, (f64, f64)>,
     cpu_prev: HashMap<u32, (u64, Instant)>,
@@ -421,8 +440,16 @@ struct App {
     win_focused: bool,
     /// This computer's ULTRA ID, once made.
     me: Option<identity::Identity>,
+    /// Friends & chat (needs an ULTRA ID).
+    social: social::Social,
+    /// The tab whose page is fullscreen right now: it covers the whole screen, chrome and all.
+    page_full: Option<u64>,
     /// A newer build found by "check for updates", ready to install.
     update: Option<updater::Update>,
+    /// When the next automatic update check is due.
+    next_update_check: Instant,
+    /// An update installed in the background: the app to restart into (restart now in settings).
+    pending_restart: Option<PathBuf>,
     /// Other browsers found on this computer, offered for importing bookmarks.
     browsers: Vec<(&'static str, &'static str)>,
     /// Settings changed and not yet written (saved shortly after the last change).
@@ -639,6 +666,15 @@ fn valid_zap(sel: &str) -> bool {
     !sel.trim().is_empty() && sel.len() <= 300 && !sel.contains(['{', '}', '<', ';', '\n'])
 }
 
+/// Forget a webview's back/forward list (all but the page it's on), so a webview handed from one
+/// tab to another carries nothing over.
+fn reset_history(v: &WebView) {
+    let h = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
+    unsafe {
+        let _ = v.webview().CallDevToolsProtocolMethod(&HSTRING::from("Page.resetNavigationHistory"), &HSTRING::from("{}"), &h);
+    }
+}
+
 /// Freeze a hidden tab's renderer; WebView2 resumes it automatically when shown.
 fn try_suspend(v: &WebView) {
     if let Ok(w) = v.webview().cast::<ICoreWebView2_3>() {
@@ -646,6 +682,26 @@ fn try_suspend(v: &WebView) {
         unsafe {
             let _ = w.TrySuspend(&h);
         }
+    }
+}
+
+/// Tell the event loop when this webview's page enters or leaves fullscreen (a video's
+/// fullscreen button, F11 in a game…). WebView2 only stretches the element over the webview's
+/// own bounds; ULTRA makes that the whole screen.
+fn watch_fullscreen(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
+    let h = ContainsFullScreenElementChangedEventHandler::create(Box::new(move |sender, _| {
+        if let Some(wv) = sender {
+            let mut on = BOOL(0);
+            unsafe {
+                let _ = wv.ContainsFullScreenElement(&mut on);
+            }
+            let _ = proxy.send_event(UserEvent::PageFullscreen(slot, on.as_bool()));
+        }
+        Ok(())
+    }));
+    let mut token = 0i64;
+    unsafe {
+        let _ = v.webview().add_ContainsFullScreenElementChanged(&h, &mut token);
     }
 }
 
@@ -759,6 +815,9 @@ fn window_vk(k: tao::keyboard::KeyCode) -> Option<u32> {
         K::ArrowDown => 0x28,
         K::Tab => 0x09,
         K::Comma => 0xBC,
+        K::F1 => 0x70,
+        K::F2 => 0x71,
+        K::F9 => 0x78,
         _ => return None,
     })
 }
@@ -767,6 +826,9 @@ fn window_vk(k: tao::keyboard::KeyCode) -> Option<u32> {
 fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
     if vk == 0x78 && !ctrl && !shift && !alt {
         return Some("reader".into()); // F9
+    }
+    if (vk == 0x70 || vk == 0x71) && !ctrl && !shift && !alt {
+        return Some(if vk == 0x70 { "back" } else { "fwd" }.into()); // F1 / F2
     }
     if !ctrl {
         return None;
@@ -795,6 +857,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('F')) => "zoom".into(),
         (false, true, None, Some('P')) => "palette".into(),
         (false, true, None, Some('E')) => "mvnew".into(),
+        (false, true, None, Some('C')) => "friends".into(),
         (false, true, None, Some('W')) => "closeat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
         (false, true, None, Some('R')) => "blankat".into(),
@@ -1037,9 +1100,10 @@ impl App {
         match res {
             Ok(v) => {
                 watch_failures(&v, self.proxy.clone(), slot);
+                watch_fullscreen(&v, self.proxy.clone(), slot);
                 watch_keys(&v, self.proxy.clone(), slot);
                 watch_downloads(&v, self.proxy.clone(), slot);
-                blocker::install(&v, self.blocked.clone());
+                blocker::install(&v, slot, self.shields.clone(), self.block_on.clone());
                 if self.cfg.block {
                     blocker::set_filters(&v, true);
                 }
@@ -1067,9 +1131,18 @@ impl App {
         let profile = self.profile_of(self.tabs[i].ws);
         // Spares are default-profile webviews, so private tabs and workspaces with their own
         // logins always get a fresh webview in the right profile.
-        let spare = if private || profile.is_some() { None } else { self.spares.pop() };
+        let spare = if private || profile.is_some() {
+            None
+        } else {
+            // Only a spare already showing its blank page (a reused one may still be leaving the
+            // last tab's page).
+            let blank = |v: &WebView| v.url().is_ok_and(|u| u.is_empty() || u == "about:blank");
+            self.spares.iter().rposition(|(_, v)| blank(v)).map(|k| self.spares.remove(k))
+        };
         let got = match spare {
             Some((slot, v)) => {
+                // A reused webview must not offer the last tab's pages under back/forward.
+                reset_history(&v);
                 let _ = v.set_bounds(bounds);
                 let _ = v.load_url(&url);
                 Some((slot, v))
@@ -1124,14 +1197,29 @@ impl App {
     }
 
     fn sleep(&mut self, i: usize) {
+        // A default-profile webview that isn't frozen goes back to the spare pool as a blank page
+        // rather than being destroyed: waking the next tab then skips starting a new webview and
+        // page process (~0.5 s). Private and per-workspace-profile webviews are never reused.
+        let reuse = self.spares.len() < SPARES
+            && self.tabs[i].ws != PRIVATE_WS
+            && self.profile_of(self.tabs[i].ws).is_none()
+            && !self.tabs[i].suspended;
         let t = &mut self.tabs[i];
+        let slot = t.slot;
         if let Some(v) = t.view.take() {
             if let Ok(u) = v.url() {
                 if !u.is_empty() && u != "about:blank" {
                     t.url = u;
                 }
             }
+            if reuse {
+                let _ = v.set_visible(false);
+                let _ = v.zoom(1.0);
+                let _ = v.load_url("about:blank");
+                self.spares.insert(0, (slot, v));
+            }
         }
+        let t = &mut self.tabs[i];
         t.loading = false;
         t.suspended = false;
         t.slot = 0;
@@ -1217,6 +1305,28 @@ impl App {
         } else {
             self.shown = targets;
         }
+        // A fullscreen page covers the whole window (which is fullscreen too); everything else
+        // hides. A panel opening over it ends fullscreen.
+        if let Some(fid) = self.page_full {
+            let on_screen = self.shown.iter().any(|(x, _)| *x == fid) || self.glance == Some(fid);
+            match self.idx(fid).filter(|_| !hidden && on_screen) {
+                Some(fi) => {
+                    self.anim = None;
+                    let full = self.full_rect();
+                    for (k, t) in self.tabs.iter().enumerate() {
+                        if let Some(v) = &t.view {
+                            if k == fi {
+                                let _ = v.set_bounds(full);
+                                let _ = v.set_visible(true);
+                            } else {
+                                let _ = v.set_visible(false);
+                            }
+                        }
+                    }
+                }
+                None => self.end_page_full(),
+            }
+        }
         // Put the least-recently-used hidden tabs to sleep until we're under budget,
         // never cutting off a tab that is playing audio.
         while self.live_count() > self.cfg.warm + self.shown.len() + usize::from(glance.is_some()) {
@@ -1295,6 +1405,9 @@ impl App {
     fn activate(&mut self, i: usize) {
         // Showing another tab closes any glance (removing it can shift indices, so go by id).
         let Some(id) = self.tabs.get(i).map(|t| t.id) else { return };
+        if self.page_full.is_some_and(|f| f != id) {
+            self.end_page_full();
+        }
         self.drop_glance(Some(id));
         let Some(i) = self.idx(id) else { return };
         let Some((id, ws)) = self.tabs.get(i).map(|t| (t.id, t.ws)) else { return };
@@ -1777,7 +1890,8 @@ impl App {
             "ps": ps,
             "mem": self.total_mb,
             "cpu": self.total_cpu,
-            "blocked": self.blocked.get(),
+            "blocked": self.shields.total.get(),
+            "shield": self.shield_state(),
             "cfg": ui_cfg(&self.cfg),
             "locked": self.locked,
             "gate": self.gate(),
@@ -1793,6 +1907,7 @@ impl App {
             }),
             "max": self.window.is_maximized(),
             "me": self.me,
+            "social": self.social.state(),
             // New-tab shortcuts (or the most visited sites until there are some).
             "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>() },
             "version": updater::version(),
@@ -1812,6 +1927,110 @@ impl App {
     fn layout(&mut self) {
         let _ = self.ui.set_bounds(self.full_rect());
         self.apply_layout(false);
+    }
+
+    /// A page went fullscreen (or came back): the window follows, and the layout puts that page
+    /// over everything (or back in its pane).
+    fn on_page_fullscreen(&mut self, slot: u64, on: bool) {
+        let Some(i) = self.idx_slot(slot) else { return };
+        let id = self.tabs[i].id;
+        if on {
+            let visible = self.shown.iter().any(|(x, _)| *x == id) || self.glance == Some(id);
+            if !visible || self.overlay {
+                return;
+            }
+            self.page_full = Some(id);
+            self.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+            self.apply_layout(false);
+            self.focus_active();
+        } else if self.page_full == Some(id) {
+            self.page_full = None;
+            self.window.set_fullscreen(None);
+            self.layout();
+        }
+    }
+
+    /// Leave page fullscreen from ULTRA's side (switching tabs, opening a panel…): tell the page,
+    /// and put the window back straight away.
+    fn end_page_full(&mut self) {
+        let Some(fid) = self.page_full.take() else { return };
+        if let Some(v) = self.idx(fid).and_then(|i| self.tabs[i].view.as_ref()) {
+            let _ = v.evaluate_script("document.fullscreenElement && document.exitFullscreen().catch(() => {})");
+        }
+        self.window.set_fullscreen(None);
+        let _ = self.ui.set_bounds(self.full_rect());
+    }
+
+    /// Ask GitHub for a newer build in the background. `auto`: the periodic check (or auto-update
+    /// just switched on), which installs what it finds by itself.
+    fn check_updates(&mut self, auto: bool) {
+        let token = updater::load_token(&self.data_dir);
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let (state, up) = updater::check(edition::REPO, token);
+            let _ = proxy.send_event(UserEvent::UpdateChecked(state, up, auto));
+        });
+    }
+
+    fn on_update_checked(&mut self, state: Value, up: Option<updater::Update>, auto: bool) {
+        self.update = up.clone();
+        match up {
+            // Auto-update: install it now; the new version starts the next time ULTRA opens.
+            Some(up) if auto && self.cfg.autoupdate && self.pending_restart.is_none() => {
+                let what = state["m"].as_str().unwrap_or("a new version").to_string();
+                let st = json!({ "s": "installing", "m": format!("auto updating · {what}") });
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({st})"));
+                self.toast("auto updating ULTRA…");
+                let proxy = self.proxy.clone();
+                std::thread::spawn(move || {
+                    let _ = proxy.send_event(UserEvent::UpdateInstalled(updater::install(&up), true));
+                });
+            }
+            _ => {
+                // A quiet periodic check doesn't disturb a message the user is looking at.
+                if !(auto && state["s"] != "available") || state["s"] == "uptodate" {
+                    let _ = self.ui.evaluate_script(&format!("ultra.updateState({state})"));
+                }
+            }
+        }
+    }
+
+    /// An update is in place. Asked for: restart into it now. Auto-update: leave the user be; the
+    /// new version starts next time (or straight away with "restart now" in settings).
+    fn on_update_installed(&mut self, exe: PathBuf, auto: bool, flow: &mut ControlFlow) {
+        if auto {
+            self.pending_restart = Some(exe);
+            let st = json!({ "s": "restart", "m": "updated · the new version starts next time you open ULTRA" });
+            let _ = self.ui.evaluate_script(&format!("ultra.updateState({st})"));
+            self.toast("ULTRA updated · it starts with the new version next time (or restart now in settings)");
+            return;
+        }
+        self.restart_into(&exe, flow);
+    }
+
+    /// Hand the session over to the new build: save everything, start it, close.
+    fn restart_into(&mut self, exe: &std::path::Path, flow: &mut ControlFlow) {
+        self.save_settings();
+        self.save_session();
+        if updater::restart(exe) {
+            *flow = ControlFlow::Exit;
+        } else {
+            let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "failed", "m": "updated · restart ULTRA to use the new build" })));
+        }
+    }
+
+    /// Connect friends & chat (again), e.g. after the ULTRA ID is made or the server changes.
+    fn start_social(&mut self) {
+        let proxy = self.proxy.clone();
+        // An address in settings is used on its own; otherwise the internet relay, then the home one.
+        let servers = if self.cfg.chatserver.is_empty() || social::DEFAULT_SERVERS.iter().any(|d| *d == self.cfg.chatserver) {
+            social::DEFAULT_SERVERS.iter().map(|s| s.to_string()).collect()
+        } else {
+            vec![self.cfg.chatserver.clone()]
+        };
+        self.social.start(servers, move |v| {
+            let _ = proxy.send_event(UserEvent::Social(v));
+        });
     }
 
     fn save_session(&self) {
@@ -1866,6 +2085,10 @@ impl App {
     }
 
     fn tick(&mut self) {
+        if self.cfg.autoupdate && Instant::now() >= self.next_update_check {
+            self.next_update_check = Instant::now() + Duration::from_secs(4 * 3600);
+            self.check_updates(true);
+        }
         let now = Instant::now();
         for i in 0..self.tabs.len() {
             let t = &self.tabs[i];
@@ -2089,8 +2312,16 @@ impl App {
                 self.pane_stats.clear();
                 self.stats_at = Instant::now();
             }
+            "autoupdate" => {
+                self.cfg.autoupdate = v.as_bool().unwrap_or(true);
+                // Switched on: look right away (and say "auto updating" if there's something).
+                if self.cfg.autoupdate {
+                    self.check_updates(true);
+                }
+            }
             "block" => {
                 self.cfg.block = v.as_bool().unwrap_or(true);
+                self.block_on.set(self.cfg.block);
                 for view in self.all_views() {
                     blocker::set_filters(view, self.cfg.block);
                 }
@@ -2290,11 +2521,25 @@ impl App {
         self.apply_layout(false);
     }
 
+    /// The address bar's shield: blocked on the focused page, and whether its site is exempt.
+    fn shield_state(&self) -> Value {
+        let t = self.tabs.get(self.cur());
+        let site = t.and_then(|t| library::host(&t.url)).filter(|_| t.is_some_and(|t| t.url.starts_with("http")));
+        json!({
+            "n": t.map(|t| self.shields.on_page(t.slot)).unwrap_or(0),
+            "site": site,
+            "off": site.as_ref().is_some_and(|h| self.cfg.blockoff.contains(h)),
+            "on": self.cfg.block,
+            "ready": blocker::ready(),
+            "rules": blocker::rules(),
+        })
+    }
+
     /// Daily digest bookkeeping: credit time to the page being looked at (focused window,
     /// recent input, a real page, not private) and add newly blocked trackers.
     fn track(&mut self) {
         let now = Instant::now();
-        let b = self.blocked.get();
+        let b = self.shields.total.get();
         if b > self.last_blocked {
             self.lib.add_blocked(b - self.last_blocked);
             self.last_blocked = b;
@@ -2446,7 +2691,7 @@ impl App {
                 return;
             }
             match msg {
-                "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
+                "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings"
                 | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
                     self.command(msg, &Value::Null)
                 }
@@ -2850,7 +3095,7 @@ impl App {
                 let _ = self.ui.focus();
                 let _ = self.ui.evaluate_script("ultra.focusUrl()");
             }
-            "overview" | "settings" | "palette" | "urlpanel" | "downloads" => {
+            "overview" | "settings" | "palette" | "urlpanel" | "downloads" | "friends" => {
                 // These panels cover the content area, so pages are hidden while open.
                 let on = arg.as_bool().unwrap_or(!self.overlay);
                 self.overlay = on;
@@ -3027,6 +3272,7 @@ impl App {
                     Ok(me) => {
                         self.toast(&format!("welcome, {} · your ULTRA ID is ready", me.name));
                         self.me = Some(me);
+                        self.start_social();
                     }
                     Err(e) => {
                         let _ = self.ui.evaluate_script(&format!("ultra.idError({})", json!(e)));
@@ -3034,14 +3280,53 @@ impl App {
                 }
                 self.sync();
             }
+            // Friends & chat, all by @handle.
+            "sadd" => self.social.add(arg.as_str().unwrap_or("")),
+            "saccept" => self.social.accept(arg.as_str().unwrap_or("")),
+            "sdecline" => {
+                self.social.decline(arg.as_str().unwrap_or(""));
+                self.sync();
+            }
+            "sremove" => self.social.remove(arg.as_str().unwrap_or("")),
+            "sopen" => {
+                self.social.open(arg.as_str().map(String::from));
+                self.sync();
+            }
+            "ssend" => {
+                if let Err(e) = self.social.say(arg.as_str().unwrap_or("")) {
+                    self.toast(&e);
+                }
+                self.social.save();
+                self.sync();
+            }
             "idremove" => {
                 identity::remove(&self.data_dir);
                 self.me = None;
+                self.social.stop();
                 self.toast("ULTRA ID removed from this computer");
                 self.sync();
             }
             // Test scripts check the crash log with a deliberate crash (testing builds only).
             "test_panic" if edition::TEST_SWITCHES => panic!("deliberate test crash"),
+            // The shield: switch blocking off (or back on) for the focused page's site, and reload.
+            "blocksite" => {
+                let i = self.cur();
+                let Some(h) = library::host(&self.tabs[i].url).filter(|_| self.tabs[i].url.starts_with("http")) else { return };
+                let off = if let Some(k) = self.cfg.blockoff.iter().position(|x| *x == h) {
+                    self.cfg.blockoff.remove(k);
+                    false
+                } else {
+                    self.cfg.blockoff.push(h.clone());
+                    true
+                };
+                *self.shields.off.borrow_mut() = self.cfg.blockoff.iter().cloned().collect();
+                self.save_settings();
+                if let Some(v) = &self.tabs[i].view {
+                    let _ = v.reload();
+                }
+                self.toast(&if off { format!("blocking off on {h} · reloaded") } else { format!("blocking back on for {h} · reloaded") });
+                self.sync();
+            }
             // Palette "crash log": the file in Explorer / Finder (or a note that there's none).
             "crashlog" => {
                 let log = self.data_dir.join("crash.log");
@@ -3051,19 +3336,12 @@ impl App {
                     self.toast("no crashes recorded");
                 }
             }
-            "update_check" => {
-                let token = updater::load_token(&self.data_dir);
-                let proxy = self.proxy.clone();
-                std::thread::spawn(move || {
-                    let (state, up) = updater::check(edition::REPO, token);
-                    let _ = proxy.send_event(UserEvent::UpdateChecked(state, up));
-                });
-            }
+            "update_check" => self.check_updates(false),
             "update_install" => {
                 if let Some(up) = self.update.clone() {
                     let proxy = self.proxy.clone();
                     std::thread::spawn(move || {
-                        let _ = proxy.send_event(UserEvent::UpdateInstalled(updater::install(&up)));
+                        let _ = proxy.send_event(UserEvent::UpdateInstalled(updater::install(&up), false));
                     });
                 }
             }
@@ -3419,6 +3697,12 @@ impl App {
                     *flow = ControlFlow::Exit;
                     return;
                 }
+                if cmd == "update_restart" {
+                    if let Some(exe) = self.pending_restart.clone() {
+                        self.restart_into(&exe, flow);
+                    }
+                    return;
+                }
                 self.command(cmd, &v["arg"]);
             }
             // A shortcut caught natively in a page's webview (a real keypress), or a message the
@@ -3440,6 +3724,9 @@ impl App {
                 }
             }
             UserEvent::Load(slot, started) => {
+                if started {
+                    self.shields.reset(slot);
+                }
                 if let Some(i) = self.idx_slot(slot) {
                     self.tabs[i].loading = started;
                     if self.glance == Some(self.tabs[i].id) {
@@ -3487,21 +3774,17 @@ impl App {
                 }
             }
             UserEvent::Procs(p) => self.on_procs(p),
-            UserEvent::UpdateChecked(state, up) => {
-                self.update = up;
-                let _ = self.ui.evaluate_script(&format!("ultra.updateState({state})"));
-            }
-            UserEvent::UpdateInstalled(Ok(exe)) => {
-                // Hand the session over to the new build: save everything, start it, close.
-                self.save_settings();
-                self.save_session();
-                if updater::restart(&exe) {
-                    *flow = ControlFlow::Exit;
-                } else {
-                    let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "failed", "m": "updated · restart ULTRA to use the new build" })));
+            UserEvent::PageFullscreen(slot, on) => self.on_page_fullscreen(slot, on),
+            UserEvent::Social(v) => {
+                if let social::Effect::Toast(m) = self.social.on_event(&v) {
+                    self.toast(&m);
                 }
+                self.social.save();
+                self.sync();
             }
-            UserEvent::UpdateInstalled(Err(m)) => {
+            UserEvent::UpdateChecked(state, up, auto) => self.on_update_checked(state, up, auto),
+            UserEvent::UpdateInstalled(Ok(exe), auto) => self.on_update_installed(exe, auto, flow),
+            UserEvent::UpdateInstalled(Err(m), _) => {
                 let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "failed", "m": m })));
             }
             UserEvent::Open(u) => self.open_external(&u),
@@ -3646,6 +3929,7 @@ fn main() {
     updater::wait_for_previous();
     updater::clean_up();
     let data_dir = data_dir();
+    let social_dir = data_dir.clone();
     let _ = fs::create_dir_all(&data_dir);
     // Any panic from here on is written to crash.log before ULTRA goes down.
     crash::install(data_dir.clone(), format!("{} {}", edition::NAME, updater::version()));
@@ -3716,8 +4000,9 @@ fn main() {
             .with_html(UI_HTML)
             // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
             .with_initialization_script(format!(
-                "window.__ultraCfg = {};",
+                "window.__ultraCfg = {}; window.__ultraNew = {};",
                 ui_cfg(&cfg),
+                json!(edition::NEW_HERE),
             ))
             .with_bounds(Rect {
                 position: LogicalPosition::new(0.0, 0.0).into(),
@@ -3772,7 +4057,8 @@ fn main() {
         spare_at: Some(now + Duration::from_millis(1500)),
         anim: None,
         shown: Vec::new(),
-        blocked: Rc::new(Cell::new(0)),
+        shields: Rc::new(blocker::Shields::default()),
+        block_on: Rc::new(Cell::new(true)),
         pane_stats: HashMap::new(),
         cpu_prev: HashMap::new(),
         total_mb: 0.0,
@@ -3787,7 +4073,11 @@ fn main() {
         booting: false,
         win_focused: true,
         me: None,
+        social: social::Social::new(&social_dir),
+        page_full: None,
         update: None,
+        next_update_check: Instant::now() + Duration::from_secs(90),
+        pending_restart: None,
         browsers: library::installed_browsers(),
         settings_save_at: None,
         start_place: None,
@@ -3841,9 +4131,15 @@ fn main() {
     app.ws = session.cur_ws.min(PRIVATE_WS - 1);
     let ids: Vec<u64> = app.tabs.iter().map(|t| t.id).collect();
     app.lib = library::Library::load(&app.data_dir);
+    // The ad-block engine: from its cache, or built from the bundled lists, off this thread.
+    blocker::load(app.data_dir.clone());
+    app.block_on.set(app.cfg.block);
+    *app.shields.off.borrow_mut() = app.cfg.blockoff.iter().cloned().collect();
     // Copies of other browsers' history left by an interrupted import never linger.
     std::thread::spawn(library::clear_stale_imports);
     app.me = identity::load(&app.data_dir);
+    // Friends & chat: sign in to the server in the background (only with an ULTRA ID).
+    app.start_social();
     app.pending_open = link;
     app.crashed = crash::take_notice(&app.data_dir);
     app.is_default = default_browser::is_default();

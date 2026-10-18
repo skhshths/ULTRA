@@ -17,7 +17,12 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # ULTRA ID: a key pair made on this computer (it will sign in to friends/chat without a password).
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
+# Friends & chat: the server connection, and end-to-end encryption of messages.
+tungstenite = { version = "0.24", features = ["native-tls"] }
+chacha20poly1305 = "0.10"
 libc = "0.2"
+# Unpacks the ad-block rule lists bundled in the app.
+miniz_oxide = "0.8"
 
 # The same objc2 generation wry 0.57 uses, so WKWebView/NSWindow types line up.
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -29,6 +34,12 @@ objc2-web-kit = "0.3"
 objc2-core-foundation = "0.3"
 objc2-core-graphics = "0.3"
 objc2-quartz-core = "0.3"
+
+# Converts the ad-block filter lists into WebKit content rules at build time.
+[build-dependencies]
+adblock = { version = "0.13", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling", "content-blocking"] }
+serde_json = "1"
+miniz_oxide = "0.8"
 
 [profile.release]
 opt-level = 3

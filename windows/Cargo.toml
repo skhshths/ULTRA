@@ -20,6 +20,17 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # ULTRA ID: a key pair made on this computer (it will sign in to friends/chat without a password).
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
+# Friends & chat: the server connection, and end-to-end encryption of messages.
+tungstenite = { version = "0.24", features = ["native-tls"] }
+chacha20poly1305 = "0.10"
+# Ad and tracker blocking: Brave's filter engine (EasyList, EasyPrivacy, uBlock lists). Built
+# multi-threaded so the engine can be prepared off the UI thread.
+adblock = { version = "0.13", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
+# Unpacks the filter lists bundled in the exe.
+miniz_oxide = "0.8"
+
+[build-dependencies]
+miniz_oxide = "0.8"
 
 [profile.release]
 opt-level = 3

@@ -40,6 +40,31 @@ const VK_RBRACKET: u32 = 0xDD;
 /// (WebView2's DefaultBackgroundColor on Windows): #141414.
 const BACKDROP: (f64, f64, f64) = (20.0 / 255.0, 20.0 / 255.0, 20.0 / 255.0);
 
+/// The page address a webview is showing, if it has one. (wry's `url()` panics on a webview
+/// that hasn't loaded anything yet, such as a spare; WebKit's own `URL` is simply nil then.)
+pub fn url(v: &WebView) -> Option<String> {
+    let u = unsafe { v.webview().URL() }?;
+    let s = u.absoluteString()?;
+    Some(s.to_string())
+}
+
+/// An address WebKit's URL parser will always accept: characters older macOS versions reject
+/// (spaces, quotes, braces, non-ASCII…) are percent-encoded. wry panics if the parser says no.
+pub fn safe_url(u: &str) -> String {
+    let mut out = String::with_capacity(u.len());
+    for c in u.chars() {
+        if c.is_ascii_graphic() && !matches!(c, '"' | '<' | '>' | '\\' | '^' | '`' | '{' | '|' | '}') {
+            out.push(c);
+        } else {
+            let mut b = [0u8; 4];
+            for byte in c.encode_utf8(&mut b).bytes() {
+                out.push_str(&format!("%{byte:02X}"));
+            }
+        }
+    }
+    if out.is_empty() { "about:blank".into() } else { out }
+}
+
 /// Pointer identity of a WKWebView, used to tell which pane an event belongs to.
 pub fn id(v: &WebView) -> usize {
     Retained::as_ptr(&v.webview()) as *const WKWebView as usize
@@ -87,6 +112,8 @@ fn vk(e: &NSEvent) -> Option<u32> {
         0x4E => Some(0x6D), // keypad -
         0x60 => Some(VK_F5),
         0x65 => Some(0x78), // F9
+        0x7A => Some(0x70), // F1
+        0x78 => Some(0x71), // F2
         0x6F => Some(VK_F12),
         _ => None,
     };

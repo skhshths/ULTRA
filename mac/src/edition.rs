@@ -15,3 +15,7 @@ pub const INVERT: bool = false;
 pub const REPO: &str = "skhshths/ULTRA";
 /// Developer switches for test scripts (ULTRA_DEVTOOLS_PORT). Never in the public build.
 pub const TEST_SWITCHES: bool = false;
+
+/// What this build has that the public one doesn't yet (listed on the new-tab page). The
+/// public build has nothing extra.
+pub const NEW_HERE: &[&str] = &[];
