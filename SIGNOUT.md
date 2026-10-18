@@ -28,7 +28,7 @@ built-in ad/tracker blocking.
 | Push with | `git push origin main` | `git push experimental experimental:main` |
 | Name / data folder | ULTRA / `%LOCALAPPDATA%\Ultra` | ULTRA Experimental / `%LOCALAPPDATA%\Ultra Experimental` |
 | Windows exe | `ultra.exe` | `ultra-exp.exe` (`[[bin]]` in `windows/Cargo.toml`) |
-| Look | dark UI, normal icon | inverted (light) UI, inverted icon, `EXP` tag |
+| Look | normal icon | same colors as public; only the app icon is inverted, plus an `EXP` tag |
 | Monetization | **none**: no coffee strip, no `SUPPORT_URL` | coffee strip on 5th launch (`SUPPORT_URL` empty for now) |
 | DevTools test switch | off (`TEST_SWITCHES = false`) | on: `ULTRA_DEVTOOLS_PORT=9333` |
 | Release on push | new **food-named** release (`v2-banana`, "ULTRA 2 · Banana") | rolling release; Mac build only for `[mac]` commits |
@@ -220,14 +220,23 @@ platform errors. Mac code is checked by the release workflow.
    coveryourtracks.eff.org, show no protection). Probably the same root cause as #1, plus no
    fingerprinting or third-party-cookie protection. Ask the owner which checks they ran if
    unclear.
-3. **Finish the benchmark write-up.** `tools/bench` harness. Results so far are in the log
-   below; the fixed two-minute series rerun (Neo, ULTRA, ULTRA-awake at 10/25/50) was still
-   running at sign-off. Re-run it with `bench.mjs`; `mem.ps1` now rejects reused process IDs.
+3. **ULTRA crashes with no trace.** Regular ULTRA crashed at 7:48 PM on 2026-10-17 and
+   experimental at 2:02 PM. Both were Rust panics (0xc0000409; a dump is in
+   `%LOCALAPPDATA%\CrashDumps`). Nothing records the panic message.
+   - Add a panic hook that writes the message and a backtrace to `crash.log` in the data
+     folder, on both platforms.
+   - Then find the panic. Look at `unwrap`/`expect`/indexing on the UI thread first.
 4. **Faster waking of sleeping tabs.** The pool of 2 spare webviews only refills after 1.2 s of
    quiet (`SPARES`, `SPARE_IDLE` in `main.rs`). Back-to-back wakes then cost about 0.5–0.65 s
    instead of about 80 ms. Opening many tabs at once is also ~1.7× slower than Neo, for the
    same reason (webview creation per tab).
-5. **Arc cleanup.** The Arc run crashed at 50 tabs and left ~50 "Site N" test tabs in the
+5. **Ctrl+Shift+E on a full grid** (owner report): new tabs reportedly end up hidden behind
+   other tabs.
+   - The `mvnew` guard (no split room → toast, no tab) held in every scripted repro, with the
+     cursor outside the window and over a pane.
+   - Get the exact steps from the owner (zoom on? a glance open? which pane under the cursor?)
+     before changing it.
+6. **Arc cleanup.** The Arc run crashed at 50 tabs and left ~50 "Site N" test tabs in the
    owner's Arc sidebar. Closing them by script crashes Arc after 17 every time, and the state
    rolls back. The owner should use Arc's **Clear** button above the unpinned tabs. Don't
    re-run the Arc benchmark.
@@ -260,12 +269,14 @@ Newest first. Copy the template for your entry.
   `tools/bench/`. Memory is private working set across each browser's processes; tabs are
   local "realistic" pages, each its own site.
 
+  Steady state, 2 minutes after the last tab loaded:
+
   | | 1 tab | 10 tabs | 25 tabs | 50 tabs |
   |---|---|---|---|---|
-  | ULTRA (default; hidden tabs sleep), steady at 2 min | ~270 MB | ~305 MB | ~307 MB | ~319 MB |
-  | ULTRA, all tabs awake, steady at 2 min | ~262 MB | ~417 MB | ~755 MB | ~1.29 GB |
-  | Neo (30 s snapshot) | ~392 MB | ~756 MB | ~1.47 GB (2 min, verified) | ~3.1 GB |
-  | Arc (30 s snapshot) | ~636 MB | ~611 MB | ~1.0 GB | crashed |
+  | ULTRA (default; hidden tabs sleep) | ~270 MB | ~300 MB | ~305 MB | ~320 MB |
+  | ULTRA, all tabs awake | ~262 MB | ~415 MB | ~840 MB | ~1.29 GB |
+  | Neo | ~392 MB | ~815 MB | ~1.49 GB | ~3.09 GB, plus ~10% CPU (about 2.3 cores) that never settled |
+  | Arc (30 s snapshot only) | ~636 MB | ~611 MB | ~1.0 GB | crashed |
 
   - Time until all tabs loaded at 10/25/50 tabs:
     - ULTRA: 1.1 / 3.1 / 6.6 s

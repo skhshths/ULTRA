@@ -1571,7 +1571,7 @@ impl App {
         wss.dedup();
         let ps: HashMap<String, [f64; 2]> =
             self.pane_stats.iter().map(|(id, (m, c))| (id.to_string(), [*m, *c])).collect();
-        let (sc_list, sc_auto) = self.lib.shortcuts_view();
+        let sc_list = self.lib.shortcuts_view();
         let state = json!({
             "tabs": tabs,
             "a": self.cur(),
@@ -1602,7 +1602,7 @@ impl App {
             "max": self.window.is_maximized(),
             "me": self.me,
             // New-tab shortcuts (or the most visited sites until there are some).
-            "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>(), "auto": sc_auto },
+            "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>() },
             "version": updater::version(),
             "browsers": self.browsers,
             "ed": edition::TAG,
@@ -3036,6 +3036,12 @@ impl App {
             (i, id)
         };
         if !self.shown.iter().any(|(x, _)| *x == id) {
+            // A real keypress from a page that has just left the screen (keyboard focus lags a
+            // tab switch or close by a moment): still honour the shortcut, on the layout.
+            if native {
+                self.shortcut_msg(&msg);
+                self.focus_active();
+            }
             return;
         }
         if id != self.focus {
@@ -3381,9 +3387,8 @@ fn main() {
         .with_html(UI_HTML)
         // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
         .with_initialization_script(format!(
-            "window.__ultraCfg = {}; window.__ultraMac = true; window.__ultraInvert = {};",
+            "window.__ultraCfg = {}; window.__ultraMac = true;",
             ui_cfg(&cfg),
-            edition::INVERT
         ))
         .with_bounds(Rect {
             position: LogicalPosition::new(0.0, 0.0).into(),

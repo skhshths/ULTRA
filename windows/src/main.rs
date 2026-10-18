@@ -830,6 +830,11 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
     })
 }
 
+thread_local! {
+    /// When ctrl went down, as seen by the webviews' own key events (cleared on its key-up).
+    static CTRL_DOWN: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
 /// ULTRA's shortcuts, caught natively before the page sees them. Unlike a page script this
 /// works whichever frame has focus (YouTube's player, ad iframes, PDFs, sites that eat keys).
 fn watch_keys(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
@@ -839,14 +844,21 @@ fn watch_keys(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
         let (mut kind, mut vk, mut st) = (COREWEBVIEW2_KEY_EVENT_KIND::default(), 0u32, COREWEBVIEW2_PHYSICAL_KEY_STATUS::default());
         unsafe {
             a.KeyEventKind(&mut kind)?;
-            if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN {
+            a.VirtualKey(&mut vk)?;
+            let pressed = kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN || kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN;
+            if vk == 0x11 {
+                CTRL_DOWN.with(|c| c.set(pressed.then(Instant::now)));
+            }
+            if !pressed {
                 return Ok(());
             }
-            a.VirtualKey(&mut vk)?;
             a.PhysicalKeyStatus(&mut st)?;
             // Physical state: key events are processed in WebView2's process, not this thread.
+            // A quick ctrl+T can let go of ctrl before this runs, so the ctrl press seen in this
+            // same event stream counts too (briefly, in case its key-up never arrives here).
             let down = |k: i32| GetAsyncKeyState(k) < 0;
-            let Some(msg) = shortcut(vk, down(0x11), down(0x10), down(0x12)) else { return Ok(()) };
+            let ctrl = down(0x11) || CTRL_DOWN.with(|c| c.get().is_some_and(|t| t.elapsed() < Duration::from_millis(1500)));
+            let Some(msg) = shortcut(vk, ctrl, down(0x10), down(0x12)) else { return Ok(()) };
             a.SetHandled(true)?;
             // Held keys auto-repeat: act once, except ctrl+tab cycling.
             if st.WasKeyDown.as_bool() && vk != 0x09 {
@@ -1766,7 +1778,7 @@ impl App {
         wss.dedup();
         let ps: HashMap<String, [f64; 2]> =
             self.pane_stats.iter().map(|(id, (m, c))| (id.to_string(), [*m, *c])).collect();
-        let (sc_list, sc_auto) = self.lib.shortcuts_view();
+        let sc_list = self.lib.shortcuts_view();
         let state = json!({
             "tabs": tabs,
             "a": self.cur(),
@@ -1797,7 +1809,7 @@ impl App {
             "max": self.window.is_maximized(),
             "me": self.me,
             // New-tab shortcuts (or the most visited sites until there are some).
-            "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>(), "auto": sc_auto },
+            "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>() },
             "version": updater::version(),
             "browsers": self.browsers,
             "ed": edition::TAG,
@@ -3362,6 +3374,12 @@ impl App {
             (i, id)
         };
         if !self.shown.iter().any(|(x, _)| *x == id) {
+            // A real keypress from a page that has just left the screen (keyboard focus lags a
+            // tab switch or close by a moment): still honour the shortcut, on the layout.
+            if native {
+                self.shortcut_msg(&msg);
+                self.focus_active();
+            }
             return;
         }
         if id != self.focus {
@@ -3696,9 +3714,8 @@ fn main() {
             .with_html(UI_HTML)
             // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
             .with_initialization_script(format!(
-                "window.__ultraCfg = {}; window.__ultraInvert = {};",
+                "window.__ultraCfg = {};",
                 ui_cfg(&cfg),
-                edition::INVERT
             ))
             .with_bounds(Rect {
                 position: LogicalPosition::new(0.0, 0.0).into(),

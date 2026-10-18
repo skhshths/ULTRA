@@ -457,9 +457,6 @@ body.bmbar #bmbar { display: flex; }
 .dlft span { color: var(--dim); transition: color var(--fast); }
 .dlft span:hover { color: var(--acc); }
 
-/* inverted colors (experimental build): the whole chrome flips to light, hues kept; pictures flip back */
-html.inv { filter: invert(1) hue-rotate(180deg); }
-html.inv #bgimg, html.inv img { filter: invert(1) hue-rotate(180deg); }
 
 /* new-tab shortcuts: tiles under the search box */
 .hp .scs { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; max-width: min(660px, 94%); }
@@ -479,7 +476,6 @@ body.noscs .hp .scs { display: none; }
 .sct.add:hover b { color: var(--acc); }
 .scs .scin { width: 230px; height: 30px; align-self: center; background: rgba(12,12,12,.85); border: 1px solid var(--acc-dim); color: var(--fg);
   font: 12px Consolas, monospace; padding: 0 10px; outline: 0; }
-.scs .auto { width: 100%; text-align: center; color: #4a4a4a; font-size: 10px; letter-spacing: .08em; }
 
 /* settings: ULTRA ID */
 .idform { display: flex; gap: 6px; margin-top: 10px; }
@@ -640,8 +636,6 @@ const $ = (s) => document.querySelector(s);
 const send = (cmd, arg) => { try { window.ipc.postMessage(JSON.stringify({ cmd, arg })); } catch (_) {} };
 const CFG0 = window.__ultraCfg || {};
 let S = { tabs: [], a: 0, panes: [], splits: [], live: 0, ws: 0, wss: [0], ps: {}, cfg: CFG0 };
-// The experimental build wears inverted colors (light chrome) so the two builds can't be mixed up.
-if (window.__ultraInvert) document.documentElement.classList.add('inv');
 let ovOn = false, cfgOn = false, palOn = false, dlOn = false, ovSel = 0, ovList = [], splitSig = '', pendingFocus = null, lastWs = 0;
 let SPEED = !!CFG0.ultraspeed;
 document.body.classList.toggle('speed', SPEED);
@@ -1644,10 +1638,10 @@ function shortcutsHTML() {
   const sc = S.sc || { list: [] }, list = sc.list || [];
   const tile = (x) => {
     const h = host(x.u), letter = (x.t || h || '?').replace(/^www\./, '').charAt(0).toUpperCase();
-    return `<div class="sct${sc.auto ? ' auto' : ''}" data-u="${esc(x.u)}" data-t="${esc(x.t || h)}" title="${esc(x.u)}${sc.auto ? '' : ' · right-click to rename or remove'}"><b>${esc(letter)}</b><span>${esc(x.t || h)}</span></div>`;
+    return `<div class="sct" data-u="${esc(x.u)}" data-t="${esc(x.t || h)}" title="${esc(x.u)} · right-click to rename or remove"><b>${esc(letter)}</b><span>${esc(x.t || h)}</span></div>`;
   };
-  const add = list.length < 12 || sc.auto ? '<div class="sct add" title="add a shortcut"><b>+</b><span>add</span></div>' : '';
-  return list.map(tile).join('') + add + (sc.auto && list.length ? '<div class="auto">your most visited sites · right-click one to keep it, or add your own with +</div>' : '');
+  const add = list.length < 12 ? '<div class="sct add" title="add a shortcut"><b>+</b><span>add</span></div>' : '';
+  return list.map(tile).join('') + add;
 }
 panesEl.addEventListener('click', (e) => {
   const scs = e.target.closest('.scs'); if (!scs) return;
@@ -1665,7 +1659,7 @@ panesEl.addEventListener('click', (e) => {
   const tile = e.target.closest('.sct[data-u]');
   if (tile) send('go', [id, tile.dataset.u]);
 });
-// Right-click a shortcut: rename or remove the ones you added; keep a most-visited one.
+// Right-click a shortcut: rename or remove it.
 const scmenu = document.createElement('div');
 scmenu.id = 'scmenu';
 document.body.appendChild(scmenu);
@@ -1675,9 +1669,7 @@ panesEl.addEventListener('contextmenu', (e) => {
   const tile = e.target.closest('.sct[data-u]'); if (!tile) return;
   e.preventDefault();
   scTarget = tile;
-  scmenu.innerHTML = tile.classList.contains('auto')
-    ? '<div data-a="keep">add to my shortcuts</div>'
-    : '<div data-a="rename">rename</div><div data-a="remove" class="bad">remove</div>';
+  scmenu.innerHTML = '<div data-a="rename">rename</div><div data-a="remove" class="bad">remove</div>';
   Object.assign(scmenu.style, { left: Math.min(e.clientX, innerWidth - 170) + 'px', top: Math.min(e.clientY, innerHeight - 80) + 'px' });
   scmenu.classList.add('on');
 });
@@ -1686,7 +1678,6 @@ scmenu.addEventListener('click', (e) => {
   const url = tile.dataset.u;
   hideScMenu();
   if (a.dataset.a === 'remove') send('scrm', url);
-  else if (a.dataset.a === 'keep') send('scadd', url);
   else if (a.dataset.a === 'rename') {
     const span = tile.querySelector('span'), old = tile.dataset.t;
     span.innerHTML = '';

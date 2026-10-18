@@ -9,7 +9,8 @@ pub const DATA_DIR: &str = "Ultra Experimental";
 pub const TAG: &str = "EXP";
 /// Registry name of ULTRA's "web page" file type (default browser).
 pub const PROGID: &str = "ULTRAEXPHTML";
-/// The chrome UI in inverted colors (light), to tell the builds apart at a glance.
+/// The app icon in inverted colors, to tell the builds apart at a glance (the app itself looks
+/// the same as the public one).
 pub const INVERT: bool = true;
 /// GitHub repository whose "latest" release this build updates from.
 pub const REPO: &str = "skhshths/ULTRA-experimental";
