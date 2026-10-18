@@ -149,7 +149,10 @@ pub fn check(repo: &str, token: Option<String>) -> (Value, Option<Update>) {
         "200" => {}
         // A private repository (the experimental build) can't be read without signing in.
         "401" if linked => return (json!({ "s": "private", "linked": true, "canauth": CAN_AUTH, "m": "GitHub didn't accept the saved token (expired?) · connect again below" }), None),
-        "404" if linked => return (json!({ "s": "private", "linked": true, "canauth": CAN_AUTH, "m": "the saved token can't see this repository · make one with ULTRA-experimental picked under repository access" }), None),
+        "404" if linked => {
+            let name = repo.split('/').nth(1).unwrap_or(repo);
+            return (json!({ "s": "private", "linked": true, "canauth": CAN_AUTH, "m": format!("the saved token can't see this repository · make one with {name} picked under repository access") }), None);
+        }
         "404" => {
             let m = if CAN_AUTH { "this build updates from a private GitHub repository · connect once below and updates install by themselves" } else { "updates for this build are on its private GitHub page" };
             return (json!({ "s": "private", "canauth": CAN_AUTH, "m": m, "page": releases_page(repo) }), None);
@@ -277,6 +280,6 @@ mod tests {
         assert!(!valid_token("ghp_short"));
         assert!(!valid_token("github_pat_abc def\"ghi jklmnopqrstuvwxyz0123456789"), "no spaces or quotes");
         assert!(!valid_token("password1234567890123456789012345"));
-        assert!(token_page("skhshths/ULTRA-experimental").contains("&target_name=skhshths&"));
+        assert!(token_page("someone/some-repo").contains("&target_name=someone&"));
     }
 }

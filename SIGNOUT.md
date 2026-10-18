@@ -49,8 +49,8 @@ git config merge.ours.driver true
    experimental, and only when the owner asks for a public release.
 2. **Every push to public `main` is a release.** The workflow names it after the next food in
    alphabetical order: Apple (1), Banana (2), so **Cherry (3)** is next, then Date, Elderberry,
-   Fig, Grape…
-   - Releases so far: ULTRA 1 · Apple and ULTRA 2 · Banana (2026-10-17).
+   Fig, Grape…  (note: the workflow's list is Apple Banana Cherry Dumpling Eclair Fig Gelato…)
+   - Releases so far: ULTRA 1 · Apple, ULTRA 2 · Banana and ULTRA 3 · Cherry (2026-10-17).
    - Don't push trivial commits to public. Batch them.
 3. **Mac builds in experimental cost about 10× the Actions minutes.** Put the literal marker
    (square brackets around the word `mac`) in a commit message **only** after a big batch of
@@ -143,7 +143,8 @@ platform errors. Mac code is checked by the release workflow.
    - no coffee strip or `SUPPORT_URL` code in `main.rs` / `ui.html`, and no "Support prompt"
      section in `BUILDING.md`
    - no `ultra-exp` `[[bin]]` in `Cargo.toml`
-4. Delete `BUGS.md` and `SIGNOUT.md` from public if the merge brought them in.
+4. Delete `BUGS.md`, `SIGNOUT.md` and `tools/bench/` from public if the merge brought them
+   in. Grep for the private repo's name (`ULTRA-experimental`): it must not appear in public.
 5. Build, test, and launch once to check that the public build ignores `ULTRA_DEVTOOLS_PORT`.
 6. Push `origin main`. The workflow creates "ULTRA N · Food". Verify it as in §5.
 
@@ -246,6 +247,17 @@ Newest first. Copy the template for your entry.
 **Verified:** what you tested and how; what you could NOT verify.
 **Left off:** the exact next step, anything half-done, open questions for the owner.
 ```
+
+### 2026-10-17 (late night) — Claude (Opus 5.5)
+**Did:**
+- Fixed typing randomly losing focus: wry gives new web views focus by default, so spares built
+  in the background stole it. Now `.with_focused(false)` in `build_view`. Reproduced before and
+  after with a DevTools test.
+- Shipped everything to public as **ULTRA 3 · Cherry** (merge `fa654cd`).
+- Repo-name text in the GitHub-connect UI is now generic, so public never names the private
+  repo.
+
+**Left off:** §9 to-dos.
 
 ### 2026-10-17 (night) — Claude (Opus 5.5)
 **Did (experimental):**
