@@ -290,7 +290,8 @@ Newest first. Copy the template for your entry.
 - Type-to-search no longer steals single keys on pages with players in iframes or web
   components.
 
-**Global chat:** needs the owner to add `chat.oliverbar.net` to the Pi's Cloudflare tunnel
+**Global chat (live since 2026-10-18):** `chat.oliverbar.net` is in the Pi's Cloudflare tunnel
+(`/etc/cloudflared/config.yml` → `http://localhost:7777`; ULTRA signed in over wss through it). It was set up by the owner adding it to the tunnel
 (sudo): an ingress rule for `http://localhost:7777`, then
 `cloudflared tunnel route dns pi-terminal chat.oliverbar.net`.
 
