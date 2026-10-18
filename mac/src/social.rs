@@ -32,9 +32,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Digest;
 
-/// The relays ULTRA tries, in order, unless settings name one: the owner's Raspberry Pi over
-/// the internet (a Cloudflare Tunnel, TLS), then the same Pi directly on the home network.
-pub const DEFAULT_SERVERS: &[&str] = &["wss://chat.oliverbar.net/ws", "ws://oliverbarnet.local:7777/ws"];
+/// The relay ULTRA signs in to unless settings name another: the owner's Raspberry Pi, reached
+/// through a Cloudflare Tunnel over TLS. ULTRA never talks to a chat server unencrypted (plain
+/// ws:// is allowed only to this computer itself, for testing).
+pub const DEFAULT_SERVERS: &[&str] = &["wss://chat.oliverbar.net/ws"];
 const AUTH_PREFIX: &[u8] = b"ultra-chat-auth-v1:";
 const KEEP: usize = 500;
 const CHATS: &str = "chats.json";
@@ -182,6 +183,10 @@ fn session(dir: &Path, server: &str, rx: &mpsc::Receiver<String>, deliver: &impl
         _ => return Err("the chat server address must start with ws:// or wss://".into()),
     };
     let host = rest.split('/').next().unwrap_or("");
+    let bare = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host).trim_matches(['[', ']']);
+    if port == 80 && !matches!(bare, "127.0.0.1" | "localhost" | "::1") {
+        return Err("chat servers must use an encrypted wss:// address".into());
+    }
     let host = if host.contains(':') { host.to_string() } else { format!("{host}:{port}") };
     let host = host.as_str();
     // A name can resolve to several addresses (IPv6 and IPv4, like a Raspberry Pi's .local name):

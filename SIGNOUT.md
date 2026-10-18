@@ -277,6 +277,26 @@ Newest first. Copy the template for your entry.
 **Left off:** the exact next step, anything half-done, open questions for the owner.
 ```
 
+### 2026-10-18 (late night) — Claude (Opus 5.5)
+**Did (security sweep #2):**
+- Fixed the Windows re-entrancy crash from `crash.log` (`refill_spare` → `build_view` →
+  wry's nested message pump → tao "event handler is re-entrant"). `reentry.rs` holds back
+  messages for tao's "Tao Thread Event Target" window while a webview is built and reposts
+  them afterwards. It couldn't be reproduced on demand (a rare race); watch `crash.log`.
+- Chat is encrypted-only (`wss://`; plain `ws://` only to loopback). Old saved `ws://`
+  settings fall back to the default.
+- The relay listens on 127.0.0.1 only (the tunnel reaches it), with 5 new handles per IP per
+  day (via CF-Connecting-IP from the tunnel), at most 30 pending friend requests per user,
+  `UMask=0077` and the DB set to 600.
+- Updates are checked against GitHub's published SHA-256 per asset.
+- Windows shows a "<host> is full screen · press esc" banner.
+- Auto-update checks at every launch (5 s), then every 4 h.
+
+**Owner's Pi (not ULTRA):** `pi.oliverbar.net` is a public ttyd web shell behind basic auth
+only, and its password is visible in the process list (`ps`). Recommended Cloudflare Access in
+front of it and moving the password out of the command line. Don't repeat the password
+anywhere.
+
 ### 2026-10-18 (night) — Claude (Opus 5.5)
 **Did:**
 - Auto-update (setting, on by default; checks 90 s after launch and every 4 h, installs in the

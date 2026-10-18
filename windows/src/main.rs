@@ -25,6 +25,7 @@ mod layout;
 mod library;
 mod social;
 mod privacy;
+mod reentry;
 mod slideshow;
 mod spectrum;
 mod updater;
@@ -1066,7 +1067,8 @@ impl App {
             // A workspace with its own logins: a separate WebView2 profile in the same engine.
             b = b.with_profile_name(format!("ultra-ws{}", w + 1));
         }
-        let res = b
+        // Built with tao's wake-ups held back (see reentry.rs): creation pumps messages.
+        let res = reentry::building(|| b
             .with_bounds(bounds)
             .with_visible(false)
             // Built in the background (spares, waking tabs): never take keyboard focus, or typing
@@ -1117,7 +1119,7 @@ impl App {
                 }
                 NewWindowResponse::Deny
             })
-            .build_as_child(&self.window);
+            .build_as_child(&self.window));
         match res {
             Ok(v) => {
                 watch_failures(&v, self.proxy.clone(), slot);
@@ -1965,11 +1967,24 @@ impl App {
             self.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
             self.apply_layout(false);
             self.focus_active();
+            // Say whose page took over the screen: a fullscreen page could draw a fake address bar.
+            let host = library::host(&self.tabs[i].url).unwrap_or_else(|| "this page".into());
+            self.notify_fullscreen(&host);
         } else if self.page_full == Some(id) {
             self.page_full = None;
             self.window.set_fullscreen(None);
             self.layout();
         }
+    }
+
+    /// A short banner over the fullscreen page itself (ULTRA's toast is underneath it).
+    fn notify_fullscreen(&self, host: &str) {
+        let Some(v) = self.page_full.and_then(|f| self.idx(f)).and_then(|i| self.tabs[i].view.as_ref()) else { return };
+        let js = format!(
+            "(() => {{ const d = document.createElement('div'); d.textContent = {}; Object.assign(d.style, {{ position: 'fixed', top: '18px', left: '50%', transform: 'translateX(-50%)', zIndex: 2147483647, background: 'rgba(20,20,20,.9)', color: '#eee', font: '13px system-ui, sans-serif', padding: '8px 14px', borderRadius: '6px', pointerEvents: 'none', transition: 'opacity .4s' }}); (document.fullscreenElement || document.body || document.documentElement).appendChild(d); setTimeout(() => d.style.opacity = '0', 2600); setTimeout(() => d.remove(), 3200); }})()",
+            serde_json::to_string(&format!("{host} is full screen · press esc to exit")).unwrap_or_default()
+        );
+        let _ = v.evaluate_script(&js);
     }
 
     /// Leave page fullscreen from ULTRA's side (switching tabs, opening a panel…): tell the page,
@@ -2044,11 +2059,15 @@ impl App {
     /// Connect friends & chat (again), e.g. after the ULTRA ID is made or the server changes.
     fn start_social(&mut self) {
         let proxy = self.proxy.clone();
-        // An address in settings is used on its own; otherwise the internet relay, then the home one.
-        let servers = if self.cfg.chatserver.is_empty() || social::DEFAULT_SERVERS.iter().any(|d| *d == self.cfg.chatserver) {
-            social::DEFAULT_SERVERS.iter().map(|s| s.to_string()).collect()
+        // An encrypted (wss://) address in settings is used on its own (or plain ws:// to this
+        // computer, for testing); anything else, like the unencrypted home address early builds
+        // saved, falls back to the default relay.
+        let saved = self.cfg.chatserver.trim();
+        let usable = saved.starts_with("wss://") || saved.starts_with("ws://127.0.0.1") || saved.starts_with("ws://localhost");
+        let servers = if usable && !social::DEFAULT_SERVERS.contains(&saved) {
+            vec![saved.to_string()]
         } else {
-            vec![self.cfg.chatserver.clone()]
+            social::DEFAULT_SERVERS.iter().map(|s| s.to_string()).collect()
         };
         self.social.start(servers, move |v| {
             let _ = proxy.send_event(UserEvent::Social(v));
@@ -4129,7 +4148,8 @@ fn main() {
         social: social::Social::new(&social_dir),
         page_full: None,
         update: None,
-        next_update_check: Instant::now() + Duration::from_secs(90),
+        // Every launch checks for an update (once the window is up), then every 4 hours.
+        next_update_check: Instant::now() + Duration::from_secs(5),
         pending_restart: None,
         browsers: library::installed_browsers(),
         settings_save_at: None,
@@ -4237,6 +4257,8 @@ fn main() {
     }
     app.apply_layout(false);
 
+    // Before the loop starts: no tao re-entry while webviews are created inside it.
+    reentry::install();
     event_loop.run(move |event, _, flow| {
         match event {
             Event::UserEvent(ev) => {
