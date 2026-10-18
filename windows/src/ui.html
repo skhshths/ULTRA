@@ -1061,7 +1061,7 @@ function renderFr() {
     (so.safety ? `<span title="read this to @${esc(f.handle)} (in person or on a call): if theirs matches, nobody is in the middle" style="font-size:10px">safety code ${esc(so.safety)}</span>` : '') + `<span class="rm" data-rm="${esc(f.handle)}">remove friend</span>`);
   if (f.changed) {
     $('#fr-say').disabled = true;
-    setHTML($('#frmsgs'), `<div class="frempty"><b>@${esc(f.handle)}'s ULTRA ID key changed.</b><br>that happens if they made a new ULTRA ID, or if someone is trying to read your messages.<br>ask them (in person or on a call) before you trust the new key.<br><br><span class="run" data-trust="${esc(f.handle)}">I checked · trust the new key</span></div>`);
+    setHTML($('#frmsgs'), `<div class="frempty"><b>@${esc(f.handle)}'s ULTRA ID key changed.</b><br>that happens if they made a new ULTRA ID, or if someone is trying to read your messages.<br>read them the new key's safety code (in person or on a call) and trust it only if theirs matches:<br><b style="font-size:15px;letter-spacing:.08em">${esc(so.safety)}</b><br><br><span class="run" data-trust="${esc(f.handle)}" data-code="${esc(so.safety)}">it matches · trust the new key</span></div>`);
     frShown = ''; return;
   }
   const box = $('#frmsgs'), msgs = so.msgs || [];
@@ -1088,7 +1088,7 @@ $('#frlist').addEventListener('click', (e) => {
   if (a) send('saccept', a.dataset.acc); else if (d) send('sdecline', d.dataset.dec);
   else if (o) { send('sopen', o.dataset.open); setTimeout(() => $('#fr-say').focus(), 0); }
 });
-$('#frmsgs').addEventListener('click', (e) => { const t = e.target.closest('[data-trust]'); if (t) send('strust', t.dataset.trust); });
+$('#frmsgs').addEventListener('click', (e) => { const t = e.target.closest('[data-trust]'); if (t) send('strust', [t.dataset.trust, t.dataset.code]); });
 $('#frhead').addEventListener('click', (e) => { const r = e.target.closest('[data-rm]'); if (r && confirm(`remove @${r.dataset.rm} from your friends? your chat history with them stays on this computer.`)) send('sremove', r.dataset.rm); });
 for (const id of ['#fr-add', '#fr-say']) $(id).addEventListener('keydown', (e) => {
   e.stopPropagation();

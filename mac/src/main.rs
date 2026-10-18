@@ -2878,7 +2878,9 @@ impl App {
             }
             "sremove" => self.social.remove(arg.as_str().unwrap_or("")),
             "strust" => {
-                self.social.trust(arg.as_str().unwrap_or(""));
+                if !self.social.trust(arg[0].as_str().unwrap_or(""), arg[1].as_str().unwrap_or("")) {
+                    self.toast("the key changed again · compare the new safety code before trusting it");
+                }
                 self.sync();
             }
             "sopen" => {

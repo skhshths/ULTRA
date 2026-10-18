@@ -309,15 +309,20 @@ impl Social {
         }
     }
 
-    /// The user confirmed a friend's new key (e.g. they made a new ULTRA ID): pin it.
-    pub fn trust(&mut self, handle: &str) {
-        if let Some(f) = self.friends.iter_mut().find(|f| f.handle == handle) {
-            if let Some(new) = f.changed.take() {
-                f.key = new.clone();
-                self.pins.insert(handle.to_string(), new);
-                self.save_pins();
-            }
+    /// The user compared the new key's safety code with their friend and confirmed it: pin that
+    /// key, and only if it is still the one whose code they were shown (`code`).
+    pub fn trust(&mut self, handle: &str, code: &str) -> bool {
+        let Some(new) = self.friend(handle).and_then(|f| f.changed.clone()) else { return false };
+        if code.is_empty() || self.safety_code(&new) != code {
+            return false;
         }
+        if let Some(f) = self.friends.iter_mut().find(|f| f.handle == handle) {
+            f.changed = None;
+            f.key = new.clone();
+        }
+        self.pins.insert(handle.to_string(), new);
+        self.save_pins();
+        true
     }
 
     /// A code two friends can read to each other to be sure nobody is in the middle: from both
@@ -530,7 +535,9 @@ impl Social {
             "requests": self.requests.iter().map(|(h, n)| json!({ "handle": h, "name": n })).collect::<Vec<_>>(),
             "sent": self.sent,
             "open": self.open,
-            "safety": self.open.as_ref().and_then(|h| self.friend(h)).map(|f| self.safety_code(&f.key)).unwrap_or_default(),
+            // The code for the key in use; while a key change waits, the code for the *new* key,
+            // which is the one the user is about to verify and trust.
+            "safety": self.open.as_ref().and_then(|h| self.friend(h)).map(|f| self.safety_code(f.changed.as_deref().unwrap_or(&f.key))).unwrap_or_default(),
             "msgs": msgs,
             "unread": self.unread.values().sum::<u32>(),
         })
@@ -560,6 +567,10 @@ mod tests {
         // the relay later claims a different key: it's held back, the pinned one stays in use
         let f = s.checked(&json!({ "handle": "sam", "name": "Sam", "key": "bb22", "online": true }));
         assert_eq!((f.key.as_str(), f.changed.as_deref()), ("aa11", Some("bb22")));
+        // trusting needs the new key's code: a wrong code (e.g. the old key's) pins nothing
+        s.friends = vec![f];
+        assert!(!s.trust("sam", "00000 00000 00000 00000"));
+        assert_eq!(s.friends[0].key, "aa11");
         // and the pin survives a restart
         let mut s2 = Social::new(&dir);
         assert!(s2.checked(&json!({ "handle": "sam", "key": "bb22" })).changed.is_some());
