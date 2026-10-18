@@ -9,8 +9,6 @@ const MAX_HISTORY: usize = 5000;
 const MAX_COMMANDS: usize = 50;
 /// Tiles under the new-tab search box.
 const MAX_SHORTCUTS: usize = 12;
-/// Most-visited sites shown until the user adds shortcuts of their own.
-const AUTO_SHORTCUTS: usize = 6;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Visit {
@@ -207,24 +205,8 @@ impl Library {
 
     /// What the new-tab page shows: the user's shortcuts, or until they add some, the sites
     /// they visit most (one tile per site). The flag says which.
-    pub fn shortcuts_view(&self) -> (Vec<Shortcut>, bool) {
-        if !self.shortcuts.is_empty() {
-            return (self.shortcuts.clone(), false);
-        }
-        let mut sites: Vec<(String, String, u64)> = Vec::new();
-        for v in &self.history {
-            let Some(h) = host(&v.url) else { continue };
-            let score = v.visits as u64;
-            match sites.iter_mut().find(|s| s.0 == h) {
-                Some(s) => s.2 += score,
-                None => {
-                    let origin = v.url.split_once("://").map(|(sch, rest)| format!("{sch}://{}/", rest.split(['/', '?', '#']).next().unwrap_or(""))).unwrap_or_default();
-                    sites.push((h, origin, score));
-                }
-            }
-        }
-        sites.sort_by(|a, b| b.2.cmp(&a.2));
-        (sites.into_iter().take(AUTO_SHORTCUTS).map(|(h, url, _)| Shortcut { url, title: h }).collect(), true)
+    pub fn shortcuts_view(&self) -> Vec<Shortcut> {
+        self.shortcuts.clone()
     }
 
     pub fn is_bookmarked(&self, url: &str) -> bool {
@@ -959,19 +941,14 @@ mod tests {
     }
 
     #[test]
-    fn shortcuts_add_remove_and_fall_back_to_most_visited() {
+    fn shortcuts_add_remove_and_no_suggestions() {
         let mut l = Library::default();
         l.visit("https://github.com/a", "A");
-        l.visit("https://github.com/b", "B");
-        l.visit("https://docs.rs/x", "X");
-        let (auto, is_auto) = l.shortcuts_view();
-        assert!(is_auto);
-        assert_eq!(auto[0], Shortcut { url: "https://github.com/".into(), title: "github.com".into() });
+        assert!(l.shortcuts_view().is_empty(), "history never fills the tiles");
         assert!(l.add_shortcut("https://news.ycombinator.com/", ""));
         assert!(!l.add_shortcut("https://news.ycombinator.com/", "again"), "no duplicates");
         assert!(!l.add_shortcut("javascript:alert(1)", "x"), "web pages only");
-        let (mine, is_auto) = l.shortcuts_view();
-        assert!(!is_auto);
+        let mine = l.shortcuts_view();
         assert_eq!(mine[0].title, "news.ycombinator.com");
         l.remove_shortcut("https://news.ycombinator.com/");
         assert!(l.shortcuts.is_empty());

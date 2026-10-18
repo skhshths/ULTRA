@@ -119,7 +119,7 @@ pub fn sign(dir: &Path, msg: &[u8]) -> Option<Vec<u8>> {
 /// Encrypt the private key for this Windows user (DPAPI). Elsewhere it's stored as is, in a
 /// file only this user can read.
 #[cfg(windows)]
-fn protect(data: &[u8]) -> (Vec<u8>, bool) {
+pub(crate) fn protect(data: &[u8]) -> (Vec<u8>, bool) {
     use windows::Win32::{
         Foundation::{LocalFree, HLOCAL},
         Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB},
@@ -137,7 +137,7 @@ fn protect(data: &[u8]) -> (Vec<u8>, bool) {
 }
 
 #[cfg(windows)]
-fn unprotect(data: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn unprotect(data: &[u8]) -> Option<Vec<u8>> {
     use windows::Win32::{
         Foundation::{LocalFree, HLOCAL},
         Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB},

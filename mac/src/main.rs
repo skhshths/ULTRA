@@ -13,6 +13,7 @@
 
 mod audio;
 mod blocker;
+mod crash;
 mod downloads;
 mod edition;
 mod identity;
@@ -397,6 +398,8 @@ struct App {
     last_ws: usize,
     /// Links macOS handed over before the chrome was ready (opened on "ready").
     pending_open: Vec<String>,
+    /// The last run ended in a crash (said once the chrome is ready).
+    crashed: bool,
     ui_ready: bool,
     /// Whether macOS opens web links in ULTRA (shown in settings).
     is_default: bool,
@@ -630,6 +633,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, false, None, Some('F')) => "focusurl".into(),
         (false, false, None, Some('J')) => "downloads".into(),
         (false, false, None, Some('T')) => "new".into(),
+        (false, false, None, Some('R')) => "reload".into(),
         (false, false, None, Some('W')) => "close".into(),
         (false, false, None, Some('L')) => "focusurl".into(),
         (false, false, None, Some('K')) => "overview".into(),
@@ -769,6 +773,9 @@ impl App {
         let res = b
             .with_bounds(bounds)
             .with_visible(false)
+            // Built in the background (spares, waking tabs): never take keyboard focus, or typing
+            // in the page in front stops mid-word. Focus moves only when a tab is shown.
+            .with_focused(false)
             .with_background_color((20, 20, 20, 255))
             .with_devtools(true)
             .with_user_agent(&self.user_agent)
@@ -1550,7 +1557,7 @@ impl App {
         wss.dedup();
         let ps: HashMap<String, [f64; 2]> =
             self.pane_stats.iter().map(|(id, (m, c))| (id.to_string(), [*m, *c])).collect();
-        let (sc_list, sc_auto) = self.lib.shortcuts_view();
+        let sc_list = self.lib.shortcuts_view();
         let state = json!({
             "tabs": tabs,
             "a": self.cur(),
@@ -1580,7 +1587,7 @@ impl App {
             "max": self.window.is_maximized(),
             "me": self.me,
             // New-tab shortcuts (or the most visited sites until there are some).
-            "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>(), "auto": sc_auto },
+            "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>() },
             "version": updater::version(),
             "browsers": self.browsers,
             "ed": edition::TAG,
@@ -2708,10 +2715,21 @@ impl App {
                 self.toast("ULTRA ID removed from this computer");
                 self.sync();
             }
+            // Test scripts check the crash log with a deliberate crash (testing builds only).
+            "test_panic" if edition::TEST_SWITCHES => panic!("deliberate test crash"),
+            // Palette "crash log": the file in Explorer / Finder (or a note that there's none).
+            "crashlog" => {
+                let log = self.data_dir.join("crash.log");
+                if log.exists() {
+                    downloads::reveal(&log.to_string_lossy());
+                } else {
+                    self.toast("no crashes recorded");
+                }
+            }
             "update_check" => {
                 let proxy = self.proxy.clone();
                 std::thread::spawn(move || {
-                    let (state, up) = updater::check(edition::REPO);
+                    let (state, up) = updater::check(edition::REPO, None);
                     let _ = proxy.send_event(UserEvent::UpdateChecked(state, up));
                 });
             }
@@ -2926,6 +2944,9 @@ impl App {
                 for u in std::mem::take(&mut self.pending_open) {
                     self.open_external(&u);
                 }
+                if std::mem::take(&mut self.crashed) {
+                    self.toast("ULTRA closed unexpectedly last time · what happened is saved in crash.log (palette: crash log)");
+                }
                 self.send_bg_image();
                 if self.slideshow_on() {
                     self.next_slide(Instant::now());
@@ -2995,6 +3016,12 @@ impl App {
             (i, id)
         };
         if !self.shown.iter().any(|(x, _)| *x == id) {
+            // A real keypress from a page that has just left the screen (keyboard focus lags a
+            // tab switch or close by a moment): still honour the shortcut, on the layout.
+            if native {
+                self.shortcut_cmd(&msg);
+                self.focus_active();
+            }
             return;
         }
         if id != self.focus {
@@ -3200,7 +3227,7 @@ impl App {
         } else if matches!(
             msg,
             "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat"
-                | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads"
+                | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload"
         ) {
             self.command(msg, &Value::Null);
         }
@@ -3278,6 +3305,8 @@ fn main() {
     let bench_mode = std::env::args().any(|a| a == "--bench");
     let data_dir = data_dir();
     let _ = fs::create_dir_all(&data_dir);
+    // Any panic from here on is written to crash.log before ULTRA goes down.
+    crash::install(data_dir.clone(), format!("{} {}", edition::NAME, updater::version()));
     let cfg: Settings = fs::read_to_string(data_dir.join("settings.json"))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -3334,9 +3363,8 @@ fn main() {
         .with_html(UI_HTML)
         // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
         .with_initialization_script(format!(
-            "window.__ultraCfg = {}; window.__ultraMac = true; window.__ultraInvert = {};",
+            "window.__ultraCfg = {}; window.__ultraMac = true;",
             ui_cfg(&cfg),
-            edition::INVERT
         ))
         .with_bounds(Rect {
             position: LogicalPosition::new(0.0, 0.0).into(),
@@ -3381,6 +3409,7 @@ fn main() {
     });
 
     let now = Instant::now();
+    let crashed = crash::take_notice(&data_dir);
     let mut app = App {
         window,
         ui,
@@ -3427,6 +3456,7 @@ fn main() {
         win_normal: None,
         last_ws: 0,
         pending_open: Vec::new(),
+        crashed,
         ui_ready: false,
         is_default: false,
         user_agent: macos::safari_user_agent(),

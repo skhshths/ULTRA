@@ -15,6 +15,7 @@
 
 mod audio;
 mod blocker;
+mod crash;
 mod default_browser;
 mod edition;
 mod identity;
@@ -432,6 +433,8 @@ struct App {
     last_ws: usize,
     /// Link ULTRA was started with, opened once the chrome is ready.
     pending_open: Option<String>,
+    /// The last run ended in a crash (said once the chrome is ready).
+    crashed: bool,
     /// Whether Windows opens web links in ULTRA (shown in settings).
     is_default: bool,
     timing: Option<(String, Instant)>,
@@ -798,6 +801,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, false, None, Some('F')) => "focusurl".into(),
         (false, false, None, Some('J')) => "downloads".into(),
         (false, false, None, Some('T')) => "new".into(),
+        (false, false, None, Some('R')) => "reload".into(),
         (false, false, None, Some('W')) => "close".into(),
         (false, false, None, Some('L')) => "focusurl".into(),
         (false, false, None, Some('K')) => "overview".into(),
@@ -809,6 +813,11 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
     })
 }
 
+thread_local! {
+    /// When ctrl went down, as seen by the webviews' own key events (cleared on its key-up).
+    static CTRL_DOWN: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
 /// ULTRA's shortcuts, caught natively before the page sees them. Unlike a page script this
 /// works whichever frame has focus (YouTube's player, ad iframes, PDFs, sites that eat keys).
 fn watch_keys(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
@@ -818,14 +827,21 @@ fn watch_keys(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
         let (mut kind, mut vk, mut st) = (COREWEBVIEW2_KEY_EVENT_KIND::default(), 0u32, COREWEBVIEW2_PHYSICAL_KEY_STATUS::default());
         unsafe {
             a.KeyEventKind(&mut kind)?;
-            if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN {
+            a.VirtualKey(&mut vk)?;
+            let pressed = kind == COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN || kind == COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN;
+            if vk == 0x11 {
+                CTRL_DOWN.with(|c| c.set(pressed.then(Instant::now)));
+            }
+            if !pressed {
                 return Ok(());
             }
-            a.VirtualKey(&mut vk)?;
             a.PhysicalKeyStatus(&mut st)?;
             // Physical state: key events are processed in WebView2's process, not this thread.
+            // A quick ctrl+T can let go of ctrl before this runs, so the ctrl press seen in this
+            // same event stream counts too (briefly, in case its key-up never arrives here).
             let down = |k: i32| GetAsyncKeyState(k) < 0;
-            let Some(msg) = shortcut(vk, down(0x11), down(0x10), down(0x12)) else { return Ok(()) };
+            let ctrl = down(0x11) || CTRL_DOWN.with(|c| c.get().is_some_and(|t| t.elapsed() < Duration::from_millis(1500)));
+            let Some(msg) = shortcut(vk, ctrl, down(0x10), down(0x12)) else { return Ok(()) };
             a.SetHandled(true)?;
             // Held keys auto-repeat: act once, except ctrl+tab cycling.
             if st.WasKeyDown.as_bool() && vk != 0x09 {
@@ -969,6 +985,9 @@ impl App {
         let res = b
             .with_bounds(bounds)
             .with_visible(false)
+            // Built in the background (spares, waking tabs): never take keyboard focus, or typing
+            // in the page in front stops mid-word. Focus moves only when a tab is shown.
+            .with_focused(false)
             .with_background_color((20, 20, 20, 255))
             .with_devtools(true)
             // Private tabs use WebView2's InPrivate profile: nothing reaches disk.
@@ -1745,7 +1764,7 @@ impl App {
         wss.dedup();
         let ps: HashMap<String, [f64; 2]> =
             self.pane_stats.iter().map(|(id, (m, c))| (id.to_string(), [*m, *c])).collect();
-        let (sc_list, sc_auto) = self.lib.shortcuts_view();
+        let sc_list = self.lib.shortcuts_view();
         let state = json!({
             "tabs": tabs,
             "a": self.cur(),
@@ -1775,7 +1794,7 @@ impl App {
             "max": self.window.is_maximized(),
             "me": self.me,
             // New-tab shortcuts (or the most visited sites until there are some).
-            "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>(), "auto": sc_auto },
+            "sc": { "list": sc_list.iter().map(|s| json!({ "u": s.url, "t": s.title })).collect::<Vec<_>>() },
             "version": updater::version(),
             "browsers": self.browsers,
             "ed": edition::TAG,
@@ -2428,7 +2447,7 @@ impl App {
             }
             match msg {
                 "new" | "close" | "next" | "prev" | "reopen" | "focusurl" | "overview" | "settings"
-                | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" => {
+                | "palette" | "mvnew" | "closeat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
                     self.command(msg, &Value::Null)
                 }
                 _ => {}
@@ -3021,10 +3040,22 @@ impl App {
                 self.toast("ULTRA ID removed from this computer");
                 self.sync();
             }
+            // Test scripts check the crash log with a deliberate crash (testing builds only).
+            "test_panic" if edition::TEST_SWITCHES => panic!("deliberate test crash"),
+            // Palette "crash log": the file in Explorer / Finder (or a note that there's none).
+            "crashlog" => {
+                let log = self.data_dir.join("crash.log");
+                if log.exists() {
+                    downloads::reveal(&log.to_string_lossy());
+                } else {
+                    self.toast("no crashes recorded");
+                }
+            }
             "update_check" => {
+                let token = updater::load_token(&self.data_dir);
                 let proxy = self.proxy.clone();
                 std::thread::spawn(move || {
-                    let (state, up) = updater::check(edition::REPO);
+                    let (state, up) = updater::check(edition::REPO, token);
                     let _ = proxy.send_event(UserEvent::UpdateChecked(state, up));
                 });
             }
@@ -3035,6 +3066,31 @@ impl App {
                         let _ = proxy.send_event(UserEvent::UpdateInstalled(updater::install(&up)));
                     });
                 }
+            }
+            // Connect the experimental build to its private repository with a read-only token.
+            "gh_connect" => {
+                let ws = if self.ws == PRIVATE_WS { self.last_ws } else { self.ws };
+                self.open_in(ws, updater::token_page(edition::REPO));
+                self.command("settings", &json!(false));
+            }
+            "gh_token" => {
+                let t = arg.as_str().unwrap_or("").trim().to_string();
+                let st = if !updater::valid_token(&t) {
+                    json!({ "s": "private", "canauth": true, "m": "that doesn't look like a GitHub token (they start with github_pat_)" })
+                } else if !updater::save_token(&self.data_dir, &t) {
+                    json!({ "s": "private", "canauth": true, "m": "couldn't store the token safely · nothing was saved" })
+                } else {
+                    json!({ "s": "checking", "m": "connected · asking GitHub…" })
+                };
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({st})"));
+                if st["s"] == "checking" {
+                    self.command("update_check", &Value::Null);
+                }
+            }
+            "gh_forget" => {
+                updater::forget_token(&self.data_dir);
+                self.update = None;
+                let _ = self.ui.evaluate_script(&format!("ultra.updateState({})", json!({ "s": "", "m": "GitHub disconnected · the token was removed from this computer" })));
             }
             "update_page" => {
                 let ws = if self.ws == PRIVATE_WS { self.last_ws } else { self.ws };
@@ -3252,6 +3308,9 @@ impl App {
                 if let Some(u) = self.pending_open.take() {
                     self.open_external(&u);
                 }
+                if std::mem::take(&mut self.crashed) {
+                    self.toast("ULTRA closed unexpectedly last time · what happened is saved in crash.log (palette: crash log)");
+                }
                 self.send_bg_image();
                 if self.slideshow_on() {
                     self.next_slide(Instant::now());
@@ -3321,6 +3380,12 @@ impl App {
             (i, id)
         };
         if !self.shown.iter().any(|(x, _)| *x == id) {
+            // A real keypress from a page that has just left the screen (keyboard focus lags a
+            // tab switch or close by a moment): still honour the shortcut, on the layout.
+            if native {
+                self.shortcut_msg(&msg);
+                self.focus_active();
+            }
             return;
         }
         if id != self.focus {
@@ -3582,6 +3647,8 @@ fn main() {
     updater::clean_up();
     let data_dir = data_dir();
     let _ = fs::create_dir_all(&data_dir);
+    // Any panic from here on is written to crash.log before ULTRA goes down.
+    crash::install(data_dir.clone(), format!("{} {}", edition::NAME, updater::version()));
     // A link from another app (ULTRA as the default browser), or a plain second launch:
     // if ULTRA is already running, hand it over and leave.
     let link = std::env::args().skip(1).find(|a| !a.starts_with("--")).and_then(|a| default_browser::link_to_url(&a));
@@ -3649,9 +3716,8 @@ fn main() {
             .with_html(UI_HTML)
             // Settings are known before the first paint, so ULTRASPEED never spends a frame on looks.
             .with_initialization_script(format!(
-                "window.__ultraCfg = {}; window.__ultraInvert = {};",
+                "window.__ultraCfg = {};",
                 ui_cfg(&cfg),
-                edition::INVERT
             ))
             .with_bounds(Rect {
                 position: LogicalPosition::new(0.0, 0.0).into(),
@@ -3727,6 +3793,7 @@ fn main() {
         start_place: None,
         last_ws: 0,
         pending_open: None,
+        crashed: false,
         is_default: false,
         timing: None,
         last_blocked: 0,
@@ -3778,6 +3845,7 @@ fn main() {
     std::thread::spawn(library::clear_stale_imports);
     app.me = identity::load(&app.data_dir);
     app.pending_open = link;
+    app.crashed = crash::take_notice(&app.data_dir);
     app.is_default = default_browser::is_default();
     app.dls = downloads::Downloads::load(&app.data_dir);
     app.booting = app.cfg.boot && !app.cfg.ultraspeed;
@@ -3957,9 +4025,10 @@ mod tests {
         assert_eq!(shortcut(k('R'), true, true, false).as_deref(), Some("blankat"));
         assert_eq!(shortcut(k('F'), true, false, false).as_deref(), Some("focusurl"));
         assert_eq!(shortcut(k('J'), true, false, false).as_deref(), Some("downloads"));
-        // Not ours: plain keys, ctrl+c, ctrl+r (reload) pass through.
+        // ctrl+r reloads the tab (ULTRA's own, so it works whatever the page does with keys).
+        assert_eq!(shortcut(k('R'), true, false, false).as_deref(), Some("reload"));
+        // Not ours: plain keys and ctrl+c pass through.
         assert_eq!(shortcut(k('T'), false, false, false), None);
         assert_eq!(shortcut(k('C'), true, false, false), None);
-        assert_eq!(shortcut(k('R'), true, false, false), None);
     }
 }

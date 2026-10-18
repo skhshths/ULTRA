@@ -440,9 +440,6 @@ body.bmbar #bmbar { display: flex; }
 .dlft span { color: var(--dim); transition: color var(--fast); }
 .dlft span:hover { color: var(--acc); }
 
-/* inverted colors (experimental build): the whole chrome flips to light, hues kept; pictures flip back */
-html.inv { filter: invert(1) hue-rotate(180deg); }
-html.inv #bgimg, html.inv img { filter: invert(1) hue-rotate(180deg); }
 
 /* new-tab shortcuts: tiles under the search box */
 .hp .scs { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; max-width: min(660px, 94%); }
@@ -462,7 +459,6 @@ body.noscs .hp .scs { display: none; }
 .sct.add:hover b { color: var(--acc); }
 .scs .scin { width: 230px; height: 30px; align-self: center; background: rgba(12,12,12,.85); border: 1px solid var(--acc-dim); color: var(--fg);
   font: 12px Consolas, monospace; padding: 0 10px; outline: 0; }
-.scs .auto { width: 100%; text-align: center; color: #4a4a4a; font-size: 10px; letter-spacing: .08em; }
 
 /* settings: ULTRA ID */
 .idform { display: flex; gap: 6px; margin-top: 10px; }
@@ -577,7 +573,11 @@ body.noscs .hp .scs { display: none; }
   <div class="keylist" id="keylist"></div>
   <div class="sec">HELP</div>
   <div class="row"><div><div class="name">updates</div><div class="desc"><span id="upd-ver"></span><br><span id="upd-msg">ULTRA updates itself in place: your taskbar pin and shortcuts keep working.</span></div></div>
-    <div class="ctl"><button class="run" id="upd-btn">check for updates</button></div></div>
+    <div class="ctl"><button class="run" id="upd-forget" style="display:none">disconnect GitHub</button><button class="run" id="upd-btn">check for updates</button></div></div>
+  <div class="row idrow" id="upd-gh" style="display:none"><div><div class="name">connect GitHub</div>
+    <div class="desc">1. <b>get a token</b> opens GitHub with a read-only token filled in: under repository access pick <b>this build's repository</b> (the one you were invited to), then generate it.<br>
+    2. paste it here. it stays encrypted on this computer and is only ever sent to GitHub.</div>
+    <div class="idform"><button class="run" id="gh-get">get a token</button><input id="gh-tok" type="password" placeholder="github_pat_…" spellcheck="false" autocomplete="off"><button class="run" id="gh-save">connect</button></div></div></div>
   <div class="row"><div><div class="name">tutorial</div><div class="desc">the tour shows once, the first time ULTRA starts.<br>switch on to see it every time.</div></div>
     <div class="ctl"><button class="run" id="run-tour">run now</button><div class="sw" id="sw-tour"></div></div></div>
   <div class="ft">saved automatically · esc to close</div>
@@ -622,8 +622,6 @@ const $ = (s) => document.querySelector(s);
 const send = (cmd, arg) => { try { window.ipc.postMessage(JSON.stringify({ cmd, arg })); } catch (_) {} };
 const CFG0 = window.__ultraCfg || {};
 let S = { tabs: [], a: 0, panes: [], splits: [], live: 0, ws: 0, wss: [0], ps: {}, cfg: CFG0 };
-// The experimental build wears inverted colors (light chrome) so the two builds can't be mixed up.
-if (window.__ultraInvert) document.documentElement.classList.add('inv');
 let ovOn = false, cfgOn = false, palOn = false, dlOn = false, ovSel = 0, ovList = [], splitSig = '', pendingFocus = null, lastWs = 0;
 let SPEED = !!CFG0.ultraspeed;
 document.body.classList.toggle('speed', SPEED);
@@ -867,16 +865,22 @@ function drawUpd() {
   const st = updState || {};
   setText($('#upd-ver'), S.version ? 'you have ' + S.version : 'development build');
   if (st.m) setText($('#upd-msg'), st.m);
-  const label = { checking: 'checking…', installing: 'updating…', available: window.__ultraMac ? 'download update' : 'update now', private: 'open releases' }[st.s] || 'check for updates';
+  const label = { checking: 'checking…', installing: 'updating…', available: window.__ultraMac ? 'download update' : 'update now', private: st.canauth ? 'check again' : 'open releases' }[st.s] || 'check for updates';
+  $('#upd-gh').style.display = st.s === 'private' && st.canauth ? '' : 'none';
+  $('#upd-forget').style.display = st.linked && st.s !== 'private' ? '' : 'none';
   setText($('#upd-btn'), label);
   $('#upd-btn').disabled = st.s === 'checking' || st.s === 'installing';
 }
 ultra.updateState = (st) => { updState = st; drawUpd(); };
+$('#gh-get').onclick = () => send('gh_connect');
+$('#gh-save').onclick = () => { const t = $('#gh-tok').value.trim(); $('#gh-tok').value = ''; send('gh_token', t); };
+$('#gh-tok').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') $('#gh-save').click(); });
+$('#upd-forget').onclick = () => { if (confirm('remove the GitHub token from this computer?')) send('gh_forget'); };
 function checkUpdates() { ultra.updateState({ s: 'checking', m: 'asking GitHub…' }); send('update_check'); }
 $('#upd-btn').onclick = () => {
   const s = (updState || {}).s;
   if (s === 'available') { ultra.updateState({ s: window.__ultraMac ? 'available' : 'installing', m: window.__ultraMac ? '' : 'downloading the new build… ULTRA restarts by itself once it is in place' }); send('update_install'); }
-  else if (s === 'private') send('update_page');
+  else if (s === 'private' && !(updState || {}).canauth) send('update_page');
   else checkUpdates();
 };
 // ── downloads (ctrl+j): everything downloaded, live progress, open / show in folder ──
@@ -1147,6 +1151,7 @@ const CMDS = [
   { k: 'lock', d: 'lock the private workspace now (ctrl+alt+l)', run: () => send('lock') },
   { k: 'wipe private', d: 'close every private tab', run: () => send('wipe') },
   { k: 'reload', d: 'reload the focused page', run: () => send('reload') },
+  { k: 'crash log', d: 'show the crash log (it stays on this computer)', run: () => send('crashlog') },
   { k: 'reopen', d: 'reopen the last closed tab', run: () => send('reopen') },
   { k: 'devtools', d: 'developer tools for the focused page', run: () => send('devtools') },
   { k: 'theme', a: '<name>', d: Object.keys(THEMES).join(' · '), opts: Object.keys(THEMES), run: (x) => THEMES[x] && send('set', ['theme', x]) },
@@ -1623,10 +1628,10 @@ function shortcutsHTML() {
   const sc = S.sc || { list: [] }, list = sc.list || [];
   const tile = (x) => {
     const h = host(x.u), letter = (x.t || h || '?').replace(/^www\./, '').charAt(0).toUpperCase();
-    return `<div class="sct${sc.auto ? ' auto' : ''}" data-u="${esc(x.u)}" data-t="${esc(x.t || h)}" title="${esc(x.u)}${sc.auto ? '' : ' · right-click to rename or remove'}"><b>${esc(letter)}</b><span>${esc(x.t || h)}</span></div>`;
+    return `<div class="sct" data-u="${esc(x.u)}" data-t="${esc(x.t || h)}" title="${esc(x.u)} · right-click to rename or remove"><b>${esc(letter)}</b><span>${esc(x.t || h)}</span></div>`;
   };
-  const add = list.length < 12 || sc.auto ? '<div class="sct add" title="add a shortcut"><b>+</b><span>add</span></div>' : '';
-  return list.map(tile).join('') + add + (sc.auto && list.length ? '<div class="auto">your most visited sites · right-click one to keep it, or add your own with +</div>' : '');
+  const add = list.length < 12 ? '<div class="sct add" title="add a shortcut"><b>+</b><span>add</span></div>' : '';
+  return list.map(tile).join('') + add;
 }
 panesEl.addEventListener('click', (e) => {
   const scs = e.target.closest('.scs'); if (!scs) return;
@@ -1644,7 +1649,7 @@ panesEl.addEventListener('click', (e) => {
   const tile = e.target.closest('.sct[data-u]');
   if (tile) send('go', [id, tile.dataset.u]);
 });
-// Right-click a shortcut: rename or remove the ones you added; keep a most-visited one.
+// Right-click a shortcut: rename or remove it.
 const scmenu = document.createElement('div');
 scmenu.id = 'scmenu';
 document.body.appendChild(scmenu);
@@ -1654,9 +1659,7 @@ panesEl.addEventListener('contextmenu', (e) => {
   const tile = e.target.closest('.sct[data-u]'); if (!tile) return;
   e.preventDefault();
   scTarget = tile;
-  scmenu.innerHTML = tile.classList.contains('auto')
-    ? '<div data-a="keep">add to my shortcuts</div>'
-    : '<div data-a="rename">rename</div><div data-a="remove" class="bad">remove</div>';
+  scmenu.innerHTML = '<div data-a="rename">rename</div><div data-a="remove" class="bad">remove</div>';
   Object.assign(scmenu.style, { left: Math.min(e.clientX, innerWidth - 170) + 'px', top: Math.min(e.clientY, innerHeight - 80) + 'px' });
   scmenu.classList.add('on');
 });
@@ -1665,7 +1668,6 @@ scmenu.addEventListener('click', (e) => {
   const url = tile.dataset.u;
   hideScMenu();
   if (a.dataset.a === 'remove') send('scrm', url);
-  else if (a.dataset.a === 'keep') send('scadd', url);
   else if (a.dataset.a === 'rename') {
     const span = tile.querySelector('span'), old = tile.dataset.t;
     span.innerHTML = '';
@@ -2176,17 +2178,25 @@ send('ready');
   if (CFG0.boot === false || SPEED) { send('booted'); return; }
   const cv = document.createElement('canvas'); cv.id = 'boot'; document.body.appendChild(cv);
   const g = cv.getContext('2d');
-  const dpr = window.devicePixelRatio || 1, W = innerWidth, H = innerHeight;
-  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
   const lines = $('#logo').content.textContent.split('\n').filter((l) => l.trim());
   const CW = 9, LH = 14, GL = 'abcdef0123456789#$%&*+=<>/\\|';
-  const ox = (W - Math.max(...lines.map((l) => l.length)) * CW) / 2, oy = (H - lines.length * LH) / 2;
+  const cols = Math.max(...lines.map((l) => l.length));
+  // The window often grows right after launch (to its remembered or maximized size), so the
+  // canvas follows the window and every position is worked out from its current size.
+  let W = 0, H = 0;
+  const fit = () => {
+    const dpr = window.devicePixelRatio || 1;
+    if (W === innerWidth && H === innerHeight && cv.width === Math.round(innerWidth * dpr)) return;
+    W = innerWidth; H = innerHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.width = '100%'; cv.style.height = '100%';
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.font = '13px Consolas, "Cascadia Mono", monospace'; g.textBaseline = 'top';
+  };
   const parts = [];
   lines.forEach((l, r) => [...l].forEach((ch, c) => {
     if (ch === ' ') return;
-    const a = Math.random() * Math.PI * 2, d = Math.max(W, H) * (.35 + Math.random() * .4);
-    parts.push({ ch, tx: ox + c * CW, ty: oy + r * LH, sx: W / 2 + Math.cos(a) * d, sy: H / 2 + Math.sin(a) * d, delay: Math.random() * .25 });
+    // where it starts: a direction and a distance as a share of the window, so it scales too
+    parts.push({ ch, c, r, a: Math.random() * Math.PI * 2, d: .35 + Math.random() * .4, delay: Math.random() * .25 });
   }));
   const css = getComputedStyle(document.documentElement);
   const acc = css.getPropertyValue('--acc').trim() || '#9fe3d0', bgc = css.getPropertyValue('--bg').trim() || '#141414';
@@ -2200,18 +2210,20 @@ send('ready');
     removeEventListener('keydown', finish, true); removeEventListener('pointerdown', finish, true);
   };
   addEventListener('keydown', finish, true); addEventListener('pointerdown', finish, true);
-  g.font = '13px Consolas, "Cascadia Mono", monospace'; g.textBaseline = 'top';
   (function frame(now) {
     if (done) return;
+    fit();
     const t = (now - t0) / ASSEMBLE;
+    const ox = (W - cols * CW) / 2, oy = (H - lines.length * LH) / 2, far = Math.max(W, H);
     g.fillStyle = bgc; g.fillRect(0, 0, W, H);
     for (const p of parts) {
+      const tx = ox + p.c * CW, ty = oy + p.r * LH, sx = W / 2 + Math.cos(p.a) * p.d * far, sy = H / 2 + Math.sin(p.a) * p.d * far;
       const k = Math.min(1, Math.max(0, (t - p.delay) / (1 - .25)));
       const e = 1 - Math.pow(1 - k, 3);
       g.globalAlpha = .15 + .85 * e;
       g.fillStyle = k >= 1 ? '#e6e6e6' : acc;
       const ch = k > .8 ? p.ch : GL[(Math.random() * GL.length) | 0];
-      g.fillText(ch, p.sx + (p.tx - p.sx) * e, p.sy + (p.ty - p.sy) * e);
+      g.fillText(ch, sx + (tx - sx) * e, sy + (ty - sy) * e);
     }
     g.globalAlpha = 1;
     if (now - t0 > ASSEMBLE + HOLD) { finish(); return; }
