@@ -23,6 +23,7 @@ use std::{
 };
 
 use axum::{
+    http::HeaderMap,
     extract::{
         ws::{Message, WebSocket},
         ConnectInfo, State, WebSocketUpgrade,
@@ -47,6 +48,10 @@ const MAX_MESSAGE: usize = 24 * 1024;
 const RATE: f64 = 20.0;
 /// Undelivered messages kept per recipient.
 const MAX_QUEUED: i64 = 2000;
+/// New handles one internet address may claim per day (against handle squatting).
+const SIGNUPS_PER_DAY: usize = 5;
+/// Friend requests one person may have waiting at once (against request spam).
+const MAX_PENDING: i64 = 30;
 /// What a client signs with its ID key to sign in: this prefix, then the server's nonce.
 const AUTH_PREFIX: &[u8] = b"ultra-chat-auth-v1:";
 
@@ -57,6 +62,8 @@ struct Hub {
     /// Signed-in connections per handle (one person can have several ULTRAs open).
     online: Mutex<HashMap<String, Vec<(u64, Tx)>>>,
     next: Mutex<u64>,
+    /// Recent new-handle sign-ups per client address.
+    signups: Mutex<HashMap<String, Vec<Instant>>>,
 }
 
 fn now() -> i64 {
@@ -149,7 +156,7 @@ impl Hub {
 }
 
 /// Verify a sign-in: the key signs AUTH_PREFIX + nonce; a new handle is claimed for that key.
-fn sign_in(hub: &Hub, v: &Value, nonce: &[u8]) -> Result<(String, String), String> {
+fn sign_in(hub: &Hub, v: &Value, nonce: &[u8], ip: &str) -> Result<(String, String), String> {
     let handle = v["handle"].as_str().unwrap_or("").trim_start_matches('@').to_lowercase();
     let name = clean_name(v["name"].as_str().unwrap_or(""));
     let key_hex = v["key"].as_str().unwrap_or("").to_lowercase();
@@ -174,6 +181,15 @@ fn sign_in(hub: &Hub, v: &Value, nonce: &[u8]) -> Result<(String, String), Strin
             let other: Option<String> = db.query_row("SELECT handle FROM users WHERE key = ?1", [&key_hex], |r| r.get(0)).optional().map_err(|e| e.to_string())?;
             if let Some(o) = other {
                 return Err(format!("this ULTRA ID is already @{o}"));
+            }
+            {
+                let mut ups = hub.signups.lock().unwrap();
+                let list = ups.entry(ip.to_string()).or_default();
+                list.retain(|t| t.elapsed() < Duration::from_secs(24 * 3600));
+                if list.len() >= SIGNUPS_PER_DAY {
+                    return Err("too many new handles from this connection today · try again tomorrow".into());
+                }
+                list.push(Instant::now());
             }
             db.execute("INSERT INTO users (handle, name, key, created, seen) VALUES (?1, ?2, ?3, ?4, ?4)", params![handle, name, key_hex, now()]).map_err(|e| e.to_string())?;
         }
@@ -204,6 +220,10 @@ fn handle_msg(hub: &Hub, me: &str, v: &Value) -> Option<Value> {
                 drop(db);
                 hub.send_to(&other, &json!({ "t": "friend", "friend": hub.friend_json(me) }));
                 return Some(json!({ "t": "friend", "friend": hub.friend_json(&other) }));
+            }
+            let pending: i64 = db.query_row("SELECT COUNT(*) FROM requests WHERE src = ?1", [me], |r| r.get(0)).unwrap_or(0);
+            if pending >= MAX_PENDING {
+                return err("you have too many friend requests waiting · cancel some first");
             }
             let _ = db.execute("INSERT OR IGNORE INTO requests VALUES (?1, ?2, ?3)", params![me, other, now()]);
             let my_name: String = db.query_row("SELECT name FROM users WHERE handle = ?1", [me], |r| r.get(0)).unwrap_or_default();
@@ -268,11 +288,17 @@ fn handle_msg(hub: &Hub, me: &str, v: &Value) -> Option<Value> {
     }
 }
 
-async fn ws(upgrade: WebSocketUpgrade, ConnectInfo(addr): ConnectInfo<SocketAddr>, State(hub): State<Arc<Hub>>) -> impl IntoResponse {
-    upgrade.max_message_size(MAX_FRAME).on_upgrade(move |socket| client(socket, addr, hub))
+async fn ws(upgrade: WebSocketUpgrade, headers: HeaderMap, ConnectInfo(addr): ConnectInfo<SocketAddr>, State(hub): State<Arc<Hub>>) -> impl IntoResponse {
+    // Behind the Cloudflare tunnel every connection comes from this machine; Cloudflare passes the
+    // visitor's own address along (only trusted for local connections, i.e. from the tunnel).
+    let ip = match headers.get("cf-connecting-ip").and_then(|h| h.to_str().ok()) {
+        Some(cf) if addr.ip().is_loopback() => cf.to_string(),
+        _ => addr.ip().to_string(),
+    };
+    upgrade.max_message_size(MAX_FRAME).on_upgrade(move |socket| client(socket, ip, hub))
 }
 
-async fn client(socket: WebSocket, addr: SocketAddr, hub: Arc<Hub>) {
+async fn client(socket: WebSocket, ip: String, hub: Arc<Hub>) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     // Writer: everything for this client goes through one channel.
@@ -316,7 +342,7 @@ async fn client(socket: WebSocket, addr: SocketAddr, hub: Arc<Hub>) {
                 if v["t"] != "auth" {
                     continue;
                 }
-                match sign_in(&hub, &v, &nonce) {
+                match sign_in(&hub, &v, &nonce, &ip) {
                     Ok((handle, name)) => {
                         let first = !hub.is_online(&handle);
                         hub.online.lock().unwrap().entry(handle.clone()).or_default().push((conn_id, tx.clone()));
@@ -329,7 +355,7 @@ async fn client(socket: WebSocket, addr: SocketAddr, hub: Arc<Hub>) {
                         if first {
                             hub.announce(&handle, true);
                         }
-                        println!("{addr} signed in as @{handle}");
+                        println!("{ip} signed in as @{handle}");
                         me = Some(handle);
                     }
                     Err(m) => {
@@ -367,16 +393,15 @@ async fn client(socket: WebSocket, addr: SocketAddr, hub: Arc<Hub>) {
 async fn main() {
     let dir = std::env::var_os("ULTRA_SERVER_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
     let port: u16 = std::env::var("ULTRA_SERVER_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7777);
-    let hub = Arc::new(Hub { db: Mutex::new(open_db(&dir.join("ultra.db"))), online: Mutex::new(HashMap::new()), next: Mutex::new(0) });
+    let hub = Arc::new(Hub { db: Mutex::new(open_db(&dir.join("ultra.db"))), online: Mutex::new(HashMap::new()), next: Mutex::new(0), signups: Mutex::new(HashMap::new()) });
     let app = Router::new()
         .route("/ws", get(ws))
         .route("/", get(|| async { "ULTRA friends & chat relay\n" }))
         .with_state(hub);
-    // "::" takes IPv6 and (on Linux, dual-stack) IPv4 too; fall back to IPv4 only if IPv6 is off.
-    let listener = match tokio::net::TcpListener::bind(("::", port)).await {
-        Ok(l) => l,
-        Err(_) => tokio::net::TcpListener::bind(("0.0.0.0", port)).await.expect("bind"),
-    };
+    // Only this machine by default: clients come in through the Cloudflare tunnel (TLS), so the
+    // relay never speaks unencrypted on the network. ULTRA_SERVER_BIND=:: opens it up (testing).
+    let bind = std::env::var("ULTRA_SERVER_BIND").unwrap_or_else(|_| "127.0.0.1".into());
+    let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await.expect("bind");
     println!("ULTRA relay listening on port {port}");
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.expect("serve");
 }

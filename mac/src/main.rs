@@ -1697,11 +1697,15 @@ impl App {
     /// Connect friends & chat (again), e.g. after the ULTRA ID is made or the server changes.
     fn start_social(&mut self) {
         let proxy = self.proxy.clone();
-        // An address in settings is used on its own; otherwise the internet relay, then the home one.
-        let servers = if self.cfg.chatserver.is_empty() || social::DEFAULT_SERVERS.iter().any(|d| *d == self.cfg.chatserver) {
-            social::DEFAULT_SERVERS.iter().map(|s| s.to_string()).collect()
+        // An encrypted (wss://) address in settings is used on its own (or plain ws:// to this
+        // computer, for testing); anything else, like the unencrypted home address early builds
+        // saved, falls back to the default relay.
+        let saved = self.cfg.chatserver.trim();
+        let usable = saved.starts_with("wss://") || saved.starts_with("ws://127.0.0.1") || saved.starts_with("ws://localhost");
+        let servers = if usable && !social::DEFAULT_SERVERS.contains(&saved) {
+            vec![saved.to_string()]
         } else {
-            vec![self.cfg.chatserver.clone()]
+            social::DEFAULT_SERVERS.iter().map(|s| s.to_string()).collect()
         };
         self.social.start(servers, move |v| {
             let _ = proxy.send_event(UserEvent::Social(v));
@@ -3678,7 +3682,8 @@ fn main() {
         me: None,
         social: social::Social::new(&social_dir),
         update: None,
-        next_update_check: Instant::now() + Duration::from_secs(90),
+        // Every launch checks for an update (once the window is up), then every 4 hours.
+        next_update_check: Instant::now() + Duration::from_secs(5),
         pending_restart: None,
         browsers: library::installed_browsers(),
         settings_save_at: None,

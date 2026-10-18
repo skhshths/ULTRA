@@ -51,6 +51,18 @@ pub struct Update {
     pub size: u64,
     /// The GitHub token for a private repository's download.
     token: Option<String>,
+    /// The file's SHA-256 as GitHub published it (hex), checked after downloading.
+    sha256: Option<String>,
+}
+
+/// Does the downloaded file match the checksum GitHub published for it? (No published checksum:
+/// older releases; the size and file-type checks still apply.)
+fn checksum_ok(path: &Path, expected: Option<&str>) -> bool {
+    use sha2::Digest;
+    let Some(want) = expected else { return true };
+    let Ok(bytes) = std::fs::read(path) else { return false };
+    let got: String = sha2::Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    got.eq_ignore_ascii_case(want)
 }
 
 /// The saved GitHub token, encrypted for this Windows user.
@@ -198,7 +210,8 @@ pub fn check(repo: &str, token: Option<String>) -> (Value, Option<Update>) {
         (Some(_), Some(id)) => format!("https://api.github.com/repos/{repo}/releases/assets/{id}"),
         _ => asset["browser_download_url"].as_str().unwrap_or("").to_string(),
     };
-    let up = Update { url, size: asset["size"].as_u64().unwrap_or(0), token };
+    let sha256 = asset["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).map(str::to_string);
+    let up = Update { url, size: asset["size"].as_u64().unwrap_or(0), token, sha256 };
     // Only ever download from this repository's own releases, over HTTPS.
     let ours = [format!("https://github.com/{repo}/releases/download/"), format!("https://api.github.com/repos/{repo}/releases/assets/")];
     if !ours.iter().any(|p| up.url.starts_with(p.as_str())) || up.size == 0 {
@@ -240,6 +253,9 @@ pub fn install(up: &Update) -> Result<PathBuf, String> {
     let head = std::fs::read(&new).map(|b| (b.len() as u64, b.get(..2) == Some(b"MZ"))).unwrap_or((0, false));
     if head.0 == 0 || (up.size > 0 && head.0 != up.size) || !head.1 {
         return fail("the download looks damaged · nothing was changed");
+    }
+    if !checksum_ok(&new, up.sha256.as_deref()) {
+        return fail("the download doesn't match GitHub's checksum · nothing was changed");
     }
     // Swap: the running exe steps aside (allowed while running), the new one takes its name.
     let _ = std::fs::remove_file(&old);
@@ -318,6 +334,9 @@ pub fn install(up: &Update) -> Result<PathBuf, String> {
     if head.0 == 0 || (up.size > 0 && head.0 != up.size) || !head.1 {
         return fail("the download looks damaged · nothing was changed".into());
     }
+    if !checksum_ok(&zip, up.sha256.as_deref()) {
+        return fail("the download doesn't match GitHub's checksum · nothing was changed".into());
+    }
     let unpacked = std::process::Command::new("/usr/bin/ditto").args(["-x", "-k"]).arg(&zip).arg(&work).status();
     if !unpacked.is_ok_and(|s| s.success()) {
         return fail("couldn't unpack the update · nothing was changed".into());
@@ -375,6 +394,16 @@ mod tests {
         assert_eq!(sibling(exe, "old"), Path::new(r"C:\Apps\ULTRA\ultra-exp.old.exe"));
         assert_eq!(short("0123456789abcdef"), "0123456");
         assert_eq!(short("ab"), "ab");
+    }
+
+    #[test]
+    fn checksums() {
+        let f = std::env::temp_dir().join(format!("ultra-sum-{}", std::process::id()));
+        std::fs::write(&f, b"hello").unwrap();
+        assert!(checksum_ok(&f, Some("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")));
+        assert!(!checksum_ok(&f, Some("00f24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")));
+        assert!(checksum_ok(&f, None));
+        let _ = std::fs::remove_file(&f);
     }
 
     #[test]
