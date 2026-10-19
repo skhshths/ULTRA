@@ -9,6 +9,10 @@ friends. Each message is deleted as soon as the recipient's ULTRA confirms it ar
   sign-in with a handle claims it for that key.
 - **Limits:** 20 frames/s per connection, 24 KB per message, 2,000 waiting messages per person.
 - **Data:** `ultra.db` (SQLite): users, friends, pending requests, undelivered messages.
+- **Deleting an ID:** `{"t":"delete","confirm":"<own handle>"}` removes the user, their
+  friendships, requests and queued messages; friends get `removed`, and the handle is free again.
+- **Privacy:** no per-connection logging. IP addresses are used only for the sign-up limit, in
+  memory, for up to a day (see PRIVACY.md).
 
 ## Running
 

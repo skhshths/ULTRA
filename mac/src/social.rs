@@ -90,6 +90,8 @@ pub enum Effect {
     None,
     /// Tell the user something (a message arrived, a request, a problem).
     Toast(String),
+    /// The relay deleted this ULTRA ID: forget it here too.
+    Deleted,
 }
 
 mod base64_lite {
@@ -361,6 +363,24 @@ impl Social {
     pub fn remove(&mut self, handle: &str) {
         self.send(json!({ "t": "remove", "handle": handle }));
     }
+    /// Ask the relay to delete this ULTRA ID and everything it holds about it (handle, friends,
+    /// requests, waiting messages). False when not signed in, so nothing could be asked.
+    pub fn delete_account(&mut self) -> bool {
+        let Some(me) = self.me.clone().filter(|_| self.status == "online") else { return false };
+        self.send(json!({ "t": "delete", "confirm": me }));
+        true
+    }
+    /// Forget every chat, pinned key and friend on this computer (after the ID is deleted).
+    pub fn wipe(&mut self) {
+        self.stop();
+        self.chats.clear();
+        self.pins.clear();
+        self.unread.clear();
+        self.open = None;
+        self.dirty = false;
+        let _ = std::fs::remove_file(self.dir.join(CHATS));
+        let _ = std::fs::remove_file(self.dir.join(PINS));
+    }
     /// Show a conversation (marks it read).
     pub fn open(&mut self, handle: Option<String>) {
         if let Some(h) = &handle {
@@ -484,6 +504,7 @@ impl Social {
                     self.open = None;
                 }
             }
+            "deleted" => return Effect::Deleted,
             "presence" => {
                 let who = h("handle");
                 if let Some(f) = self.friends.iter_mut().find(|f| f.handle == who) {

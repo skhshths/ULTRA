@@ -106,11 +106,21 @@ When ULTRA opens, a short tour walks you through everything. You can replay it a
 ## Your data and privacy
 
 Everything ULTRA remembers (settings, open tabs, history, bookmarks) stays on your computer:
-in `%LOCALAPPDATA%\Ultra` on Windows, or `~/Library/Application Support/Ultra` on a Mac. Nothing
-is sent anywhere. Settings → Privacy → **clear history** forgets your history at any time.
+in `%LOCALAPPDATA%\Ultra` on Windows, or `~/Library/Application Support/Ultra` on a Mac, and is
+never uploaded. There's no analytics or telemetry. ULTRA only goes online for update checks,
+Microsoft's safe-browsing checks on Windows, your searches, and (if you use it) end-to-end
+encrypted chat. Settings → Privacy → **clear history** forgets your history at any time. The
+details are in the [Privacy Policy](PRIVACY.md).
 
 ## Help and feedback
 
 Found a bug or have an idea? [Open an issue](https://github.com/skhshths/ULTRA/issues).
 
 Want to build ULTRA yourself or change it? See [BUILDING.md](BUILDING.md).
+
+## License and legal
+
+ULTRA is free software under the [GNU General Public License v3](LICENSE). Using it means
+agreeing to the [Terms of Use](TERMS.md) (including the chat rules) and the
+[Privacy Policy](PRIVACY.md). Open-source parts ULTRA is built from are credited in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

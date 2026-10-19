@@ -561,7 +561,7 @@ body.noscs .hp .scs { display: none; }
     <div class="desc iderr" id="id-err"></div></div></div>
   <div class="row idrow" id="id-card"><div class="idcard"><b id="id-av"></b><div><div class="name" id="id-who"></div><div class="desc"><span id="id-handle-show"></span> · since <span id="id-since"></span></div>
     <div class="idcode"><code id="id-code"></code> <button class="run" id="id-copy">copy</button></div></div></div>
-    <div class="ctl"><button class="run" id="id-rm" title="remove this ULTRA ID from this computer">remove</button></div></div>
+    <div class="ctl"><button class="run" id="id-rm" title="delete this ULTRA ID">delete</button></div></div>
   <div class="sec">PERFORMANCE</div>
   <div class="row" id="r-speed"><div><div class="name">ULTRASPEED</div>
     <div class="desc">no swirls, no transitions, no pane animations, no scanlines.<br>100% speed, 0% looks.</div></div><div class="sw" id="sw-speed"></div></div>
@@ -928,7 +928,11 @@ $('#id-copy').onclick = () => {
   if (navigator.clipboard) navigator.clipboard.writeText(code).then(done, fallback); else fallback();
 };
 $('#id-rm').onclick = () => {
-  if (confirm('Remove your ULTRA ID from this computer?\n\nOnce friends and chat exist, a removed ID can\'t be recovered: its key exists only here.')) send('idremove');
+  const me = S.me && S.me.handle, so = S.social || {};
+  if (!me) return;
+  if (so.status === 'online') {
+    if (confirm(`Delete @${me} everywhere?\n\nThis removes your handle, friends list and waiting messages from the chat server, and your ULTRA ID and chats from this computer. It can't be undone.`)) send('iddelete');
+  } else if (confirm(`Chat isn't connected, so @${me} can only be removed from this computer. Your handle and friends list stay on the chat server (connect and delete again, or email us to remove them).\n\nRemove from this computer only?`)) send('idremove');
 };
 // ── updates: check GitHub for a newer build; install it in place (Windows) ──
 let updState = null;

@@ -3324,6 +3324,12 @@ impl App {
                 self.social.save();
                 self.sync();
             }
+            // Delete the ULTRA ID everywhere: the relay first; this computer once it confirms.
+            "iddelete" => {
+                if !self.social.delete_account() {
+                    self.toast("not connected to chat · connect, then try again");
+                }
+            }
             "idremove" => {
                 identity::remove(&self.data_dir);
                 self.me = None;
@@ -3801,8 +3807,15 @@ impl App {
             UserEvent::Procs(p) => self.on_procs(p),
             UserEvent::PageFullscreen(slot, on) => self.on_page_fullscreen(slot, on),
             UserEvent::Social(v) => {
-                if let social::Effect::Toast(m) = self.social.on_event(&v) {
-                    self.toast(&m);
+                match self.social.on_event(&v) {
+                    social::Effect::Toast(m) => self.toast(&m),
+                    social::Effect::Deleted => {
+                        identity::remove(&self.data_dir);
+                        self.me = None;
+                        self.social.wipe();
+                        self.toast("ULTRA ID deleted from the chat server and this computer");
+                    }
+                    social::Effect::None => {}
                 }
                 self.social.save();
                 self.sync();

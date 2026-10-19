@@ -184,6 +184,7 @@ fn sign_in(hub: &Hub, v: &Value, nonce: &[u8], ip: &str) -> Result<(String, Stri
             }
             {
                 let mut ups = hub.signups.lock().unwrap();
+                ups.retain(|_, l| l.iter().any(|t| t.elapsed() < Duration::from_secs(24 * 3600)));
                 let list = ups.entry(ip.to_string()).or_default();
                 list.retain(|t| t.elapsed() < Duration::from_secs(24 * 3600));
                 if list.len() >= SIGNUPS_PER_DAY {
@@ -277,6 +278,31 @@ fn handle_msg(hub: &Hub, me: &str, v: &Value) -> Option<Value> {
             hub.send_to(&to, &json!({ "t": "msg", "sid": sid, "from": me, "id": id, "n": n, "c": c, "ts": ts }));
             Some(json!({ "t": "sent", "to": to, "id": id, "ts": ts }))
         }
+        "delete" => {
+            // The handle typed again, so a stray request can't wipe an account.
+            if v["confirm"].as_str().map(|c| c.trim_start_matches('@').to_lowercase()) != Some(me.to_string()) {
+                return err("type your handle to confirm");
+            }
+            let friends = hub.friends_of(me);
+            let (incoming, outgoing) = hub.requests(me);
+            let asked: Vec<String> = incoming.iter().filter_map(|r| r["handle"].as_str().map(str::to_string)).chain(outgoing).collect();
+            {
+                let db = hub.db.lock().unwrap();
+                let _ = db.execute("DELETE FROM messages WHERE src = ?1 OR dst = ?1", [me]);
+                let _ = db.execute("DELETE FROM requests WHERE src = ?1 OR dst = ?1", [me]);
+                let _ = db.execute("DELETE FROM friends WHERE a = ?1 OR b = ?1", [me]);
+                let _ = db.execute("DELETE FROM users WHERE handle = ?1", [me]);
+            }
+            for f in friends {
+                hub.send_to(&f, &json!({ "t": "removed", "handle": me }));
+            }
+            for h in asked {
+                hub.send_to(&h, &json!({ "t": "declined", "handle": me }));
+            }
+            // Every device signed in as this handle hears it too.
+            hub.send_to(me, &json!({ "t": "deleted", "handle": me }));
+            None
+        }
         "got" => {
             let db = hub.db.lock().unwrap();
             for sid in v["ids"].as_array().into_iter().flatten().filter_map(|x| x.as_i64()).take(500) {
@@ -337,6 +363,7 @@ async fn client(socket: WebSocket, ip: String, hub: Arc<Hub>) {
         }
         tokens -= 1.0;
         let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
+        let mut gone = false;
         match &me {
             None => {
                 if v["t"] != "auth" {
@@ -355,7 +382,6 @@ async fn client(socket: WebSocket, ip: String, hub: Arc<Hub>) {
                         if first {
                             hub.announce(&handle, true);
                         }
-                        println!("{ip} signed in as @{handle}");
                         me = Some(handle);
                     }
                     Err(m) => {
@@ -364,10 +390,19 @@ async fn client(socket: WebSocket, ip: String, hub: Arc<Hub>) {
                 }
             }
             Some(handle) => {
+                let deleting = v["t"] == "delete";
                 if let Some(reply) = handle_msg(&hub, handle, &v) {
                     let _ = tx.send(reply.to_string());
                 }
+                if deleting && hub.user(handle).is_none() {
+                    hub.online.lock().unwrap().remove(handle);
+                    gone = true;
+                }
             }
+        }
+        // A deleted account's connection is signed out (sign in again within 30 s, or it closes).
+        if gone {
+            me = None;
         }
     }
     if let Some(handle) = me {
