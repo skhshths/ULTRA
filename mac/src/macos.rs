@@ -189,6 +189,9 @@ pub fn mac_shortcut(vk: u32, cmd: bool, ctrl: bool, shift: bool, opt: bool) -> O
     if cmd && ctrl {
         return None; // ⌃⌘F full screen, ⌃⌘Q lock screen, ⌃⌘space emoji...
     }
+    if cmd && shift && vk == 'Q' as u32 {
+        return None; // ⇧⌘Q is the Mac's log out; ⌃⇧Q hides a pane
+    }
     let primary = cmd || (ctrl && (shift || opt || vk == VK_TAB));
     if let Some(m) = crate::shortcut(vk, primary, shift, opt) {
         return Some(m);

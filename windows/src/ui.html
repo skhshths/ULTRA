@@ -633,6 +633,8 @@ body.noscs .hp .scs { display: none; }
   <div class="row"><div><div class="name">updates</div><div class="desc"><span id="upd-ver"></span><br><span id="upd-msg">ULTRA updates itself in place: your taskbar pin and shortcuts keep working.</span></div></div>
     <div class="ctl"><button class="run" id="upd-forget" style="display:none">disconnect GitHub</button><button class="run" id="upd-btn">check for updates</button></div></div>
   <div class="row" id="r-autoupd"><div><div class="name">auto-update</div><div class="desc">checks for updates every time ULTRA opens (and every few hours) and installs them by itself.<br>the new version starts the next time you open ULTRA.</div></div><div class="sw" id="sw-autoupd"></div></div>
+  <div class="row"><div><div class="name">about ULTRA</div><div class="desc">the privacy policy, terms of use and licenses. ULTRA's own pages all live at <b>ultra://</b>, e.g. ultra://settings.</div></div>
+    <div class="ctl"><button class="run" data-page="privacy">privacy</button><button class="run" data-page="terms">terms</button><button class="run" data-page="licenses">licenses</button><button class="run" data-page="about">about</button></div></div>
   <div class="row idrow" id="upd-gh" style="display:none"><div><div class="name">connect GitHub</div>
     <div class="desc">1. <b>get a token</b> opens GitHub with a read-only token filled in: under repository access pick <b>this build's repository</b> (the one you were invited to), then generate it.<br>
     2. paste it here. it stays encrypted on this computer and is only ever sent to GitHub.</div>
@@ -950,6 +952,7 @@ ultra.updateState = (st) => { updState = st; drawUpd(); };
 $('#gh-get').onclick = () => send('gh_connect');
 $('#gh-save').onclick = () => { const t = $('#gh-tok').value.trim(); $('#gh-tok').value = ''; send('gh_token', t); };
 $('#gh-tok').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') $('#gh-save').click(); });
+document.querySelectorAll('[data-page]').forEach((el) => { el.onclick = () => { setCfg(false); send('newurl', 'ultra://' + el.dataset.page); }; });
 $('#upd-forget').onclick = () => { if (confirm('remove the GitHub token from this computer?')) send('gh_forget'); };
 function checkUpdates() { ultra.updateState({ s: 'checking', m: 'asking GitHub…' }); send('update_check'); }
 $('#upd-btn').onclick = () => {
@@ -1105,7 +1108,7 @@ $('#dl-clear').onclick = () => send('dl', ['clear', 0]);
   const groups = [
     ['TABS', [[`${M}+t`, 'new tab'], [`${M}+w`, 'close tab'], [`${M}+shift+t`, 'reopen closed tab'], [`${M}+1‥8`, 'jump to tab'],
       [`${M}+9`, 'last tab'], [`${M}+tab`, 'next tab'], [`${M}+shift+tab`, 'previous tab'], ['middle-click', 'close a tab'], ['right-click', 'put a tab to sleep']]],
-    ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], [`${M}+shift+1‥9`, 'pull a tab to cursor'], [`${M}+shift+w`, 'close pane at cursor'],
+    ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], [`${M}+shift+1‥9`, 'pull a tab to cursor'], [`${M}+shift+w`, 'close pane at cursor'], [`${M}+shift+q`, 'hide pane, keep its tab'],
       [`${M}+shift+r`, 'blank tab at cursor'], [`${M}+shift+f`, 'zoom pane at cursor'], [`${M}+${A}+arrows`, 'move focus between panes'],
       ['click', 'focus a pane'], ['drag a gap', 'resize panes']]],
     ['WORKSPACES', [[`${M}+${A}+1‥9`, 'switch workspace'], [`${M}+${A}+shift+1‥9`, 'send tab to workspace'],
@@ -2047,6 +2050,7 @@ document.addEventListener('keydown', (e) => {
   else if (c && e.shiftKey && code === 'KeyC') { if (frOn) closeFr(); else send('friends', true); e.preventDefault(); return; }
   else if (c && e.shiftKey && code === 'KeyE') m = 'mvnew';
   else if (c && e.shiftKey && code === 'KeyW') m = 'closeat';
+  else if (c && e.shiftKey && code === 'KeyQ') m = 'hideat';
   else if (c && e.shiftKey && code === 'KeyF') m = 'zoom';
   else if (c && e.shiftKey && code === 'KeyP') { if (palOn) closePal(); else send('palette', true); e.preventDefault(); return; }
   else if (c && e.altKey && k.startsWith('arrow')) { m = 'dir'; a = k[5]; }

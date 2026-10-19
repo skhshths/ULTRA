@@ -19,6 +19,7 @@ mod edition;
 mod identity;
 mod layout;
 mod library;
+mod pages;
 mod social;
 mod macos;
 mod privacy;
@@ -525,6 +526,9 @@ fn resolve(input: &str, engine: &str) -> String {
     if lower.starts_with("javascript:") {
         return HOME.into();
     }
+    if let Some(page) = pages::normalize(s) {
+        return page;
+    }
     if ["http://", "https://", "file://", "about:"]
         .iter()
         .any(|p| lower.starts_with(p))
@@ -655,6 +659,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('E')) => "mvnew".into(),
         (false, true, None, Some('C')) => "friends".into(),
         (false, true, None, Some('W')) => "closeat".into(),
+        (false, true, None, Some('Q')) => "hideat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
         (false, true, None, Some('R')) => "blankat".into(),
         (false, false, None, Some('F')) => "focusurl".into(),
@@ -897,16 +902,22 @@ impl App {
         let got = match spare {
             Some((slot, v)) => {
                 let _ = v.set_bounds(bounds);
-                let _ = v.load_url(&macos::safe_url(&url));
+                if !pages::is_page(&url) {
+                    let _ = v.load_url(&macos::safe_url(&url));
+                }
                 Some((slot, v))
             }
             None => {
                 let slot = self.new_slot();
-                self.build_view(slot, Some(&url), bounds, private, profile).map(|v| (slot, v))
+                let first = if pages::is_page(&url) { "about:blank" } else { url.as_str() };
+                self.build_view(slot, Some(first), bounds, private, profile).map(|v| (slot, v))
             }
         };
         self.spare_at = Some(Instant::now() + SPARE_IDLE);
         if let Some((slot, v)) = got {
+            if pages::is_page(&url) {
+                let _ = v.load_html(&pages::html(&url));
+            }
             let t = &mut self.tabs[i];
             t.slot = slot;
             t.view = Some(v);
@@ -1424,6 +1435,28 @@ impl App {
         self.focus_active();
     }
 
+    /// Ctrl+Shift+Q: take the pane under the cursor out of the layout but keep its tab open
+    /// (hidden, in the tab list; click it or ctrl+1..9 to bring it back).
+    fn hide_at_cursor(&mut self) {
+        let id = self.pane_under_cursor().unwrap_or(self.focus);
+        if !self.root.contains(id) {
+            return;
+        }
+        if self.root.is_leaf(id) {
+            self.toast("this is the only pane · nothing to hide it behind");
+            return;
+        }
+        if self.zoom == Some(id) {
+            self.zoom = None;
+        }
+        self.root.remove(id);
+        if self.focus == id || !self.root.contains(self.focus) {
+            self.focus = self.root.first_leaf();
+        }
+        self.apply_layout(true);
+        self.focus_active();
+    }
+
     /// Ctrl+Shift+W: close the tab in the pane under the cursor (focused pane as fallback).
     fn close_at_cursor(&mut self) {
         let id = self.pane_under_cursor().unwrap_or(self.focus);
@@ -1475,6 +1508,10 @@ impl App {
 
     fn navigate(&mut self, i: usize, input: &str) {
         let url = resolve(input, &self.cfg.search);
+        // ultra://settings and the like open a panel; the tab stays where it was.
+        if let Some(cmd) = pages::panel(&url) {
+            return self.command(cmd, &json!(true));
+        }
         let Some(t) = self.tabs.get_mut(i) else { return };
         if url == HOME {
             t.view = None;
@@ -1484,8 +1521,12 @@ impl App {
         } else {
             t.url = url.clone();
             if let Some(v) = &t.view {
-                let _ = v.load_url(&macos::safe_url(&url));
-                t.loading = true;
+                if pages::is_page(&url) {
+                    let _ = v.load_html(&pages::html(&url));
+                } else {
+                    let _ = v.load_url(&macos::safe_url(&url));
+                    t.loading = true;
+                }
             }
         }
         self.activate(i);
@@ -2579,6 +2620,9 @@ impl App {
             "new" => self.new_tab(HOME.into(), String::new(), true),
             "newurl" => {
                 let url = resolve(arg.as_str().unwrap_or(""), &self.cfg.search);
+                if let Some(panel) = pages::panel(&url) {
+                    return self.command(panel, &json!(true));
+                }
                 self.new_tab(url, String::new(), true);
             }
             "close" => {
@@ -2639,6 +2683,7 @@ impl App {
                 self.split_dir(arg[0].as_str().unwrap_or("r"), url);
             }
             "closeat" => self.close_at_cursor(),
+            "hideat" => self.hide_at_cursor(),
             "zoom" => self.toggle_zoom(None),
             "zoomid" => self.toggle_zoom(arg.as_u64()),
             "ws" => {
@@ -2694,9 +2739,12 @@ impl App {
             "fwd" => self.with_active(|v| {
                 let _ = v.go_forward();
             }),
-            "reload" => self.with_active(|v| {
-                let _ = v.reload();
-            }),
+            "reload" => {
+                let url = self.tabs[self.cur()].url.clone();
+                self.with_active(|v| {
+                    let _ = if pages::is_page(&url) { v.load_html(&pages::html(&url)) } else { v.reload() };
+                });
+            }
             "devtools" => self.with_active(|v| v.open_devtools()),
             "dl" => {
                 // The downloads panel's buttons: [action, download id].
@@ -2842,8 +2890,19 @@ impl App {
             }
             "suggest" => {
                 let q = arg.as_str().unwrap_or("").to_string();
-                let items: Vec<Value> =
-                    self.lib.suggest(&q, 8).into_iter().map(|(u, t, b)| json!({ "u": u, "t": t, "b": b })).collect();
+                let lq = q.trim().to_ascii_lowercase();
+                let mut items: Vec<Value> = if lq.len() >= 2 && lq.get(..lq.len().min(8)).is_some_and(|p| "ultra://".starts_with(p)) || lq.starts_with("ultra:") {
+                    let typed = lq.trim_start_matches("ultra:").trim_start_matches('/');
+                    pages::PAGES
+                        .iter()
+                        .filter(|(n, _)| n.starts_with(typed))
+                        .map(|(n, d)| json!({ "u": format!("ultra://{n}"), "t": d, "b": false }))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                items.extend(self.lib.suggest(&q, 8).into_iter().map(|(u, t, b)| json!({ "u": u, "t": t, "b": b })));
+                items.truncate(8);
                 let _ = self.ui.evaluate_script(&format!("ultra.suggestions({})", json!({ "q": q, "items": items })));
             }
             "blankat" => {
@@ -3216,11 +3275,20 @@ impl App {
         // ULTRA's shortcuts are accepted only when `native`: caught from a real keypress.
         let Some(i) = self.idx_slot(slot) else { return };
         let id = self.tabs[i].id;
+        if let Some(name) = msg.strip_prefix("ultra:") {
+            // A link on one of ULTRA's own pages (only those may open ultra:// addresses).
+            if pages::is_page(&self.tabs[i].url) {
+                if let Some(u) = pages::normalize(&format!("ultra://{name}")) {
+                    self.navigate(i, &u);
+                }
+            }
+            return;
+        }
         if msg == "url" {
             // Never trust a url reported by the page itself (address bar spoofing):
             // ask WebView2 for the real one.
             if let Some(u) = self.tabs[i].view.as_ref().and_then(macos::url) {
-                if !u.is_empty() && u != self.tabs[i].url {
+                if !u.is_empty() && u != self.tabs[i].url && !(u == "about:blank" && pages::is_page(&self.tabs[i].url)) {
                     self.tabs[i].url = u;
                     self.remember(i);
                     self.sync();
@@ -3325,7 +3393,7 @@ impl App {
                     }
                     self.tabs[i].title = title;
                     if let Some(u) = self.tabs[i].view.as_ref().and_then(macos::url) {
-                        if !u.is_empty() {
+                        if !u.is_empty() && u != "about:blank" {
                             self.tabs[i].url = u;
                         }
                     }
@@ -3496,7 +3564,7 @@ impl App {
             self.command("dir", &json!(d));
         } else if matches!(
             msg,
-            "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat"
+            "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat" | "hideat"
                 | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload"
         ) {
             self.command(msg, &Value::Null);
@@ -3958,6 +4026,7 @@ mod tests {
         assert_eq!(shortcut(k('T'), true, false, false).as_deref(), Some("new"));
         assert_eq!(shortcut(k('W'), true, false, false).as_deref(), Some("close"));
         assert_eq!(shortcut(k('W'), true, true, false).as_deref(), Some("closeat"));
+        assert_eq!(shortcut(k('Q'), true, true, false).as_deref(), Some("hideat"));
         assert_eq!(shortcut(k('3'), true, false, false).as_deref(), Some("tab:3"));
         assert_eq!(shortcut(k('3'), true, true, false).as_deref(), Some("mv:3"));
         assert_eq!(shortcut(k('3'), true, false, true).as_deref(), Some("ws:3"));
