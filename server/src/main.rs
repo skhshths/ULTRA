@@ -286,21 +286,26 @@ fn handle_msg(hub: &Hub, me: &str, v: &Value) -> Option<Value> {
             let friends = hub.friends_of(me);
             let (incoming, outgoing) = hub.requests(me);
             let asked: Vec<String> = incoming.iter().filter_map(|r| r["handle"].as_str().map(str::to_string)).chain(outgoing).collect();
-            {
+            // Delete and take every device signed in as this handle offline in one step (database
+            // lock held), so nobody can claim the freed handle in between and land on that list.
+            let devices = {
                 let db = hub.db.lock().unwrap();
                 let _ = db.execute("DELETE FROM messages WHERE src = ?1 OR dst = ?1", [me]);
                 let _ = db.execute("DELETE FROM requests WHERE src = ?1 OR dst = ?1", [me]);
                 let _ = db.execute("DELETE FROM friends WHERE a = ?1 OR b = ?1", [me]);
                 let _ = db.execute("DELETE FROM users WHERE handle = ?1", [me]);
-            }
+                hub.online.lock().unwrap().remove(me).unwrap_or_default()
+            };
             for f in friends {
                 hub.send_to(&f, &json!({ "t": "removed", "handle": me }));
             }
             for h in asked {
                 hub.send_to(&h, &json!({ "t": "declined", "handle": me }));
             }
-            // Every device signed in as this handle hears it too.
-            hub.send_to(me, &json!({ "t": "deleted", "handle": me }));
+            let done = json!({ "t": "deleted", "handle": me }).to_string();
+            for (_, tx) in devices {
+                let _ = tx.send(done.clone());
+            }
             None
         }
         "got" => {
@@ -340,6 +345,8 @@ async fn client(socket: WebSocket, ip: String, hub: Arc<Hub>) {
     let _ = tx.send(json!({ "t": "challenge", "nonce": B64.encode(nonce) }).to_string());
 
     let mut me: Option<String> = None;
+    // The key `me` signed in with (hex), checked against the handle's owner on every request.
+    let mut my_key = String::new();
     let conn_id = {
         let mut n = hub.next.lock().unwrap();
         *n += 1;
@@ -382,6 +389,7 @@ async fn client(socket: WebSocket, ip: String, hub: Arc<Hub>) {
                         if first {
                             hub.announce(&handle, true);
                         }
+                        my_key = v["key"].as_str().unwrap_or("").to_lowercase();
                         me = Some(handle);
                     }
                     Err(m) => {
@@ -390,12 +398,18 @@ async fn client(socket: WebSocket, ip: String, hub: Arc<Hub>) {
                 }
             }
             Some(handle) => {
-                let deleting = v["t"] == "delete";
-                if let Some(reply) = handle_msg(&hub, handle, &v) {
+                // The handle must still belong to the key this connection signed in with: if it
+                // was deleted (on any device) or since claimed by someone else, act on nothing.
+                if hub.user(handle).map(|(_, k)| k) != Some(my_key.clone()) {
+                    if let Some(conns) = hub.online.lock().unwrap().get_mut(handle) {
+                        conns.retain(|(id, _)| *id != conn_id);
+                    }
+                    let _ = tx.send(json!({ "t": "deleted", "handle": handle }).to_string());
+                    gone = true;
+                } else if let Some(reply) = handle_msg(&hub, handle, &v) {
                     let _ = tx.send(reply.to_string());
                 }
-                if deleting && hub.user(handle).is_none() {
-                    hub.online.lock().unwrap().remove(handle);
+                if hub.user(handle).is_none() {
                     gone = true;
                 }
             }
