@@ -12,7 +12,13 @@
 //!   {"t":"add","handle"} {"t":"accept","handle"} {"t":"decline","handle"} {"t":"remove","handle"}
 //!   {"t":"send","to","id","n","c"}                              n = nonce, c = ciphertext (base64)
 //!   {"t":"got","ids":[…]}                                      messages delivered: delete them
-//! server -> client: challenge, welcome, error, request, friend, removed, presence, msg, sent.
+//!   {"t":"block","handle"} {"t":"unblock","handle"}            stop (or allow again) someone
+//!   {"t":"delete","confirm":<own handle>}                       delete this ULTRA ID everywhere
+//! server -> client: challenge, welcome, error, request, friend, removed, presence, msg, sent,
+//!   blocked, unblocked, deleted.
+//!
+//! Blocking is silent: the blocked person isn't told, and their friend requests look sent but
+//! never arrive.
 
 use std::{
     collections::HashMap,
@@ -92,6 +98,7 @@ fn open_db(path: &PathBuf) -> Connection {
          CREATE TABLE IF NOT EXISTS users (handle TEXT PRIMARY KEY, name TEXT NOT NULL, key TEXT NOT NULL UNIQUE, created INTEGER NOT NULL, seen INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS friends (a TEXT NOT NULL, b TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (a, b));
          CREATE TABLE IF NOT EXISTS requests (src TEXT NOT NULL, dst TEXT NOT NULL, ts INTEGER NOT NULL, PRIMARY KEY (src, dst));
+         CREATE TABLE IF NOT EXISTS blocks (a TEXT NOT NULL, b TEXT NOT NULL, ts INTEGER NOT NULL, PRIMARY KEY (a, b));
          CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, src TEXT NOT NULL, dst TEXT NOT NULL, cid TEXT NOT NULL, n TEXT NOT NULL, c TEXT NOT NULL, ts INTEGER NOT NULL);
          CREATE INDEX IF NOT EXISTS messages_dst ON messages (dst);",
     )
@@ -126,6 +133,17 @@ impl Hub {
     fn friends_of(&self, handle: &str) -> Vec<String> {
         let db = self.db.lock().unwrap();
         let mut st = db.prepare("SELECT b FROM friends WHERE a = ?1 ORDER BY b").unwrap();
+        st.query_map([handle], |r| r.get(0)).unwrap().flatten().collect()
+    }
+    /// Has `a` blocked `b`?
+    fn blocks(&self, a: &str, b: &str) -> bool {
+        let db = self.db.lock().unwrap();
+        db.query_row("SELECT 1 FROM blocks WHERE a = ?1 AND b = ?2", [a, b], |_| Ok(())).optional().ok().flatten().is_some()
+    }
+    /// Everyone `handle` has blocked.
+    fn blocked_by(&self, handle: &str) -> Vec<String> {
+        let db = self.db.lock().unwrap();
+        let mut st = db.prepare("SELECT b FROM blocks WHERE a = ?1 ORDER BY ts").unwrap();
         st.query_map([handle], |r| r.get(0)).unwrap().flatten().collect()
     }
     fn requests(&self, handle: &str) -> (Vec<Value>, Vec<String>) {
@@ -211,6 +229,13 @@ fn handle_msg(hub: &Hub, me: &str, v: &Value) -> Option<Value> {
             if hub.are_friends(me, &other) {
                 return err(&format!("you and @{other} are already friends"));
             }
+            if hub.blocks(me, &other) {
+                return err(&format!("you blocked @{other} · unblock them first (friends panel)"));
+            }
+            // Blocked by them: it looks sent, but it never reaches them.
+            if hub.blocks(&other, me) {
+                return Some(json!({ "t": "requested", "handle": other, "name": name }));
+            }
             let db = hub.db.lock().unwrap();
             // They already asked us: that's a yes from both.
             let theirs = db.execute("DELETE FROM requests WHERE src = ?1 AND dst = ?2", [&other, me]).unwrap_or(0) > 0;
@@ -233,6 +258,9 @@ fn handle_msg(hub: &Hub, me: &str, v: &Value) -> Option<Value> {
             Some(json!({ "t": "requested", "handle": other, "name": name }))
         }
         "accept" => {
+            if hub.blocks(me, &other) || hub.blocks(&other, me) {
+                return err(&format!("@{other} can't be added"));
+            }
             let db = hub.db.lock().unwrap();
             if db.execute("DELETE FROM requests WHERE src = ?1 AND dst = ?2", [&other, me]).unwrap_or(0) == 0 {
                 return err(&format!("@{other} hasn't asked to be your friend"));
@@ -278,6 +306,30 @@ fn handle_msg(hub: &Hub, me: &str, v: &Value) -> Option<Value> {
             hub.send_to(&to, &json!({ "t": "msg", "sid": sid, "from": me, "id": id, "n": n, "c": c, "ts": ts }));
             Some(json!({ "t": "sent", "to": to, "id": id, "ts": ts }))
         }
+        "block" => {
+            if other == me || hub.user(&other).is_none() {
+                return err(&format!("there's no @{other}"));
+            }
+            let were_friends = hub.are_friends(me, &other);
+            {
+                let db = hub.db.lock().unwrap();
+                let _ = db.execute("INSERT OR IGNORE INTO blocks VALUES (?1, ?2, ?3)", params![me, other, now()]);
+                let _ = db.execute("DELETE FROM friends WHERE (a = ?1 AND b = ?2) OR (a = ?2 AND b = ?1)", [me, &other]);
+                let _ = db.execute("DELETE FROM requests WHERE (src = ?1 AND dst = ?2) OR (src = ?2 AND dst = ?1)", [me, &other]);
+                let _ = db.execute("DELETE FROM messages WHERE (src = ?1 AND dst = ?2) OR (src = ?2 AND dst = ?1)", [me, &other]);
+            }
+            // They only see the friendship end (or a request disappear), as with "remove".
+            if were_friends {
+                hub.send_to(&other, &json!({ "t": "removed", "handle": me }));
+            } else {
+                hub.send_to(&other, &json!({ "t": "declined", "handle": me }));
+            }
+            Some(json!({ "t": "blocked", "handle": other }))
+        }
+        "unblock" => {
+            let _ = hub.db.lock().unwrap().execute("DELETE FROM blocks WHERE a = ?1 AND b = ?2", [me, &other]);
+            Some(json!({ "t": "unblocked", "handle": other }))
+        }
         "delete" => {
             // The handle typed again, so a stray request can't wipe an account.
             if v["confirm"].as_str().map(|c| c.trim_start_matches('@').to_lowercase()) != Some(me.to_string()) {
@@ -293,6 +345,7 @@ fn handle_msg(hub: &Hub, me: &str, v: &Value) -> Option<Value> {
                 let _ = db.execute("DELETE FROM messages WHERE src = ?1 OR dst = ?1", [me]);
                 let _ = db.execute("DELETE FROM requests WHERE src = ?1 OR dst = ?1", [me]);
                 let _ = db.execute("DELETE FROM friends WHERE a = ?1 OR b = ?1", [me]);
+                let _ = db.execute("DELETE FROM blocks WHERE a = ?1 OR b = ?1", [me]);
                 let _ = db.execute("DELETE FROM users WHERE handle = ?1", [me]);
                 hub.online.lock().unwrap().remove(me).unwrap_or_default()
             };
@@ -382,7 +435,8 @@ async fn client(socket: WebSocket, ip: String, hub: Arc<Hub>) {
                         hub.online.lock().unwrap().entry(handle.clone()).or_default().push((conn_id, tx.clone()));
                         let friends: Vec<Value> = hub.friends_of(&handle).iter().map(|f| hub.friend_json(f)).collect();
                         let (incoming, outgoing) = hub.requests(&handle);
-                        let _ = tx.send(json!({ "t": "welcome", "handle": handle, "name": name, "friends": friends, "requests": incoming, "sent": outgoing }).to_string());
+                        let blocked = hub.blocked_by(&handle);
+                        let _ = tx.send(json!({ "t": "welcome", "handle": handle, "name": name, "friends": friends, "requests": incoming, "sent": outgoing, "blocked": blocked }).to_string());
                         for m in hub.queued(&handle) {
                             let _ = tx.send(m.to_string());
                         }

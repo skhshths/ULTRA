@@ -121,6 +121,8 @@ const LOCK_AFTER: u64 = 300;
 /// Wrong unlock attempts before the private workspace is wiped.
 const MAX_UNLOCK_FAILS: u32 = 5;
 const HOME: &str = "ultra:home";
+/// How long ultra://memory keeps per-tab sampling going after its last request.
+const MEMORY_WATCH: Duration = Duration::from_secs(6);
 const LEGACY_HOME: &str = "zenith:home";
 const UI_HTML: &str = include_str!("ui.html");
 const CONTENT_JS: &str = include_str!("content.js");
@@ -435,6 +437,10 @@ struct App {
     block_on: Rc<Cell<bool>>,
     /// Latest (MB, CPU %) per tab id, and process CPU times for deltas.
     pane_stats: HashMap<u64, (f64, f64)>,
+    /// Every awake tab's memory (MB) and CPU (%, -1 unknown), sampled while ultra://memory is open.
+    tab_mem: HashMap<u64, (f64, f64)>,
+    /// When an ultra://memory page last asked for numbers (sampling stops soon after it closes).
+    memory_watch: Option<Instant>,
     cpu_prev: HashMap<u32, (u64, Instant)>,
     total_mb: f64,
     total_cpu: f64,
@@ -654,6 +660,14 @@ fn lerp(a: R, b: R, t: f64) -> R {
 fn popin(r: R) -> R {
     let (cx, cy) = r.center();
     R { x: cx - r.w * 0.45, y: cy - r.h * 0.45, w: r.w * 0.9, h: r.h * 0.9 }
+}
+
+/// Open a mailto: link in the default mail app.
+fn open_mail(url: &str) {
+    use windows::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+    unsafe {
+        ShellExecuteW(None, &HSTRING::from("open"), &HSTRING::from(url), windows_core::PCWSTR::null(), windows_core::PCWSTR::null(), SW_SHOWNORMAL);
+    }
 }
 
 fn playing_audio(v: &WebView) -> bool {
@@ -878,6 +892,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('E')) => "mvnew".into(),
         (false, true, None, Some('C')) => "friends".into(),
         (false, true, None, Some('W')) => "closeat".into(),
+        (false, true, None, Some('A')) => "tabsearch".into(),
         (false, true, None, Some('Q')) => "hideat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
         (false, true, None, Some('R')) => "blankat".into(),
@@ -1837,6 +1852,120 @@ impl App {
         self.activate(i);
     }
 
+    /// A live ULTRA page's request: `{"a": action, ...}`. Answers with its fresh data.
+    fn page_cmd(&mut self, i: usize, v: &Value) {
+        let page = self.tabs[i].url.clone();
+        let id = v["id"].as_u64().and_then(|id| self.idx(id));
+        match (page.as_str(), v["a"].as_str().unwrap_or("")) {
+            ("ultra://history", "ready") => {}
+            ("ultra://history", "forget") => {
+                if let Some(u) = v["u"].as_str() {
+                    self.lib.forget(u);
+                    self.lib.save(&self.data_dir);
+                }
+            }
+            ("ultra://history", "clear") => {
+                match v["secs"].as_u64().unwrap_or(0) {
+                    0 => self.lib.clear_history(),
+                    secs => {
+                        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                        self.lib.forget_since(now.saturating_sub(secs));
+                    }
+                }
+                self.lib.save(&self.data_dir);
+                self.toast("history cleared");
+            }
+            ("ultra://memory", "ready" | "refresh") => {
+                let first = self.memory_watch.is_none_or(|t| t.elapsed() > MEMORY_WATCH);
+                self.memory_watch = Some(Instant::now());
+                if first && !self.stats_pending {
+                    self.sample_stats();
+                }
+            }
+            ("ultra://memory", "sleep") => {
+                if let Some(j) = id.filter(|&j| !self.shown.iter().any(|(x, _)| *x == self.tabs[j].id)) {
+                    self.sleep(j);
+                    self.sync();
+                }
+            }
+            ("ultra://memory", "show") => {
+                if let Some(j) = id {
+                    self.activate(j);
+                }
+                return;
+            }
+            ("ultra://memory", "trim") => self.trim(),
+            _ => return,
+        }
+        if let Some(i) = self.tabs.iter().position(|t| t.url == page) {
+            self.push_page(i);
+        }
+    }
+
+    /// Send a live ULTRA page its data (it renders it with `ultraData`).
+    fn push_page(&self, i: usize) {
+        let Some(v) = &self.tabs[i].view else { return };
+        let data = match self.tabs[i].url.as_str() {
+            "ultra://history" => {
+                let mut h: Vec<&library::Visit> = self.lib.history.iter().collect();
+                h.sort_by(|a, b| b.last.cmp(&a.last));
+                let items: Vec<Value> = h.iter().map(|v| json!({ "u": v.url, "t": v.title, "n": v.visits, "l": v.last })).collect();
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                json!({ "items": items, "now": now })
+            }
+            "ultra://memory" => self.memory_json(),
+            _ => return,
+        };
+        let _ = v.evaluate_script(&format!("window.ultraData && window.ultraData({data})"));
+    }
+
+    /// Every tab for ultra://memory: its state, memory, CPU and how long it's been idle.
+    /// Private tabs show no title or address outside the private workspace.
+    fn memory_json(&self) -> Value {
+        let rank = |s: &str| match s {
+            "visible" => 0,
+            "awake" => 1,
+            _ => 2,
+        };
+        let mut rows: Vec<(u8, f64, Value)> = self
+            .tabs
+            .iter()
+            .map(|t| {
+                let state = if self.shown.iter().any(|(x, _)| *x == t.id) {
+                    "visible"
+                } else if t.view.is_some() {
+                    "awake"
+                } else {
+                    "asleep"
+                };
+                let hide = t.ws == PRIVATE_WS && self.ws != PRIVATE_WS;
+                let (mb, cpu) = match self.tab_mem.get(&t.id).filter(|_| t.view.is_some()) {
+                    Some(&(mb, cpu)) => (Some(mb), (cpu >= 0.0).then_some(cpu)),
+                    None => (None, None),
+                };
+                let row = json!({
+                    "id": t.id,
+                    "t": if hide { "private tab".to_string() } else { t.title.clone() },
+                    "u": if hide { String::new() } else { t.url.clone() },
+                    "ws": if t.ws == PRIVATE_WS { "private".to_string() } else { (t.ws + 1).to_string() },
+                    "s": state,
+                    "mb": mb,
+                    "cpu": cpu,
+                    "audio": t.view.as_ref().is_some_and(playing_audio),
+                    "idle": t.last.elapsed().as_secs(),
+                });
+                (rank(state), mb.unwrap_or(0.0), row)
+            })
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.total_cmp(&a.1)));
+        json!({
+            "total": self.total_mb,
+            "cpu": self.total_cpu,
+            "per": "heap",
+            "tabs": rows.into_iter().map(|r| r.2).collect::<Vec<_>>(),
+        })
+    }
+
     fn with_active(&self, f: impl FnOnce(&WebView)) {
         if let Some(v) = &self.tabs[self.cur()].view {
             f(v)
@@ -1858,7 +1987,11 @@ impl App {
             self.engine_pids = pids;
             self.pids_dirty = true;
         }
-        if !self.cfg.stats && self.cfg.memcap == 0 {
+        let watching = self.memory_watch.is_some_and(|t| t.elapsed() < MEMORY_WATCH);
+        if !watching {
+            self.tab_mem.clear();
+        }
+        if !self.cfg.stats && self.cfg.memcap == 0 && !watching {
             return;
         }
         let now = Instant::now();
@@ -1890,6 +2023,18 @@ impl App {
                 let _ = v.evaluate_script_with_callback(stats::HEAP_JS, move |r| {
                     let _ = proxy.send_event(UserEvent::Heap(slot, r));
                 });
+            }
+        }
+        // ultra://memory: tabs share engine processes, so each awake page reports its JS heap.
+        if watching {
+            self.tab_mem.retain(|id, _| self.tabs.iter().any(|t| t.id == *id && t.view.is_some()));
+            for t in &self.tabs {
+                if let Some(v) = &t.view {
+                    let (proxy, slot) = (self.proxy.clone(), t.slot);
+                    let _ = v.evaluate_script_with_callback(stats::HEAP_JS, move |r| {
+                        let _ = proxy.send_event(UserEvent::Heap(slot, r));
+                    });
+                }
             }
         }
         self.total_mb = total;
@@ -2770,7 +2915,7 @@ impl App {
             }
             match msg {
                 "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings"
-                | "palette" | "mvnew" | "closeat" | "hideat" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
+                | "palette" | "mvnew" | "closeat" | "hideat" | "tabsearch" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
                     self.command(msg, &Value::Null)
                 }
                 _ => {}
@@ -3180,7 +3325,7 @@ impl App {
                 let _ = self.ui.focus();
                 let _ = self.ui.evaluate_script("ultra.focusUrl()");
             }
-            "overview" | "settings" | "palette" | "urlpanel" | "downloads" | "friends" => {
+            "overview" | "settings" | "palette" | "urlpanel" | "downloads" | "friends" | "tabsearch" => {
                 // These panels cover the content area, so pages are hidden while open.
                 let on = arg.as_bool().unwrap_or(!self.overlay);
                 self.overlay = on;
@@ -3364,6 +3509,10 @@ impl App {
             }
             "idcreate" => {
                 let (name, handle) = (arg[0].as_str().unwrap_or(""), arg[1].as_str().unwrap_or(""));
+                if arg[2] != true {
+                    let _ = self.ui.evaluate_script("ultra.idError('please confirm you are 13 or older and agree to the terms and chat rules')");
+                    return;
+                }
                 match identity::create(&self.data_dir, name, handle) {
                     Ok(me) => {
                         self.toast(&format!("welcome, {} · your ULTRA ID is ready", me.name));
@@ -3384,6 +3533,19 @@ impl App {
                 self.sync();
             }
             "sremove" => self.social.remove(arg.as_str().unwrap_or("")),
+            "sblock" => self.social.block(arg.as_str().unwrap_or("")),
+            "sunblock" => self.social.unblock(arg.as_str().unwrap_or("")),
+            // Report someone: a ready-to-send email to ULTRA's contact address.
+            "sreport" => {
+                let who = arg.as_str().unwrap_or("").trim_start_matches('@');
+                if identity::valid_handle(who) {
+                    let me = self.me.as_ref().map(|m| m.handle.clone()).unwrap_or_default();
+                    let body = format!("Reporting: @{who}\nReported by: @{me}\n\nWhat happened (add screenshots if you can):\n\n");
+                    let mail = format!("mailto:{}?subject={}&body={}", pages::CONTACT, pages::url_encode(&format!("ULTRA chat report: @{who}")), pages::url_encode(&body));
+                    open_mail(&mail);
+                    self.toast(&format!("opening an email to {} · if nothing opens, write to that address", pages::CONTACT));
+                }
+            }
             "strust" => {
                 if !self.social.trust(arg[0].as_str().unwrap_or(""), arg[1].as_str().unwrap_or("")) {
                     self.toast("the key changed again · compare the new safety code before trusting it");
@@ -3739,6 +3901,16 @@ impl App {
         // ULTRA's shortcuts are accepted only when `native`: caught from a real keypress.
         let Some(i) = self.idx_slot(slot) else { return };
         let id = self.tabs[i].id;
+        if let Some(body) = msg.strip_prefix("page:") {
+            // ultra://history and ultra://memory asking for their data or acting on it (only
+            // from those pages themselves).
+            if matches!(self.tabs[i].url.as_str(), "ultra://history" | "ultra://memory") {
+                if let Ok(v) = serde_json::from_str::<Value>(body) {
+                    self.page_cmd(i, &v);
+                }
+            }
+            return;
+        }
         if let Some(name) = msg.strip_prefix("ultra:") {
             // A link on one of ULTRA's own pages (only those may open ultra:// addresses).
             if pages::is_page(&self.tabs[i].url) {
@@ -3967,6 +4139,9 @@ impl App {
             }
             UserEvent::Heap(slot, r) => {
                 if let (Some(i), Ok(mb)) = (self.idx_slot(slot), r.trim().parse::<f64>()) {
+                    if mb >= 0.0 && self.memory_watch.is_some_and(|t| t.elapsed() < MEMORY_WATCH) {
+                        self.tab_mem.insert(self.tabs[i].id, (mb, -1.0));
+                    }
                     if self.cfg.stats && mb >= 0.0 {
                         self.pane_stats.insert(self.tabs[i].id, (mb, -1.0));
                         self.sync();
@@ -4089,7 +4264,7 @@ fn main() {
     if !bench_mode {
         cfg.launches = cfg.launches.saturating_add(1);
         if let Ok(j) = serde_json::to_string_pretty(&cfg) {
-            let _ = fs::write(data_dir.join("settings.json"), j);
+            let _ = library::write_atomic(&data_dir.join("settings.json"), j);
         }
     }
 
@@ -4206,6 +4381,8 @@ fn main() {
         shields: Rc::new(blocker::Shields::default()),
         block_on: Rc::new(Cell::new(true)),
         pane_stats: HashMap::new(),
+        tab_mem: HashMap::new(),
+        memory_watch: None,
         cpu_prev: HashMap::new(),
         total_mb: 0.0,
         total_cpu: 0.0,
@@ -4465,6 +4642,7 @@ mod tests {
         assert_eq!(shortcut(k('W'), true, false, false).as_deref(), Some("close"));
         assert_eq!(shortcut(k('W'), true, true, false).as_deref(), Some("closeat"));
         assert_eq!(shortcut(k('Q'), true, true, false).as_deref(), Some("hideat"));
+        assert_eq!(shortcut(k('A'), true, true, false).as_deref(), Some("tabsearch"));
         assert_eq!(shortcut(k('3'), true, false, false).as_deref(), Some("tab:3"));
         assert_eq!(shortcut(k('3'), true, true, false).as_deref(), Some("mv:3"));
         assert_eq!(shortcut(k('3'), true, false, true).as_deref(), Some("ws:3"));

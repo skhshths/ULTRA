@@ -74,8 +74,8 @@ these rules.
    We may reclaim handles that break this rule.
 4. **Encryption means we can't moderate messages.** We can't read your messages, so we act on
    reports. To report someone, email oliverbarnet441@gmail.com with their @handle and what happened,
-   including screenshots if you have them. You can also remove them from your friends at any
-   time. We may remove IDs that break these rules.
+   including screenshots if you have them. You can also remove or block them at any time
+   (friends panel). We may remove IDs that break these rules.
 5. **No guarantees.** Chat may be slow, go down, or lose undelivered messages. Don't rely on it
    for emergencies or anything important.
 6. **Legal requests.** We follow valid legal requests and report child sexual abuse material to

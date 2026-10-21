@@ -76,6 +76,8 @@ pub struct Social {
     pub requests: Vec<(String, String)>,
     /// Requests you've sent and that are still waiting.
     pub sent: Vec<String>,
+    /// Handles you've blocked (the relay keeps the list; this is its copy).
+    pub blocked: Vec<String>,
     chats: HashMap<String, Vec<Msg>>,
     /// Friends' keys as first seen (handle -> public key, hex).
     pins: HashMap<String, String>,
@@ -258,6 +260,7 @@ impl Social {
             friends: Vec::new(),
             requests: Vec::new(),
             sent: Vec::new(),
+            blocked: Vec::new(),
             chats,
             pins: std::fs::read_to_string(dir.join(PINS)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
             unread: HashMap::new(),
@@ -285,6 +288,7 @@ impl Social {
         self.friends.clear();
         self.requests.clear();
         self.sent.clear();
+        self.blocked.clear();
     }
 
     fn send(&self, v: Value) {
@@ -381,6 +385,16 @@ impl Social {
         let _ = std::fs::remove_file(self.dir.join(CHATS));
         let _ = std::fs::remove_file(self.dir.join(PINS));
     }
+    /// Block someone: no friendship, requests or messages from them (they aren't told).
+    pub fn block(&mut self, handle: &str) {
+        let h = handle.trim().trim_start_matches('@').to_lowercase();
+        if !h.is_empty() {
+            self.send(json!({ "t": "block", "handle": h }));
+        }
+    }
+    pub fn unblock(&mut self, handle: &str) {
+        self.send(json!({ "t": "unblock", "handle": handle }));
+    }
     /// Show a conversation (marks it read).
     pub fn open(&mut self, handle: Option<String>) {
         if let Some(h) = &handle {
@@ -450,6 +464,7 @@ impl Social {
                 self.status = "online".into();
                 self.error.clear();
                 self.me = Some(h("handle"));
+                self.blocked = v["blocked"].as_array().into_iter().flatten().filter_map(|b| b.as_str().map(String::from)).collect();
                 let list: Vec<Value> = v["friends"].as_array().cloned().unwrap_or_default();
                 self.friends = list.iter().map(|f| self.checked(f)).collect();
                 if let Some(f) = self.friends.iter().find(|f| f.changed.is_some()) {
@@ -505,6 +520,24 @@ impl Social {
                 }
             }
             "deleted" => return Effect::Deleted,
+            "blocked" => {
+                let who = h("handle");
+                self.friends.retain(|x| x.handle != who);
+                self.requests.retain(|(x, _)| *x != who);
+                self.sent.retain(|x| *x != who);
+                if self.open.as_deref() == Some(&who) {
+                    self.open = None;
+                }
+                if !self.blocked.contains(&who) {
+                    self.blocked.push(who.clone());
+                }
+                return Effect::Toast(format!("blocked @{who} · they can't add or message you"));
+            }
+            "unblocked" => {
+                let who = h("handle");
+                self.blocked.retain(|x| *x != who);
+                return Effect::Toast(format!("unblocked @{who}"));
+            }
             "presence" => {
                 let who = h("handle");
                 if let Some(f) = self.friends.iter_mut().find(|f| f.handle == who) {
@@ -560,6 +593,7 @@ impl Social {
             "friends": friends,
             "requests": self.requests.iter().map(|(h, n)| json!({ "handle": h, "name": n })).collect::<Vec<_>>(),
             "sent": self.sent,
+            "blocked": self.blocked,
             "open": self.open,
             // The code for the key in use; while a key change waits, the code for the *new* key,
             // which is the one the user is about to verify and trust.

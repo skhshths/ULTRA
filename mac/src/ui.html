@@ -165,7 +165,14 @@ body.sizing-h, body.sizing-h * { cursor: row-resize !important; }
 #pal { display: flex; justify-content: center; align-items: flex-start; padding-top: 10vh; background: rgba(20,20,20,.55); }
 .pbox { width: min(620px, 92%); border: 1px solid #2c2c2c; background: #161616; transform: translateY(-6px);
   transition: transform var(--med) var(--ease); }
-#pal.on .pbox { transform: none; }
+#pal.on .pbox, #ts.on .pbox { transform: none; }
+#ts { display: flex; justify-content: center; align-items: flex-start; padding-top: 10vh; background: rgba(20,20,20,.55); }
+#tsq { flex: 1; height: 40px; background: none; border: 0; outline: 0; color: var(--fg); font: 13px Consolas, monospace; }
+#tslist { max-height: 52vh; overflow-y: auto; }
+#tslist .pi { cursor: pointer; }
+#tslist .k { overflow: hidden; text-overflow: ellipsis; max-width: 62%; }
+.idagree { display: block; margin-top: 6px; cursor: pointer; }
+.idagree a { color: var(--acc); }
 .pin { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid #222; }
 .pin span { color: var(--acc); }
 #palq { flex: 1; height: 40px; background: none; border: 0; outline: 0; color: var(--fg); font: 13px Consolas, monospace; }
@@ -575,7 +582,8 @@ body.noscs .hp .scs { display: none; }
   <div class="sec">ULTRA ID</div>
   <div class="row idrow" id="id-new"><div><div class="name">create your ULTRA ID</div>
     <div class="desc">who you are to other ULTRA users: friends add you by your @handle and chat with you (the @ in the top bar).<br>it's made on this computer and signs you in without a password; the private key never leaves it.</div>
-    <div class="idform"><input id="id-name" placeholder="display name" maxlength="40" spellcheck="false" autocomplete="off"><input id="id-handle" placeholder="@handle" maxlength="21" spellcheck="false" autocomplete="off"><button class="run" id="id-make">create</button></div>
+    <div class="idform"><input id="id-name" placeholder="display name" maxlength="40" spellcheck="false" autocomplete="off"><input id="id-handle" placeholder="@handle" maxlength="21" spellcheck="false" autocomplete="off"><button class="run" id="id-make" disabled>create</button></div>
+    <label class="desc idagree"><input type="checkbox" id="id-agree"> i'm 13 or older and agree to the <a href="#" data-page="terms">terms of use and chat rules</a> and the <a href="#" data-page="privacy">privacy policy</a></label>
     <div class="desc iderr" id="id-err"></div></div></div>
   <div class="row idrow" id="id-card"><div class="idcard"><b id="id-av"></b><div><div class="name" id="id-who"></div><div class="desc"><span id="id-handle-show"></span> · since <span id="id-since"></span></div>
     <div class="idcode"><code id="id-code"></code> <button class="run" id="id-copy">copy</button></div></div></div>
@@ -667,6 +675,11 @@ body.noscs .hp .scs { display: none; }
   <div class="tf"><div class="dots" id="t-dots"></div>
     <div class="optout">show on startup <div class="sw" id="t-opt"></div></div>
     <div class="tbtn"><button id="t-skip">skip</button><button id="t-back">← back</button><button id="t-next" class="pri">next →</button></div></div>
+</div></div>
+<div id="ts" class="ovl" tabindex="-1"><div class="pbox">
+  <div class="pin"><span>⌕</span><input id="tsq" placeholder="search every tab: open, asleep, any workspace…" spellcheck="false" autocomplete="off"></div>
+  <div id="tslist"></div>
+  <div class="pft">↑↓ choose · enter go to tab · esc close</div>
 </div></div>
 <div id="pal" class="ovl" tabindex="-1"><div class="pbox">
   <div class="pin"><span>❯</span><input id="palq" placeholder="type a command, or an address…" spellcheck="false" autocomplete="off"></div>
@@ -833,6 +846,7 @@ window.ultra = {
   overview(on) { setOv(on); },
   settings(on) { setCfg(on); },
   palette(on) { setPal(on); },
+  tabsearch(on) { setTs(on); },
   downloads(on) { setDl(on); },
   friends(on) { setFr(on); },
   tour(on) { setTour(on); },
@@ -943,7 +957,8 @@ function drawId() {
   setText($('#id-code'), me.id);
 }
 ultra.idError = (m) => setText($('#id-err'), m);
-$('#id-make').onclick = () => { setText($('#id-err'), ''); send('idcreate', [$('#id-name').value, $('#id-handle').value]); };
+$('#id-agree').onchange = () => { $('#id-make').disabled = !$('#id-agree').checked; };
+$('#id-make').onclick = () => { setText($('#id-err'), ''); send('idcreate', [$('#id-name').value, $('#id-handle').value, $('#id-agree').checked]); };
 $('#id-handle').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#id-make').click(); });
 $('#id-copy').onclick = () => {
   const code = $('#id-code').textContent, done = () => { setText($('#id-copy'), 'copied'); setTimeout(() => setText($('#id-copy'), 'copy'), 1500); };
@@ -973,7 +988,7 @@ ultra.updateState = (st) => { updState = st; drawUpd(); };
 $('#gh-get').onclick = () => send('gh_connect');
 $('#gh-save').onclick = () => { const t = $('#gh-tok').value.trim(); $('#gh-tok').value = ''; send('gh_token', t); };
 $('#gh-tok').addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') $('#gh-save').click(); });
-document.querySelectorAll('[data-page]').forEach((el) => { el.onclick = () => { setCfg(false); send('newurl', 'ultra://' + el.dataset.page); }; });
+document.querySelectorAll('[data-page]').forEach((el) => { el.onclick = (e) => { e.preventDefault(); setCfg(false); send('newurl', 'ultra://' + el.dataset.page); }; });
 $('#upd-forget').onclick = () => { if (confirm('remove the GitHub token from this computer?')) send('gh_forget'); };
 function checkUpdates() { ultra.updateState({ s: 'checking', m: 'asking GitHub…' }); send('update_check'); }
 $('#upd-btn').onclick = () => {
@@ -1060,18 +1075,20 @@ function renderFr() {
   let h = '';
   if ((so.requests || []).length) {
     h += '<div class="frsec">REQUESTS</div>' + so.requests.map((r) => `<div class="fri"><span class="dot"></span><span class="who"><b>@${esc(r.handle)}</b><span>${esc(r.name)}</span></span>` +
-      `<span class="act" data-acc="${esc(r.handle)}" title="accept">✓</span><span class="act bad" data-dec="${esc(r.handle)}" title="decline">✕</span></div>`).join('');
+      `<span class="act" data-acc="${esc(r.handle)}" title="accept">✓</span><span class="act bad" data-dec="${esc(r.handle)}" title="decline">✕</span>` +
+      `<span class="act bad" data-blk="${esc(r.handle)}" title="block (they won't be told)">⊘</span><span class="act" data-rep="${esc(r.handle)}" title="report">!</span></div>`).join('');
   }
   const fl = (so.friends || []).slice().sort((a, b) => (b.online - a.online) || (b.last - a.last) || a.handle.localeCompare(b.handle));
   h += '<div class="frsec">FRIENDS</div>' + (fl.length ? fl.map((f) => `<div class="fri${so.open === f.handle ? ' sel' : ''}" data-open="${esc(f.handle)}"><span class="dot${f.online ? ' on' : ''}"></span>` +
     `<span class="who"><b>@${esc(f.handle)}</b><span>${f.changed ? '⚠ key changed' : esc(f.name)}</span></span>${f.unread ? `<span class="n">${f.unread}</span>` : ''}</div>`).join('') : '<div class="fri"><span class="who"><span>no friends yet · add one by their @handle above</span></span></div>');
   if ((so.sent || []).length) h += '<div class="frsec">WAITING FOR</div>' + so.sent.map((s) => `<div class="fri"><span class="dot"></span><span class="who"><b>@${esc(s)}</b><span>request sent</span></span><span class="act bad" data-dec="${esc(s)}" title="cancel">✕</span></div>`).join('');
+  if ((so.blocked || []).length) h += '<div class="frsec">BLOCKED</div>' + so.blocked.map((b) => `<div class="fri"><span class="dot"></span><span class="who"><b>@${esc(b)}</b><span>blocked</span></span><span class="act" data-unblk="${esc(b)}" title="unblock">unblock</span></div>`).join('');
   setHTML($('#frlist'), h);
   const f = fl.find((x) => x.handle === so.open);
   $('#fr-say').disabled = !f || so.status !== 'online';
   if (!f) { setHTML($('#frhead'), ''); setHTML($('#frmsgs'), '<div class="frempty">pick a friend to chat.<br>only you and they can read your messages: ULTRA encrypts them before they leave this computer.</div>'); frShown = ''; return; }
   setHTML($('#frhead'), `<span class="dot${f.online ? ' on' : ''}" style="width:7px;height:7px;border-radius:50%;background:${f.online ? 'var(--acc)' : '#333'}"></span><b>@${esc(f.handle)}</b><span>${esc(f.name)}${f.online ? ' · online' : ''}</span>` +
-    (so.safety ? `<span title="read this to @${esc(f.handle)} (in person or on a call): if theirs matches, nobody is in the middle" style="font-size:10px">safety code ${esc(so.safety)}</span>` : '') + `<span class="rm" data-rm="${esc(f.handle)}">remove friend</span>`);
+    (so.safety ? `<span title="read this to @${esc(f.handle)} (in person or on a call): if theirs matches, nobody is in the middle" style="font-size:10px">safety code ${esc(so.safety)}</span>` : '') + `<span class="rm" data-rm="${esc(f.handle)}">remove friend</span><span class="rm" data-blk="${esc(f.handle)}" style="margin-left:10px">block</span><span class="rm" data-rep="${esc(f.handle)}" style="margin-left:10px">report</span>`);
   if (f.changed) {
     $('#fr-say').disabled = true;
     setHTML($('#frmsgs'), `<div class="frempty"><b>@${esc(f.handle)}'s ULTRA ID key changed.</b><br>that happens if they made a new ULTRA ID, or if someone is trying to read your messages.<br>read them the new key's safety code (in person or on a call) and trust it only if theirs matches:<br><b style="font-size:15px;letter-spacing:.08em">${esc(so.safety)}</b><br><br><span class="run" data-trust="${esc(f.handle)}" data-code="${esc(so.safety)}">it matches · trust the new key</span></div>`);
@@ -1098,11 +1115,21 @@ $('#frbtn').onclick = () => frOn ? closeFr() : send('friends', true);
 $('#fr').addEventListener('mousedown', (e) => { if (e.target.id === 'fr') closeFr(); });
 $('#frlist').addEventListener('click', (e) => {
   const a = e.target.closest('[data-acc]'), d = e.target.closest('[data-dec]'), o = e.target.closest('[data-open]');
+  if (frBlockReport(e)) return;
+  const u = e.target.closest('[data-unblk]');
+  if (u) { send('sunblock', u.dataset.unblk); return; }
   if (a) send('saccept', a.dataset.acc); else if (d) send('sdecline', d.dataset.dec);
   else if (o) { send('sopen', o.dataset.open); setTimeout(() => $('#fr-say').focus(), 0); }
 });
 $('#frmsgs').addEventListener('click', (e) => { const t = e.target.closest('[data-trust]'); if (t) send('strust', [t.dataset.trust, t.dataset.code]); });
-$('#frhead').addEventListener('click', (e) => { const r = e.target.closest('[data-rm]'); if (r && confirm(`remove @${r.dataset.rm} from your friends? your chat history with them stays on this computer.`)) send('sremove', r.dataset.rm); });
+// Block (silent: they aren't told) and report (an email to ULTRA, with their handle filled in).
+function frBlockReport(e) {
+  const b = e.target.closest('[data-blk]'), r = e.target.closest('[data-rep]');
+  if (b) { if (confirm(`block @${b.dataset.blk}?\n\nyou stop being friends, and they can't send you requests or messages. they aren't told. you can unblock them later in this panel.`)) send('sblock', b.dataset.blk); return true; }
+  if (r) { send('sreport', r.dataset.rep); return true; }
+  return false;
+}
+$('#frhead').addEventListener('click', (e) => { if (frBlockReport(e)) return; const r = e.target.closest('[data-rm]'); if (r && confirm(`remove @${r.dataset.rm} from your friends? your chat history with them stays on this computer.`)) send('sremove', r.dataset.rm); });
 for (const id of ['#fr-add', '#fr-say']) $(id).addEventListener('keydown', (e) => {
   e.stopPropagation();
   if (e.key === 'Escape') { closeFr(); return; }
@@ -1129,7 +1156,7 @@ $('#dl-clear').onclick = () => send('dl', ['clear', 0]);
   const groups = [
     ['TABS', [[`${M}+t`, 'new tab'], [`${M}+w`, 'close tab'], [`${M}+shift+t`, 'reopen closed tab'], [`${M}+1‥8`, 'jump to tab'],
       [`${M}+9`, 'last tab'], [`${M}+tab`, 'next tab'], [`${M}+shift+tab`, 'previous tab'], ['middle-click', 'close a tab'], ['right-click', 'put a tab to sleep']]],
-    ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], [`${M}+shift+1‥9`, 'pull a tab to cursor'], [`${M}+shift+w`, 'close pane at cursor'], ['ctrl+shift+q', 'hide pane, keep its tab'],
+    ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], [`${M}+shift+1‥9`, 'pull a tab to cursor'], [`${M}+shift+w`, 'close pane at cursor'], [`${M}+shift+a`, 'search every tab'], ['ctrl+shift+q', 'hide pane, keep its tab'],
       [`${M}+shift+r`, 'blank tab at cursor'], [`${M}+shift+f`, 'zoom pane at cursor'], [`${M}+${A}+arrows`, 'move focus between panes'],
       ['click', 'focus a pane'], ['drag a gap', 'resize panes']]],
     ['WORKSPACES', [[`${M}+${A}+1‥9`, 'switch workspace'], [`${M}+${A}+shift+1‥9`, 'send tab to workspace'],
@@ -1361,6 +1388,43 @@ function setPal(on) {
   renderPanes();
 }
 function closePal() { setPal(false); send('palette', false); }
+// ── tab search (ctrl+shift+a): every tab, awake or asleep, in every workspace ──
+let tsOn = false, tsItems = [], tsSel = 0;
+function setTs(on) {
+  tsOn = on;
+  $('#ts').classList.toggle('on', on);
+  if (on) {
+    if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false); if (dlOn) setDl(false); if (frOn) setFr(false); if (tourOn) setTour(false);
+    $('#tsq').value = ''; tsSel = 0; drawTs(); setTimeout(() => $('#tsq').focus(), 0);
+  } else $('#tsq').blur();
+  renderPanes();
+}
+function closeTs() { setTs(false); send('tabsearch', false); }
+function drawTs() {
+  const words = $('#tsq').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const inPrivate = S.ws === 9;
+  const host = (u) => { try { return new URL(u).host || u; } catch (_) { return u; } };
+  tsItems = S.tabs.map((t, i) => [t, i]).filter(([t]) => !t.g && (!t.p || inPrivate))
+    .filter(([t]) => words.every((w) => (t.t + ' ' + t.u).toLowerCase().includes(w)))
+    .sort(([a, ai], [b, bi]) => (b.v - a.v) || ((a.w === S.ws ? 0 : 1) - (b.w === S.ws ? 0 : 1)) || ai - bi);
+  tsSel = Math.min(tsSel, Math.max(0, tsItems.length - 1));
+  const state = (t) => t.v ? 'on screen' : t.s === 'sleep' ? 'asleep' : t.s === 'home' ? 'new tab' : 'open';
+  $('#tslist').innerHTML = tsItems.length ? tsItems.map(([t], n) =>
+    `<div class="pi${n === tsSel ? ' sel' : ''}" data-n="${n}"><span class="k">${esc(t.t || (t.s === 'home' ? 'new tab' : host(t.u)))}</span><span class="a">${esc(t.s === 'home' ? '' : host(t.u))}</span>` +
+    `<span class="d">${t.p ? 'private' : 'ws ' + (t.w + 1)} · ${state(t)}</span></div>`).join('')
+    : '<div class="pi"><span class="a">no tab matches</span></div>';
+  const sel = $('#tslist .sel'); if (sel) sel.scrollIntoView({ block: 'nearest' });
+}
+function goTs(n) { const it = tsItems[n]; if (!it) return; closeTs(); send('tab', it[1]); }
+$('#tsq').addEventListener('input', () => { tsSel = 0; drawTs(); });
+$('#tsq').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') { tsSel = Math.min(tsSel + 1, tsItems.length - 1); drawTs(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { tsSel = Math.max(tsSel - 1, 0); drawTs(); e.preventDefault(); }
+  else if (e.key === 'Enter') { goTs(tsSel); e.preventDefault(); }
+  else if (e.key === 'Escape') { closeTs(); e.preventDefault(); e.stopPropagation(); }
+});
+$('#tslist').addEventListener('click', (e) => { const r = e.target.closest('[data-n]'); if (r) goTs(+r.dataset.n); });
+$('#ts').addEventListener('mousedown', (e) => { if (e.target.id === 'ts') closeTs(); });
 // Exact command at the start of the input, plus whatever follows it.
 function parsePal(q) {
   const lq = q.toLowerCase();
@@ -2079,6 +2143,7 @@ document.addEventListener('keydown', (e) => {
   else if (c && e.shiftKey && code === 'KeyC') { if (frOn) closeFr(); else send('friends', true); e.preventDefault(); return; }
   else if (c && e.shiftKey && code === 'KeyE') m = 'mvnew';
   else if (c && e.shiftKey && code === 'KeyW') m = 'closeat';
+  else if (c && e.shiftKey && code === 'KeyA') m = 'tabsearch';
   else if (e.ctrlKey && !e.metaKey && e.shiftKey && code === 'KeyQ') m = 'hideat';
   else if (c && e.shiftKey && code === 'KeyF') m = 'zoom';
   else if (c && e.shiftKey && code === 'KeyP') { if (palOn) closePal(); else send('palette', true); e.preventDefault(); return; }

@@ -317,6 +317,18 @@ impl Library {
         added
     }
 
+    /// Remove one page from history (ultra://history's ×).
+    pub fn forget(&mut self, url: &str) {
+        self.history.retain(|v| v.url != url);
+        self.dirty.set(true);
+    }
+
+    /// Remove every page last visited at or after `since` (unix seconds): "clear the last hour".
+    pub fn forget_since(&mut self, since: u64) {
+        self.history.retain(|v| v.last < since);
+        self.dirty.set(true);
+    }
+
     pub fn clear_history(&mut self) {
         self.history.clear();
         self.digest = Digest { day: today(), ..Default::default() };
