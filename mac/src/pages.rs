@@ -53,6 +53,23 @@ pub fn panel(url: &str) -> Option<&'static str> {
     }
 }
 
+/// A secret for this run of ULTRA. It's written into the live pages (history, memory) and every
+/// `page:` message must carry it: another document that ends up in the same tab never has it.
+pub fn secret() -> &'static str {
+    static SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SECRET.get_or_init(|| {
+        use std::hash::{BuildHasher, Hasher};
+        (0..2u8)
+            .map(|i| {
+                let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+                h.write_u8(i);
+                h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+                format!("{:016x}", h.finish())
+            })
+            .collect()
+    })
+}
+
 /// The page's HTML.
 pub fn html(url: &str) -> String {
     let name = url.strip_prefix("ultra://").unwrap_or("");
@@ -82,6 +99,7 @@ pub fn html(url: &str) -> String {
             format!("<h1>ultra://{} isn't a page</h1><p>These are:</p>{}", escape(other), list()),
         ),
     };
+    let key = if script.is_empty() { String::new() } else { format!("const KEY = '{}';", secret()) };
     format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><title>{title}</title><style>
 :root {{ color-scheme: dark; }}
@@ -105,7 +123,7 @@ document.addEventListener('click', (e) => {{
   const a = e.target.closest('a[href^="ultra://"]');
   if (a) {{ e.preventDefault(); window.ipc.postMessage('ultra:' + a.getAttribute('href').slice(8)); }}
 }});
-{script}</script></body></html>"#
+{key}{script}</script></body></html>"#
     )
 }
 
@@ -148,7 +166,7 @@ const HISTORY_BODY: &str = r#"<h1>History</h1><p class="muted" id="count"></p>
 <div id="list"></div><p class="muted" id="more"></p>"#;
 
 const HISTORY_JS: &str = r#"
-const send = (o) => window.ipc.postMessage('page:' + JSON.stringify(o));
+const send = (o) => window.ipc.postMessage('page:' + JSON.stringify(Object.assign({ k: KEY }, o)));
 let items = [], now = 0;
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -207,7 +225,7 @@ const MEMORY_BODY: &str = r#"<h1>Memory</h1><p class="muted" id="note"></p>
 <table class="tabs"><thead><tr><th>tab</th><th>state</th><th class="num" id="memh">memory</th><th class="num" id="cpuh">CPU</th><th class="num">idle</th><th></th></tr></thead><tbody id="rows"></tbody></table>"#;
 
 const MEMORY_JS: &str = r#"
-const send = (o) => window.ipc.postMessage('page:' + JSON.stringify(o));
+const send = (o) => window.ipc.postMessage('page:' + JSON.stringify(Object.assign({ k: KEY }, o)));
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const mb = (x) => x == null ? '–' : x >= 1024 ? (x / 1024).toFixed(1) + ' GB' : Math.round(x) + ' MB';
@@ -325,5 +343,6 @@ mod tests {
         assert_eq!(url_encode("ULTRA chat report: @bob
 hi&bye"), "ULTRA%20chat%20report%3A%20%40bob%0Ahi%26bye");
         assert!(html("ultra://history").contains("window.ultraData") && html("ultra://memory").contains("sleep every hidden tab"));
+        assert!(html("ultra://history").contains(secret()) && !html("ultra://privacy").contains(secret()) && secret().len() == 32);
     }
 }

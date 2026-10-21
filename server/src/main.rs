@@ -148,7 +148,9 @@ impl Hub {
     }
     fn requests(&self, handle: &str) -> (Vec<Value>, Vec<String>) {
         let db = self.db.lock().unwrap();
-        let mut st = db.prepare("SELECT r.src, u.name FROM requests r JOIN users u ON u.handle = r.src WHERE r.dst = ?1 ORDER BY r.ts").unwrap();
+        let mut st = db
+            .prepare("SELECT r.src, u.name FROM requests r JOIN users u ON u.handle = r.src WHERE r.dst = ?1 AND r.src NOT IN (SELECT b FROM blocks WHERE a = ?1) ORDER BY r.ts")
+            .unwrap();
         let incoming = st.query_map([handle], |r| Ok(json!({ "handle": r.get::<_, String>(0)?, "name": r.get::<_, String>(1)? }))).unwrap().flatten().collect();
         let mut st = db.prepare("SELECT dst FROM requests WHERE src = ?1 ORDER BY ts").unwrap();
         let outgoing = st.query_map([handle], |r| r.get(0)).unwrap().flatten().collect();
@@ -232,8 +234,10 @@ fn handle_msg(hub: &Hub, me: &str, v: &Value) -> Option<Value> {
             if hub.blocks(me, &other) {
                 return err(&format!("you blocked @{other} · unblock them first (friends panel)"));
             }
-            // Blocked by them: it looks sent, but it never reaches them.
+            // Blocked by them: it looks sent (and stays in your "sent" list), but it never reaches
+            // them: their incoming list leaves out requests from people they blocked.
             if hub.blocks(&other, me) {
+                let _ = hub.db.lock().unwrap().execute("INSERT OR IGNORE INTO requests VALUES (?1, ?2, ?3)", params![me, other, now()]);
                 return Some(json!({ "t": "requested", "handle": other, "name": name }));
             }
             let db = hub.db.lock().unwrap();
@@ -311,17 +315,19 @@ fn handle_msg(hub: &Hub, me: &str, v: &Value) -> Option<Value> {
                 return err(&format!("there's no @{other}"));
             }
             let were_friends = hub.are_friends(me, &other);
-            {
+            let had_request = {
                 let db = hub.db.lock().unwrap();
                 let _ = db.execute("INSERT OR IGNORE INTO blocks VALUES (?1, ?2, ?3)", params![me, other, now()]);
                 let _ = db.execute("DELETE FROM friends WHERE (a = ?1 AND b = ?2) OR (a = ?2 AND b = ?1)", [me, &other]);
-                let _ = db.execute("DELETE FROM requests WHERE (src = ?1 AND dst = ?2) OR (src = ?2 AND dst = ?1)", [me, &other]);
                 let _ = db.execute("DELETE FROM messages WHERE (src = ?1 AND dst = ?2) OR (src = ?2 AND dst = ?1)", [me, &other]);
-            }
-            // They only see the friendship end (or a request disappear), as with "remove".
+                db.execute("DELETE FROM requests WHERE (src = ?1 AND dst = ?2) OR (src = ?2 AND dst = ?1)", [me, &other]).unwrap_or(0) > 0
+            };
+            // They see only what visibly changed for them, exactly as a remove or decline would
+            // look, and nothing at all if there was nothing between you: a block can't be told
+            // apart from those.
             if were_friends {
                 hub.send_to(&other, &json!({ "t": "removed", "handle": me }));
-            } else {
+            } else if had_request {
                 hub.send_to(&other, &json!({ "t": "declined", "handle": me }));
             }
             Some(json!({ "t": "blocked", "handle": other }))

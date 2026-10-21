@@ -1608,8 +1608,20 @@ impl App {
         }
     }
 
+    /// Is tab `i`'s webview really showing the page ULTRA gave it (`load_html` leaves it at
+    /// about:blank), not a site it has since started loading?
+    fn on_own_page(&self, i: usize) -> bool {
+        self.tabs[i].view.as_ref().is_some_and(|v| {
+            let u = macos::url(v).unwrap_or_default();
+            u.is_empty() || u == "about:blank"
+        })
+    }
+
     /// Send a live ULTRA page its data (it renders it with `ultraData`).
     fn push_page(&self, i: usize) {
+        if !self.on_own_page(i) {
+            return;
+        }
         let Some(v) = &self.tabs[i].view else { return };
         let data = match self.tabs[i].url.as_str() {
             "ultra://history" => {
@@ -3468,9 +3480,11 @@ impl App {
         if let Some(body) = msg.strip_prefix("page:") {
             // ultra://history and ultra://memory asking for their data or acting on it (only
             // from those pages themselves).
-            if matches!(self.tabs[i].url.as_str(), "ultra://history" | "ultra://memory") {
+            if matches!(self.tabs[i].url.as_str(), "ultra://history" | "ultra://memory") && self.on_own_page(i) {
                 if let Ok(v) = serde_json::from_str::<Value>(body) {
-                    self.page_cmd(i, &v);
+                    if v["k"].as_str() == Some(pages::secret()) {
+                        self.page_cmd(i, &v);
+                    }
                 }
             }
             return;
