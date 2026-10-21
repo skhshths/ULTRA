@@ -41,6 +41,15 @@ The download links in the README use `releases/latest/download/<file>`, so they 
 newest build. Neither build is code-signed: Windows SmartScreen and macOS Gatekeeper show a
 warning on first launch, which the README explains how to get past.
 
+## Support prompt (maintainers)
+
+Every third launch (`COFFEE_EVERY`), a slim "buy us a coffee" strip appears under the top bar a
+few seconds after startup (never over a page, the tutorial or an open panel). The launch count is
+`launches` in `settings.json`.
+
+The button opens `SUPPORT_URL` (https://ko-fi.com/skhshths/), near the top of
+`windows/src/main.rs` and `mac/src/main.rs`. Emptying it turns the strip off entirely.
+
 ## Icons
 
 `tools/make_icon.py` (at the top of the repo) regenerates both platforms' icons, normal and inverted

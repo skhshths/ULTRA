@@ -148,6 +148,12 @@ video players, ad iframes, PDFs, and sites that swallow keys. On Windows that is
 - **Separate logins per workspace**: settings → privacy or `isolate` in the palette (macOS 14+).
 - Notices show in the top bar, never under a page.
 
+## Support prompt
+
+Every third launch, a slim "buy us a coffee" strip offers a way to support ULTRA on [Ko-fi](https://ko-fi.com/skhshths/). "not now" or ✕ closes it until then.
+
+(Maintainers: where the button points is set in `SUPPORT_URL`; see [BUILDING.md](../BUILDING.md#support-prompt-maintainers).)
+
 ## Permissions you may see
 
 * **System Audio Recording**: the first time a tab plays sound with "audio reactive" or

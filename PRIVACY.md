@@ -1,6 +1,6 @@
 # ULTRA Privacy Policy
 
-*Effective [DATE]. Applies to the ULTRA web browser for Windows and macOS and to ULTRA chat.*
+*Effective October 20, 2026. Applies to the ULTRA web browser for Windows and macOS and to ULTRA chat.*
 
 ULTRA does not collect, sell or share your browsing data. Your history, bookmarks, tabs and
 settings stay on your device. The only data that leaves it is what is needed to check for
@@ -8,7 +8,7 @@ updates, block unsafe sites, and deliver chat messages, as described below.
 
 ## 1. Who we are
 
-ULTRA is made by [NAME] ("we", "us"). Questions or requests: [CONTACT EMAIL].
+ULTRA is made by Oliver Barnet ("we", "us"). Questions or requests: oliverbarnet441@gmail.com.
 
 ## 2. Data that stays on your device
 
@@ -33,6 +33,7 @@ browsing is not saved to history or sessions.
 | Search | When you search from the address bar | Your search terms | The search engine you choose |
 | Ad-block list updates | About once a week, in versions that refresh their lists | A standard web request for the filter lists | The list publishers (EasyList, uBlock Origin, Peter Lowe) |
 | ULTRA chat | Only if you create an ULTRA ID | See section 4 | Our chat relay, through Cloudflare |
+| Support link | Only if you click "buy us a coffee" on the occasional support strip | Nothing from ULTRA: it just opens our Ko-fi page in a tab | Ko-fi, under [Ko-fi's privacy policy](https://more.ko-fi.com/privacy) if you donate |
 
 Websites you visit receive what any browser sends them, such as your IP address. Their own
 privacy policies apply to them.
@@ -64,7 +65,7 @@ accounts beyond the optional chat ID.
 - Clear history and site data in settings, or delete the data folder.
 - Delete your ULTRA ID in settings (**ULTRA ID → delete**). This removes your handle, friend
   list, friend requests and waiting messages from the relay at once, then your ID and chats from
-  your computer. If you can no longer sign in, email [CONTACT EMAIL] with your @handle.
+  your computer. If you can no longer sign in, email oliverbarnet441@gmail.com with your @handle.
 - Depending on where you live (for example under the GDPR or California law), you may have the
   right to access, correct or delete data about you. Contact us and we will respond within
   30 days.

@@ -1,6 +1,6 @@
 # ULTRA Terms of Use
 
-*Effective [DATE].* By downloading, installing or using ULTRA, you agree to these terms and the
+*Effective October 20, 2026.* By downloading, installing or using ULTRA, you agree to these terms and the
 [Privacy Policy](PRIVACY.md). If you don't agree, don't use ULTRA.
 
 ## 1. License
@@ -19,7 +19,7 @@ including the ad blocker, safe-browsing checks and chat, may fail, miss things, 
 
 ## 3. Limitation of liability
 
-TO THE FULLEST EXTENT ALLOWED BY LAW, [NAME] AND ULTRA'S CONTRIBUTORS ARE NOT LIABLE FOR ANY
+TO THE FULLEST EXTENT ALLOWED BY LAW, Oliver Barnet AND ULTRA'S CONTRIBUTORS ARE NOT LIABLE FOR ANY
 INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL OR PUNITIVE DAMAGES, OR FOR LOSS OF DATA, PROFITS,
 ACCOUNTS OR GOODWILL, ARISING FROM YOUR USE OF OR INABILITY TO USE ULTRA, EVEN IF ADVISED OF THE
 POSSIBILITY. OUR TOTAL LIABILITY FOR ANY CLAIM IS LIMITED TO THE GREATER OF THE AMOUNT YOU PAID US
@@ -73,7 +73,7 @@ these rules.
 3. **Handles.** Don't impersonate a person, brand or ULTRA staff, or choose an offensive handle.
    We may reclaim handles that break this rule.
 4. **Encryption means we can't moderate messages.** We can't read your messages, so we act on
-   reports. To report someone, email [CONTACT EMAIL] with their @handle and what happened,
+   reports. To report someone, email oliverbarnet441@gmail.com with their @handle and what happened,
    including screenshots if you have them. You can also remove them from your friends at any
    time. We may remove IDs that break these rules.
 5. **No guarantees.** Chat may be slow, go down, or lose undelivered messages. Don't rely on it
@@ -85,7 +85,7 @@ these rules.
 
 ## 11. General
 
-These terms are governed by the laws of [STATE / COUNTRY], without regard to conflict-of-law
+These terms are governed by the laws of the State of New York, United States of America, without regard to conflict-of-law
 rules. If part of these terms is unenforceable, the rest still applies. We may update these terms
 by posting a new version; continuing to use ULTRA after that means you accept it.
-Contact: [CONTACT EMAIL].
+Contact: oliverbarnet441@gmail.com.

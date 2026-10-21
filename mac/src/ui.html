@@ -391,6 +391,19 @@ body.glance #glancebg, body.glance #glance { display: block; }
 /* bookmarks bar */
 :root { --top: var(--bar); --pulse: 0; }
 body.bmbar { --top: calc(var(--bar) + 26px); }
+/* "support us" strip (5th launch only): Rust moves the panes down while it is shown, so it never covers a page. */
+body.coffee { --top: calc(var(--bar) + 30px); }
+body.bmbar.coffee { --top: calc(var(--bar) + 56px); }
+#coffee { position: fixed; top: calc(var(--top) - 27px); left: var(--gap); right: var(--gap); height: 22px; display: none;
+  align-items: center; gap: 12px; padding: 0 6px 0 10px; z-index: 3; font-size: 11px; color: var(--dim);
+  border: 1px solid color-mix(in srgb, var(--acc) 22%, #1f1f1f); background: color-mix(in srgb, var(--bg) 94%, var(--acc)); }
+body.coffee #coffee { display: flex; }
+#coffee .msg { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#coffee .msg b { color: var(--fg); font-weight: 400; }
+#coffee .cb { color: var(--acc); padding: 1px 8px; border: 1px solid color-mix(in srgb, var(--acc) 45%, transparent); }
+#coffee .cb:hover { background: color-mix(in srgb, var(--acc) 15%, transparent); }
+#coffee .later, #coffee .x { color: var(--dim); padding: 1px 4px; }
+#coffee .later:hover, #coffee .x:hover { color: var(--fg); }
 #bmbar { position: fixed; top: var(--bar); left: 0; right: 0; height: 26px; display: none; align-items: center; gap: 2px;
   padding: 0 10px; z-index: 3; background: color-mix(in srgb, var(--bg) 92%, transparent); border-bottom: 1px solid #1f1f1f;
   overflow-x: auto; scrollbar-width: none; }
@@ -540,7 +553,8 @@ body.noscs .hp .scs { display: none; }
   <span id="clock"></span><span id="frbtn" title="friends & chat (cmd+shift+c)">@<i></i></span><span id="dlbtn" title="downloads (cmd+j)"><i><b></b></i>↓</span><span id="cfgbtn" title="settings (cmd+,)"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" style="display:block"><path fill="currentColor" d="M9.4 1.2l.4 1.7c.4.1.8.3 1.1.5l1.5-.9 1.3 1.3-.9 1.5c.2.3.4.7.5 1.1l1.7.4v1.9l-1.7.4c-.1.4-.3.8-.5 1.1l.9 1.5-1.3 1.3-1.5-.9c-.3.2-.7.4-1.1.5l-.4 1.7H7.5l-.4-1.7c-.4-.1-.8-.3-1.1-.5l-1.5.9-1.3-1.3.9-1.5c-.2-.3-.4-.7-.5-1.1L1.9 9V7.1l1.7-.4c.1-.4.3-.8.5-1.1l-.9-1.5 1.3-1.3 1.5.9c.3-.2.7-.4 1.1-.5l.4-1.7h1.9zM8.5 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"/></svg></span>
   <div class="wc"><div id="wmin">─</div><div id="wmax">□</div><div id="wq" class="q">✕</div></div>
 </div>
-<div id="bmbar"></div><div id="panes"></div><div id="glancebg"></div><div id="glance"><div class="gh"><span class="gt"></span>
+<div id="bmbar"></div><div id="coffee"><span class="msg">☕ <b>enjoying ULTRA?</b> it's made by a tiny team. if it's saved you some time, you can buy us a coffee.</span>
+  <span class="cb" id="coffee-yes">buy us a coffee</span><span class="later" id="coffee-later">not now</span><span class="x" id="coffee-x" title="close">✕</span></div><div id="panes"></div><div id="glancebg"></div><div id="glance"><div class="gh"><span class="gt"></span>
   <span class="gb" id="g-split" title="keep it, tiled next to the focused pane (cmd+enter)">⧉ split</span><span class="gb" id="g-tab" title="keep it as a background tab">keep as tab</span><span class="gb" id="g-x" title="close (esc)">✕</span></div></div>
 <div id="toast"></div><div id="sugg"></div>
 <div id="fr" class="ovl" tabindex="-1"><div class="card">
@@ -796,6 +810,7 @@ window.ultra = {
     $('#trim').style.display = cfg().stats ? '' : 'none';
     $('#zoomchip').style.display = s.zoom != null ? 'inline' : 'none';
     document.body.classList.toggle('maxed', !!s.max);
+    document.body.classList.toggle('coffee', !!s.coffee);
     renderGlance();
     renderDl();
     renderFr();
@@ -2010,6 +2025,10 @@ $('#nback').onclick = () => send('back');
 $('#nfwd').onclick = () => send('fwd');
 // Mouse side buttons over the chrome go back/forward too (pages handle them natively).
 document.addEventListener('mouseup', (e) => { if (e.button === 3) send('back'); else if (e.button === 4) send('fwd'); });
+// Support prompt: shown once, on the 5th launch. The button is a placeholder for now (no payment link yet).
+$('#coffee-yes').onclick = () => send('coffee', 'yes');
+$('#coffee-later').onclick = () => send('coffee', 'later');
+$('#coffee-x').onclick = () => send('coffee', 'close');
 
 // ── bookmarks bar ──
 const bmbar = $('#bmbar');

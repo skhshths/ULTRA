@@ -42,3 +42,9 @@ The exe lands in `target/release/ultra.exe`. Requires the Microsoft Edge WebView
 
 `../tools/make_icon.py` regenerates `assets/ultra.ico` and `ultra-inv.ico` (needs Pillow); `build.rs` embeds the one
 matching `src/edition.rs`.
+
+## Support prompt
+
+Every third launch, a slim "buy us a coffee" strip offers a way to support ULTRA on [Ko-fi](https://ko-fi.com/skhshths/). "not now" or ✕ closes it until then.
+
+(Maintainers: where the button points is set in `SUPPORT_URL`; see [BUILDING.md](../BUILDING.md#support-prompt-maintainers).)
