@@ -161,6 +161,27 @@ body.sizing-h, body.sizing-h * { cursor: row-resize !important; }
 .tile.sel { border-color: var(--acc); }
 .tile.cur .h span:first-child { color: var(--acc); }
 
+/* omnibar (ctrl+f) */
+#omni { display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; background: rgba(10,10,10,.62); }
+#omni .obox { width: min(720px, 92%); background: #161616; border: 1px solid #2e2e2e; border-radius: 12px; overflow: hidden;
+  box-shadow: 0 24px 70px rgba(0,0,0,.6); transform: translateY(-10px) scale(.985); transition: transform var(--med) var(--ease); }
+#omni.on .obox { transform: none; }
+.oin { display: flex; align-items: center; gap: 12px; padding: 0 18px; border-bottom: 1px solid #232323; }
+.oic { color: var(--acc); font-size: 20px; }
+#omq { flex: 1; height: 58px; background: none; border: 0; outline: 0; color: var(--fg); font: 18px system-ui, -apple-system, "Segoe UI", sans-serif; }
+#omq::placeholder { color: #555; }
+#omlist { max-height: 56vh; overflow-y: auto; padding: 6px; }
+.osec { padding: 10px 12px 4px; font-size: 10px; letter-spacing: .14em; color: var(--dim); }
+.oi { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 8px; color: var(--mid); cursor: pointer; min-width: 0; }
+.oi .oico { width: 20px; flex: none; text-align: center; color: var(--dim); font-size: 14px; }
+.oi .ot { color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.oi .ou { color: #626262; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-left: auto; max-width: 42%; flex: none; }
+.oi .okind { flex: none; font-size: 10px; color: var(--dim); border: 1px solid #2c2c2c; border-radius: 4px; padding: 1px 6px; }
+.oi.sel { background: var(--acc-bg); }
+.oi.sel .ot { color: var(--acc); }
+.oi.sel .oico { color: var(--acc); }
+.oft { display: flex; gap: 18px; padding: 9px 16px; border-top: 1px solid #1f1f1f; color: #4a4a4a; font-size: 11px; }
+.oft b { color: #6a6a6a; font-weight: 500; }
 /* command palette */
 #pal { display: flex; justify-content: center; align-items: flex-start; padding-top: 10vh; background: rgba(20,20,20,.55); }
 .pbox { width: min(620px, 92%); border: 1px solid #2c2c2c; background: #161616; transform: translateY(-6px);
@@ -676,6 +697,11 @@ body.noscs .hp .scs { display: none; }
     <div class="optout">show on startup <div class="sw" id="t-opt"></div></div>
     <div class="tbtn"><button id="t-skip">skip</button><button id="t-back">← back</button><button id="t-next" class="pri">next →</button></div></div>
 </div></div>
+<div id="omni" class="ovl" tabindex="-1"><div class="obox">
+  <div class="oin"><span class="oic">⌕</span><input id="omq" placeholder="search, type an address, or find a tab, bookmark, page or command" spellcheck="false" autocomplete="off"></div>
+  <div id="omlist"></div>
+  <div class="oft"><span><b>enter</b> open</span><span><b>shift+enter</b> new tab</span><span><b>↑↓</b> choose</span><span><b>esc</b> close</span></div>
+</div></div>
 <div id="ts" class="ovl" tabindex="-1"><div class="pbox">
   <div class="pin"><span>⌕</span><input id="tsq" placeholder="search every tab: open, asleep, any workspace…" spellcheck="false" autocomplete="off"></div>
   <div id="tslist"></div>
@@ -847,6 +873,7 @@ window.ultra = {
   settings(on) { setCfg(on); },
   palette(on) { setPal(on); },
   tabsearch(on) { setTs(on); },
+  omnibar(on) { setOmni(on); },
   downloads(on) { setDl(on); },
   friends(on) { setFr(on); },
   tour(on) { setTour(on); },
@@ -1161,7 +1188,7 @@ $('#dl-clear').onclick = () => send('dl', ['clear', 0]);
       ['click', 'focus a pane'], ['drag a gap', 'resize panes']]],
     ['WORKSPACES', [[`${M}+${A}+1‥9`, 'switch workspace'], [`${M}+${A}+shift+1‥9`, 'send tab to workspace'],
       [`${M}+${A}+0`, 'private workspace'], [`${M}+${A}+l`, 'lock private workspace']]],
-    ['PAGES', [[`${M}+l` + ' / ' + `${M}+f`, 'search or go to a site'], ['just type', 'search from anywhere'], [MAC ? 'cmd+[ / cmd+]' : 'alt+← / alt+→', 'back / forward'],
+    ['PAGES', [[`${M}+f`, 'omnibar: search, go, find tabs and more'], [`${M}+l`, 'address bar'], ['just type', 'search from anywhere'], [MAC ? 'cmd+[ / cmd+]' : 'alt+← / alt+→', 'back / forward'],
       [`${M}+d`, 'bookmark page'], [`${M}+r`, 'reload'], ['f1 / f2', 'back / forward'], [`${M}+shift+c`, 'friends & chat']]],
     ['PANELS', [[`${M}+j`, 'downloads'], [`${M}+k`, 'all tabs overview'], [`${M}+shift+p`, 'command palette'], [`${M}+,`, 'settings']]],
   ];
@@ -1400,6 +1427,90 @@ function setTs(on) {
   renderPanes();
 }
 function closeTs() { setTs(false); send('tabsearch', false); }
+// ── omnibar (ctrl+f): one box for addresses, searches, open tabs, history, bookmarks, ULTRA's
+// pages and palette commands. Enter opens in this tab, shift+enter in a new one. ──
+const OPAGES = [['cell', 'spreadsheets'], ['history', 'your history'], ['memory', 'memory and tabs'], ['settings', 'settings'], ['downloads', 'downloads'],
+  ['chat', 'friends & chat'], ['about', 'about ULTRA'], ['privacy', 'privacy policy'], ['terms', 'terms of use'], ['licenses', 'licenses']];
+const ENGINES = { google: 'Google', bing: 'Bing', brave: 'Brave Search', duckduckgo: 'DuckDuckGo' };
+let omniOn = false, omniItems = [], omniSel = 0, omniHist = [], omniQ = '', omniTimer = 0;
+const looksLikeUrl = (q) => /^(https?:\/\/|ultra:|file:|about:|localhost(:\d+)?(\/|$))/i.test(q) || (!/\s/.test(q) && /^[^\s/]+\.[a-z]{2,}(:\d+)?(\/.*)?$/i.test(q));
+function setOmni(on) {
+  omniOn = on;
+  $('#omni').classList.toggle('on', on);
+  if (on) {
+    omniHook();
+    for (const [open, close] of [[ovOn, setOv], [cfgOn, setCfg], [palOn, setPal], [dlOn, setDl], [frOn, setFr], [tourOn, setTour]]) if (open) close(false);
+    if (typeof tsOn !== 'undefined' && tsOn) setTs(false);
+    if (typeof upOn !== 'undefined' && upOn) setUp(false);
+    $('#omq').value = ''; omniQ = ''; omniHist = []; omniSel = 0; drawOmni(); setTimeout(() => $('#omq').focus(), 0);
+  } else $('#omq').blur();
+  renderPanes();
+}
+function closeOmni() { setOmni(false); send('omnibar', false); }
+function drawOmni() {
+  const q = omniQ, lq = q.toLowerCase(), words = lq.split(/\s+/).filter(Boolean);
+  const items = [];
+  const add = (sec, it) => { it.sec = sec; items.push(it); };
+  if (q) {
+    if (looksLikeUrl(q)) add('', { ico: '→', t: q, kind: 'go to', go: q });
+    else add('', { ico: '⌕', t: q, u: 'search ' + (ENGINES[cfg().search] || 'the web'), kind: 'search', go: q });
+  }
+  const inPrivate = S.ws === 9;
+  const tabs = S.tabs.map((t, i) => [t, i]).filter(([t]) => !t.g && (!t.p || inPrivate) && t.s !== 'home')
+    .filter(([t]) => words.every((w) => (t.t + ' ' + t.u).toLowerCase().includes(w)))
+    .sort(([a], [b]) => (b.v - a.v)).slice(0, q ? 5 : 8);
+  for (const [t, i] of tabs) add(q ? 'OPEN TABS' : 'YOUR TABS', { ico: '▭', t: t.t || host(t.u), u: host(t.u), kind: t.v ? 'on screen' : t.s === 'sleep' ? 'asleep' : 'tab', tab: i });
+  if (q) {
+    const seen = new Set(tabs.map(([t]) => t.u));
+    for (const it of omniHist.filter((h) => !seen.has(h.u)).slice(0, 6)) add('HISTORY & BOOKMARKS', { ico: it.b ? '★' : '↺', t: it.t || host(it.u), u: it.u.replace(/^https?:\/\/(www\.)?/, ''), go: it.u, link: true });
+    const pq = lq.replace(/^ultra:\/*/, '');
+    for (const [n, d] of OPAGES.filter(([n, d]) => n.startsWith(pq) || (pq.length > 2 && d.includes(pq))).slice(0, 3)) add("ULTRA'S PAGES", { ico: '◇', t: 'ultra://' + n, u: d, go: 'ultra://' + n, link: true });
+    const hit = typeof parsePal === 'function' ? parsePal(q) : null;
+    if (hit) add('COMMAND', { ico: '❯', t: hit[0].k + (hit[1] ? ' ' + hit[1] : ''), u: hit[0].d, kind: 'run', cmd: q });
+  }
+  omniItems = items;
+  omniSel = Math.min(omniSel, Math.max(0, items.length - 1));
+  let sec = null, h = '';
+  items.forEach((it, i) => {
+    if (it.sec && it.sec !== sec) { h += `<div class="osec">${esc(it.sec)}</div>`; }
+    sec = it.sec;
+    h += `<div class="oi${i === omniSel ? ' sel' : ''}" data-i="${i}"><span class="oico">${esc(it.ico)}</span><span class="ot">${esc(it.t)}</span>` +
+      (it.u ? `<span class="ou">${esc(it.u)}</span>` : '') + (it.kind ? `<span class="okind">${esc(it.kind)}</span>` : '') + '</div>';
+  });
+  $('#omlist').innerHTML = h || '<div class="oi"><span class="ou" style="margin:0">type to search, go somewhere, or find a tab</span></div>';
+  const sel = $('#omlist .sel'); if (sel) sel.scrollIntoView({ block: 'nearest' });
+}
+function runOmni(i, newTab) {
+  const it = omniItems[i];
+  if (!it) return;
+  closeOmni();
+  if (it.tab != null) send('tab', it.tab);
+  else if (it.cmd) runChain(it.cmd);
+  else if (it.go) send(newTab ? 'newurl' : 'go', it.go);
+}
+$('#omq').addEventListener('input', () => {
+  omniQ = $('#omq').value.trim(); omniSel = 0; drawOmni();
+  clearTimeout(omniTimer);
+  if (omniQ) omniTimer = setTimeout(() => send('suggest', omniQ), 40); else omniHist = [];
+});
+$('#omq').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') { omniSel = Math.min(omniSel + 1, omniItems.length - 1); drawOmni(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { omniSel = Math.max(omniSel - 1, 0); drawOmni(); e.preventDefault(); }
+  else if (e.key === 'Enter') { runOmni(omniSel, e.shiftKey || e.altKey); e.preventDefault(); }
+  else if (e.key === 'Escape') { closeOmni(); e.preventDefault(); e.stopPropagation(); }
+  else if (e.key === 'Tab' && omniItems[omniSel] && omniItems[omniSel].link) { $('#omq').value = omniItems[omniSel].go; $('#omq').dispatchEvent(new Event('input')); e.preventDefault(); }
+});
+$('#omlist').addEventListener('mousedown', (e) => { const r = e.target.closest('[data-i]'); if (r) { e.preventDefault(); runOmni(+r.dataset.i, e.shiftKey || e.button === 1); } });
+$('#omni').addEventListener('mousedown', (e) => { if (e.target.id === 'omni') closeOmni(); });
+// History and bookmark matches come back through the address bar's suggestion channel, which is
+// set up further down: hook into it the first time the omnibar opens.
+function omniHook() {
+  if (ultra.suggestions.omni) return;
+  const bar = ultra.suggestions;
+  ultra.suggestions = (r) => { if (omniOn) { if (r.q === omniQ) { omniHist = r.items || []; drawOmni(); } return; } bar(r); };
+  ultra.suggestions.omni = true;
+}
+
 function drawTs() {
   const words = $('#tsq').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const inPrivate = S.ws === 9;
@@ -2153,7 +2264,7 @@ document.addEventListener('keydown', (e) => {
   else if (c && code === 'KeyL') { ultra.focusUrl(); e.preventDefault(); return; }
   else if (c && code === 'KeyK') { if (ovOn) closeOv(null); else send('overview', true); e.preventDefault(); return; }
   else if (c && !e.shiftKey && !e.altKey && code === 'KeyD') { send('bookmark'); e.preventDefault(); return; }
-  else if (c && !e.shiftKey && !e.altKey && code === 'KeyF') { ultra.focusUrl(); e.preventDefault(); return; }
+  else if (c && !e.shiftKey && !e.altKey && code === 'KeyF') m = 'omnibar';
   else if (c && !e.shiftKey && !e.altKey && code === 'KeyJ') { if (dlOn) closeDl(); else send('downloads', true); e.preventDefault(); return; }
   else if (k === 'escape' && dlOn) { closeDl(); e.preventDefault(); return; }
   else if (k === 'escape' && frOn) { closeFr(); e.preventDefault(); return; }

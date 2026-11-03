@@ -896,7 +896,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('Q')) => "hideat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
         (false, true, None, Some('R')) => "blankat".into(),
-        (false, false, None, Some('F')) => "focusurl".into(),
+        (false, false, None, Some('F')) => "omnibar".into(),
         (false, false, None, Some('J')) => "downloads".into(),
         (false, false, None, Some('T')) => "new".into(),
         (false, false, None, Some('R')) => "reload".into(),
@@ -2927,7 +2927,7 @@ impl App {
             }
             match msg {
                 "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings"
-                | "palette" | "mvnew" | "closeat" | "hideat" | "tabsearch" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
+                | "palette" | "mvnew" | "closeat" | "hideat" | "tabsearch" | "omnibar" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
                     self.command(msg, &Value::Null)
                 }
                 _ => {}
@@ -3337,7 +3337,7 @@ impl App {
                 let _ = self.ui.focus();
                 let _ = self.ui.evaluate_script("ultra.focusUrl()");
             }
-            "overview" | "settings" | "palette" | "urlpanel" | "downloads" | "friends" | "tabsearch" => {
+            "overview" | "settings" | "palette" | "urlpanel" | "downloads" | "friends" | "tabsearch" | "omnibar" => {
                 // These panels cover the content area, so pages are hidden while open.
                 let on = arg.as_bool().unwrap_or(!self.overlay);
                 self.overlay = on;
@@ -4669,7 +4669,7 @@ mod tests {
         // ctrl+alt+p is left to the page script (it needs the key press as a user gesture).
         assert_eq!(shortcut(k('P'), true, false, true), None);
         assert_eq!(shortcut(k('R'), true, true, false).as_deref(), Some("blankat"));
-        assert_eq!(shortcut(k('F'), true, false, false).as_deref(), Some("focusurl"));
+        assert_eq!(shortcut(k('F'), true, false, false).as_deref(), Some("omnibar"));
         assert_eq!(shortcut(k('J'), true, false, false).as_deref(), Some("downloads"));
         // ctrl+r reloads the tab (ULTRA's own, so it works whatever the page does with keys).
         assert_eq!(shortcut(k('R'), true, false, false).as_deref(), Some("reload"));
