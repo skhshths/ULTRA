@@ -633,6 +633,8 @@ body.noscs .hp .scs { display: none; }
     <div class="ctl"><button class="run" id="priv-pass">set password</button><button class="run" id="priv-lock">lock</button><button class="run" id="priv-wipe">wipe</button></div></div>
   <div class="row"><div><div class="name">history</div><div class="desc">pages you visit are remembered on this mac to power address-bar suggestions.<br>never in the private workspace. cmd+d bookmarks a page.</div></div>
     <div class="ctl"><button class="run" id="hist-clear">clear history</button></div></div>
+  <div class="row"><div><div class="name">cookies &amp; site data</div><div class="desc">a site acting up ("loading issue", endless sign-in)? <b>clear site data</b> in the palette (ctrl+shift+p) clears just the open site.<br>this clears every site's cookies, cache and storage, and signs you out everywhere.</div></div>
+    <div class="ctl"><button class="run" id="data-clear">clear everything</button></div></div>
   <div class="sec">LOOK</div>
   <div class="row"><div><div class="name">theme</div><div class="desc" id="themename">mint</div></div><div class="swatches" id="swatches"></div></div>
   <div class="row" style="border-bottom:0;padding-bottom:6px"><div><div class="name">colour picker</div><div class="desc">drag to pick. accent recolours the whole ui, background tints everything behind it,<br>pattern colours the animated background (default follows the accent).</div></div>
@@ -962,6 +964,7 @@ $('#r-boot').onclick = () => toggle('boot', true);
 $('#r-audio').onclick = () => toggle('audio', true);
 $('#r-bmbar').onclick = () => toggle('bmbar', true);
 $('#r-bars').onclick = () => toggle('bars', false);
+$('#data-clear').onclick = () => { if (confirm('Clear all cookies, cache and site data? You will be signed out of every site.')) send('clearall'); };
 $('#hist-clear').onclick = () => send('clearhistory');
 // Import bookmarks: one button per browser found on this computer (settings and the tour).
 const BROWSER_NAMES = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', vivaldi: 'Vivaldi', opera: 'Opera', firefox: 'Firefox' };
@@ -1366,6 +1369,8 @@ const CMDS = [
   { k: 'sleep all', d: 'put every hidden tab to sleep now', run: () => send('trim') },
   { k: 'bookmark', d: 'bookmark / unbookmark this page (cmd+d)', run: () => send('bookmark') },
   { k: 'clear history', d: 'forget every page visited', run: () => send('clearhistory') },
+  { k: 'clear site data', d: "this site's cookies, cache and storage (fixes most 'loading issue' errors)", run: () => send('clearsite') },
+  { k: 'clear browsing data', d: 'all cookies, cache and site storage (signs you out everywhere)', run: () => confirm('Clear all cookies, cache and site data? You will be signed out of every site.') && send('clearall') },
   ...['chrome', 'edge', 'brave', 'vivaldi', 'opera', 'firefox'].map((id) => ({ k: 'import ' + id, d: `bring over bookmarks, shortcuts, history and tabs from ${BROWSER_NAMES[id]}`, run: () => startImport(id) })),
   { k: 'add shortcut', d: 'pin this page to the new-tab page', run: () => send('scadd', null) },
   { k: 'shortcuts', d: 'every keyboard shortcut (in settings)', run: () => { send('settings', true); setTimeout(() => $('#keys-sec').scrollIntoView({ block: 'start' }), 60); } },

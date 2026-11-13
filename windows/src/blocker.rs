@@ -206,7 +206,35 @@ pub fn install(v: &WebView, slot: u64, shields: Rc<Shields>, enabled: Rc<Cell<bo
             if sh.allowed(&page) || !should_block(&url, &page, request_kind(ctx)) {
                 return Ok(());
             }
-            let resp = env.CreateWebResourceResponse(None::<&IStream>, 403, &HSTRING::from("Blocked by ULTRA"), &HSTRING::new())?;
+            // Background requests (data, pings, CORS checks) get an empty "OK" instead of an
+            // error, as uBlock Origin does: nothing is sent, and apps such as Google Docs don't
+            // decide they failed to load. Scripts, images and the rest still get the error.
+            let req = args.Request()?;
+            let mut m = PWSTR::null();
+            let method = if req.Method(&mut m).is_ok() { take_pwstr(m) } else { String::new() };
+            let kind = request_kind(ctx);
+            let quiet = method == "OPTIONS" || matches!(kind, "xmlhttprequest" | "fetch" | "ping" | "csp_report" | "other");
+            let resp = if quiet {
+                let headers = req.Headers()?;
+                let header = |name: &str| {
+                    let mut v = PWSTR::null();
+                    let got = if headers.GetHeader(&HSTRING::from(name), &mut v).is_ok() { take_pwstr(v) } else { String::new() };
+                    got.replace(['\r', '\n'], "")
+                };
+                let mut head = String::from("Content-Type: text/plain");
+                let origin = header("Origin");
+                if !origin.is_empty() {
+                    head.push_str(&format!("\r\nAccess-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Credentials: true\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS"));
+                    let asked = header("Access-Control-Request-Headers");
+                    if !asked.is_empty() {
+                        head.push_str(&format!("\r\nAccess-Control-Allow-Headers: {asked}"));
+                    }
+                }
+                let status = if method == "OPTIONS" { 204 } else { 200 };
+                env.CreateWebResourceResponse(None::<&IStream>, status, &HSTRING::from("OK"), &HSTRING::from(head))?
+            } else {
+                env.CreateWebResourceResponse(None::<&IStream>, 403, &HSTRING::from("Blocked by ULTRA"), &HSTRING::new())?
+            };
             args.SetResponse(&resp)?;
         }
         sh.count(slot);

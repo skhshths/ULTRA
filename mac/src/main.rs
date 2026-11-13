@@ -3155,6 +3155,28 @@ impl App {
                     self.toast("not connected to chat · connect, then try again");
                 }
             }
+            // Clear the open site's cookies, cache and storage ("Loading issue"-type breakage).
+            "clearsite" => {
+                let i = self.cur();
+                let Some(host) = library::host(&self.tabs[i].url).filter(|_| self.tabs[i].url.starts_with("http")) else {
+                    return self.toast("open a website first");
+                };
+                if let Some(v) = &self.tabs[i].view {
+                    macos::clear_site_data(v, &host);
+                    self.toast(&format!("cleared {host}'s cookies, cache and storage · reloading"));
+                    let _ = v.reload();
+                }
+            }
+            // Everything: cookies, cache and site storage for every site (signs you out).
+            "clearall" => {
+                macos::clear_all_data(&self.ui);
+                for t in &self.tabs {
+                    if let Some(v) = &t.view {
+                        macos::clear_all_data(v);
+                    }
+                }
+                self.toast("cleared all cookies, cache and site data");
+            }
             "idremove" => {
                 identity::remove(&self.data_dir);
                 self.me = None;

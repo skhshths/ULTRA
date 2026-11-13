@@ -79,6 +79,52 @@ pub fn watch_load_failures(any_view: &WebView, on_fail: impl Fn(usize, isize, St
     }
 }
 
+/// Clear one site's cookies, cache and storage (records whose domain is the host or a parent of
+/// it, e.g. google.com for docs.google.com).
+pub fn clear_site_data(v: &WebView, host: &str) {
+    let host = host.to_ascii_lowercase();
+    unsafe {
+        let wv = v.webview();
+        let conf: Retained<AnyObject> = msg_send![&*wv, configuration];
+        let store: Retained<AnyObject> = msg_send![&*conf, websiteDataStore];
+        let types: Retained<AnyObject> = msg_send![objc2::class!(WKWebsiteDataStore), allWebsiteDataTypes];
+        let keep_store = store.clone();
+        let keep_types = types.clone();
+        let done = RcBlock::new(move |records: *mut AnyObject| {
+            if records.is_null() {
+                return;
+            }
+            let records = &*records;
+            let n: usize = msg_send![records, count];
+            let picked: Retained<AnyObject> = msg_send![objc2::class!(NSMutableArray), array];
+            for i in 0..n {
+                let r: *mut AnyObject = msg_send![records, objectAtIndex: i];
+                let name: Option<Retained<NSString>> = msg_send![r, displayName];
+                let name = name.map(|d| d.to_string().to_ascii_lowercase()).unwrap_or_default();
+                if !name.is_empty() && (host == name || host.ends_with(&format!(".{name}"))) {
+                    let _: () = msg_send![&*picked, addObject: r];
+                }
+            }
+            let after = RcBlock::new(|| {});
+            let _: () = msg_send![&*keep_store, removeDataOfTypes: &*keep_types, forDataRecords: &*picked, completionHandler: &*after];
+        });
+        let _: () = msg_send![&*store, fetchDataRecordsOfTypes: &*types, completionHandler: &*done];
+    }
+}
+
+/// Clear every site's cookies, cache and storage in this webview's data store.
+pub fn clear_all_data(v: &WebView) {
+    unsafe {
+        let wv = v.webview();
+        let conf: Retained<AnyObject> = msg_send![&*wv, configuration];
+        let store: Retained<AnyObject> = msg_send![&*conf, websiteDataStore];
+        let types: Retained<AnyObject> = msg_send![objc2::class!(WKWebsiteDataStore), allWebsiteDataTypes];
+        let since: Retained<AnyObject> = msg_send![objc2::class!(NSDate), distantPast];
+        let after = RcBlock::new(|| {});
+        let _: () = msg_send![&*store, removeDataOfTypes: &*types, modifiedSince: &*since, completionHandler: &*after];
+    }
+}
+
 /// The page address a webview is showing, if it has one. (wry's `url()` panics on a webview
 /// that hasn't loaded anything yet, such as a spare; WebKit's own `URL` is simply nil then.)
 pub fn url(v: &WebView) -> Option<String> {

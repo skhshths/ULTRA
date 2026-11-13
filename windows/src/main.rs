@@ -54,7 +54,7 @@ use tao::{
 use webview2_com::{
     AddScriptToExecuteOnDocumentCreatedCompletedHandler,
     Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2DownloadOperation, ICoreWebView2_13, ICoreWebView2_3, ICoreWebView2_4, ICoreWebView2_8,
+        ICoreWebView2DownloadOperation, ICoreWebView2Profile2, ICoreWebView2_13, ICoreWebView2_3, ICoreWebView2_4, ICoreWebView2_8,
         COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON, COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_CANCELED,
         COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_PAUSED, COREWEBVIEW2_DOWNLOAD_STATE,
         COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED, COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS, COREWEBVIEW2_KEY_EVENT_KIND,
@@ -65,7 +65,7 @@ use webview2_com::{
         COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
         COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
     },
-    take_pwstr, AcceleratorKeyPressedEventHandler, BytesReceivedChangedEventHandler, DownloadStartingEventHandler,
+    take_pwstr, AcceleratorKeyPressedEventHandler, ClearBrowsingDataCompletedHandler, BytesReceivedChangedEventHandler, DownloadStartingEventHandler,
     ProcessFailedEventHandler, StateChangedEventHandler, TrySuspendCompletedHandler, CallDevToolsProtocolMethodCompletedHandler,
     ContainsFullScreenElementChangedEventHandler,
 };
@@ -3580,6 +3580,37 @@ impl App {
                 if !self.social.delete_account() {
                     self.toast("not connected to chat · connect, then try again");
                 }
+            }
+            // Clear the open site's cookies, cache and storage ("Loading issue"-type breakage).
+            "clearsite" => {
+                let i = self.cur();
+                let url = self.tabs[i].url.clone();
+                let Some(host) = library::host(&url).filter(|_| url.starts_with("http")) else {
+                    return self.toast("open a website first");
+                };
+                let origin = url.split('/').take(3).collect::<Vec<_>>().join("/");
+                if let Some(v) = &self.tabs[i].view {
+                    let params = json!({ "origin": origin, "storageTypes": "all" }).to_string();
+                    let h = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
+                    unsafe {
+                        let _ = v.webview().CallDevToolsProtocolMethod(&HSTRING::from("Storage.clearDataForOrigin"), &HSTRING::from(params), &h);
+                    }
+                    self.toast(&format!("cleared {host}'s cookies, cache and storage · reloading"));
+                    let _ = v.reload();
+                }
+            }
+            // Everything: cookies, cache and site storage in every profile (signs you out).
+            "clearall" => {
+                let views = std::iter::once(&self.ui).chain(self.tabs.iter().filter_map(|t| t.view.as_ref()));
+                for v in views {
+                    if let Some(p) = v.webview().cast::<ICoreWebView2_13>().ok().and_then(|w| unsafe { w.Profile().ok() }).and_then(|p| p.cast::<ICoreWebView2Profile2>().ok()) {
+                        let h = ClearBrowsingDataCompletedHandler::create(Box::new(|_| Ok(())));
+                        unsafe {
+                            let _ = p.ClearBrowsingDataAll(&h);
+                        }
+                    }
+                }
+                self.toast("cleared all cookies, cache and site data");
             }
             "idremove" => {
                 identity::remove(&self.data_dir);
