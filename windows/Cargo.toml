@@ -44,3 +44,7 @@ panic = "abort"
 # file and line of a crash on a computer that has the .pdb.
 debug = "line-tables-only"
 strip = "none"
+
+# wry with one fix for ULTRA (see vendor/wry/ULTRA-PATCH.md).
+[patch.crates-io]
+wry = { path = "../vendor/wry" }

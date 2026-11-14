@@ -51,3 +51,7 @@ codegen-units = 1
 panic = "abort"
 # Keep function names (not debug info) so crash.log backtraces are readable.
 strip = "debuginfo"
+
+# wry with one fix for ULTRA (see vendor/wry/ULTRA-PATCH.md).
+[patch.crates-io]
+wry = { path = "../vendor/wry" }
