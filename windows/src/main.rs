@@ -906,6 +906,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('C')) => "friends".into(),
         (false, true, None, Some('W')) => "closeat".into(),
         (false, true, None, Some('A')) => "tabsearch".into(),
+        (false, true, None, Some('O')) => "layouts".into(),
         (false, true, None, Some('B')) => "find".into(),
         (false, true, None, Some('Q')) => "hideat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
@@ -928,6 +929,8 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
 thread_local! {
     /// When ctrl went down, as seen by the webviews' own key events (cleared on its key-up).
     static CTRL_DOWN: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+    /// Pages (by slot) whose focus is in something editable: ctrl+shift+1‥9 go to the page there.
+    static EDITING: std::cell::RefCell<std::collections::HashSet<u64>> = std::cell::RefCell::new(Default::default());
 }
 
 /// ULTRA's shortcuts, caught natively before the page sees them. Unlike a page script this
@@ -954,6 +957,9 @@ fn watch_keys(v: &WebView, proxy: EventLoopProxy<UserEvent>, slot: u64) {
             let down = |k: i32| GetAsyncKeyState(k) < 0;
             let ctrl = down(0x11) || CTRL_DOWN.with(|c| c.get().is_some_and(|t| t.elapsed() < Duration::from_millis(1500)));
             let Some(msg) = shortcut(vk, ctrl, down(0x10), down(0x12)) else { return Ok(()) };
+            if msg.starts_with("mv:") && EDITING.with(|e| e.borrow().contains(&slot)) {
+                return Ok(()); // typing in the page: the page's own shortcut (e.g. Docs' bullets)
+            }
             a.SetHandled(true)?;
             // Held keys auto-repeat: act once, except ctrl+tab cycling.
             if st.WasKeyDown.as_bool() && vk != 0x09 {
@@ -2970,7 +2976,7 @@ impl App {
             }
             match msg {
                 "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings"
-                | "palette" | "mvnew" | "closeat" | "hideat" | "tabsearch" | "find" | "omnibar" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
+                | "palette" | "mvnew" | "closeat" | "hideat" | "tabsearch" | "find" | "omnibar" | "layouts" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
                     self.command(msg, &Value::Null)
                 }
                 _ => {}
@@ -3399,7 +3405,7 @@ impl App {
                 let _ = self.ui.focus();
                 let _ = self.ui.evaluate_script("ultra.focusUrl()");
             }
-            "overview" | "settings" | "palette" | "urlpanel" | "downloads" | "friends" | "tabsearch" | "omnibar" => {
+            "overview" | "settings" | "palette" | "urlpanel" | "downloads" | "friends" | "tabsearch" | "omnibar" | "layouts" => {
                 // These panels cover the content area, so pages are hidden while open.
                 let on = arg.as_bool().unwrap_or(!self.overlay);
                 self.overlay = on;
@@ -4008,6 +4014,13 @@ impl App {
         // ULTRA's shortcuts are accepted only when `native`: caught from a real keypress.
         let Some(i) = self.idx_slot(slot) else { return };
         let id = self.tabs[i].id;
+        if let Some(on) = msg.strip_prefix("edit:") {
+            EDITING.with(|e| {
+                let mut e = e.borrow_mut();
+                if on == "1" { e.insert(slot); } else { e.remove(&slot); }
+            });
+            return;
+        }
         if let Some(body) = msg.strip_prefix("page:") {
             // ultra://history and ultra://memory asking for their data or acting on it (only
             // from those pages themselves).
@@ -4758,6 +4771,7 @@ mod tests {
         assert_eq!(shortcut(k('W'), true, true, false).as_deref(), Some("closeat"));
         assert_eq!(shortcut(k('Q'), true, true, false).as_deref(), Some("hideat"));
         assert_eq!(shortcut(k('A'), true, true, false).as_deref(), Some("tabsearch"));
+        assert_eq!(shortcut(k('O'), true, true, false).as_deref(), Some("layouts"));
         assert_eq!(shortcut(k('B'), true, true, false).as_deref(), Some("find"));
         assert_eq!(shortcut(k('3'), true, false, false).as_deref(), Some("tab:3"));
         assert_eq!(shortcut(k('3'), true, true, false).as_deref(), Some("mv:3"));

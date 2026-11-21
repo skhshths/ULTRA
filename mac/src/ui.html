@@ -199,6 +199,14 @@ body.sizing-h, body.sizing-h * { cursor: row-resize !important; }
 #tsq { flex: 1; height: 40px; background: none; border: 0; outline: 0; color: var(--fg); font: 13px Consolas, monospace; }
 #tslist { max-height: 52vh; overflow-y: auto; }
 #tslist .pi { cursor: pointer; }
+#lo { display: flex; justify-content: center; align-items: flex-start; padding-top: 10vh; background: rgba(20,20,20,.55); }
+#lo.on .pbox { transform: none; }
+#loq { flex: 1; height: 40px; background: none; border: 0; outline: 0; color: var(--fg); font: 13px Consolas, monospace; }
+#lolist { max-height: 46vh; overflow-y: auto; }
+#lolist .pi { cursor: pointer; }
+#lolist .lx { color: #4a4a4a; padding: 0 4px; margin-left: 8px; }
+#lolist .lx:hover { color: var(--bad); }
+
 #tslist .k { overflow: hidden; text-overflow: ellipsis; max-width: 62%; }
 .idagree { display: block; margin-top: 6px; cursor: pointer; }
 .idagree a { color: var(--acc); }
@@ -714,6 +722,11 @@ body.noscs .hp .scs { display: none; }
   <div id="omlist"></div>
   <div class="oft"><span><b>enter</b> open</span><span><b>shift+enter</b> new tab</span><span><b>↑↓</b> choose</span><span><b>esc</b> close</span></div>
 </div></div>
+<div id="lo" class="ovl" tabindex="-1"><div class="pbox">
+  <div class="pin"><span>layout</span><input id="loq" placeholder="name this layout to save it, or pick one to open…" spellcheck="false" autocomplete="off"></div>
+  <div id="lolist"></div>
+  <div class="pft">enter save / open · ↑↓ choose · shift+del forget · esc close</div>
+</div></div>
 <div id="ts" class="ovl" tabindex="-1"><div class="pbox">
   <div class="pin"><span>⌕</span><input id="tsq" placeholder="search every tab: open, asleep, any workspace…" spellcheck="false" autocomplete="off"></div>
   <div id="tslist"></div>
@@ -885,6 +898,7 @@ window.ultra = {
   settings(on) { setCfg(on); },
   palette(on) { setPal(on); },
   tabsearch(on) { setTs(on); },
+  layouts(on) { setLo(on); },
   omnibar(on) { setOmni(on); },
   downloads(on) { setDl(on); },
   friends(on) { setFr(on); },
@@ -1197,7 +1211,7 @@ $('#dl-clear').onclick = () => send('dl', ['clear', 0]);
   const groups = [
     ['TABS', [[`${M}+t`, 'new tab'], [`${M}+w`, 'close tab'], [`${M}+shift+t`, 'reopen closed tab'], [`${M}+1‥8`, 'jump to tab'],
       [`${M}+9`, 'last tab'], [`${M}+tab`, 'next tab'], [`${M}+shift+tab`, 'previous tab'], ['middle-click', 'close a tab'], ['right-click', 'put a tab to sleep']]],
-    ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], [`${M}+shift+1‥9`, 'pull a tab to cursor'], [`${M}+shift+w`, 'close pane at cursor'], [`${M}+shift+a`, 'search every tab'], [`${M}+shift+b`, 'find in page'], ['ctrl+shift+q', 'hide pane, keep its tab'],
+    ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], [`${M}+shift+1‥9`, 'pull a tab to cursor'], [`${M}+shift+w`, 'close pane at cursor'], [`${M}+shift+a`, 'search every tab'], [`${M}+shift+b`, 'find in page'], [`${M}+shift+o`, 'save / open layouts'], ['ctrl+shift+q', 'hide pane, keep its tab'],
       [`${M}+shift+r`, 'blank tab at cursor'], [`${M}+shift+f`, 'zoom pane at cursor'], [`${M}+${A}+arrows`, 'move focus between panes'],
       ['click', 'focus a pane'], ['drag a gap', 'resize panes']]],
     ['WORKSPACES', [[`${M}+${A}+1‥9`, 'switch workspace'], [`${M}+${A}+shift+1‥9`, 'send tab to workspace'],
@@ -1443,6 +1457,7 @@ function setTs(on) {
   $('#ts').classList.toggle('on', on);
   if (on) {
     if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false); if (dlOn) setDl(false); if (frOn) setFr(false); if (tourOn) setTour(false);
+    if (typeof loOn !== 'undefined' && loOn) setLo(false);
     $('#tsq').value = ''; tsSel = 0; drawTs(); setTimeout(() => $('#tsq').focus(), 0);
   } else $('#tsq').blur();
   renderPanes();
@@ -1462,6 +1477,7 @@ function setOmni(on) {
     omniHook();
     for (const [open, close] of [[ovOn, setOv], [cfgOn, setCfg], [palOn, setPal], [dlOn, setDl], [frOn, setFr], [tourOn, setTour]]) if (open) close(false);
     if (typeof tsOn !== 'undefined' && tsOn) setTs(false);
+    if (typeof loOn !== 'undefined' && loOn) setLo(false);
     if (typeof upOn !== 'undefined' && upOn) setUp(false);
     $('#omq').value = ''; omniQ = ''; omniHist = []; omniSel = 0; drawOmni(); setTimeout(() => $('#omq').focus(), 0);
   } else $('#omq').blur();
@@ -1557,6 +1573,64 @@ $('#tsq').addEventListener('keydown', (e) => {
 });
 $('#tslist').addEventListener('click', (e) => { const r = e.target.closest('[data-n]'); if (r) goTs(+r.dataset.n); });
 $('#ts').addEventListener('mousedown', (e) => { if (e.target.id === 'ts') closeTs(); });
+// ── layouts (ctrl+shift+o): save this workspace's panes and tabs under a name, or open a saved one ──
+let loOn = false, loItems = [], loSel = 0;
+function setLo(on) {
+  loOn = on;
+  $('#lo').classList.toggle('on', on);
+  if (on) {
+    if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false); if (dlOn) setDl(false); if (frOn) setFr(false); if (tourOn) setTour(false); if (tsOn) setTs(false);
+    if (typeof omniOn !== 'undefined' && omniOn) setOmni(false);
+    $('#loq').value = ''; loSel = 0; drawLo(); setTimeout(() => $('#loq').focus(), 0);
+  } else $('#loq').blur();
+  renderPanes();
+}
+function closeLo() { setLo(false); send('layouts', false); }
+function drawLo() {
+  const raw = $('#loq').value.trim().slice(0, 40), q = raw.toLowerCase();
+  const saved = (S.layouts || []).filter((n) => !q || n.toLowerCase().includes(q));
+  const priv = S.ws === 9;
+  loItems = [];
+  if (raw && !priv) loItems.push({ save: raw, over: (S.layouts || []).includes(raw) });
+  for (const n of saved) loItems.push({ load: n });
+  loSel = Math.min(loSel, Math.max(0, loItems.length - 1));
+  const rows = loItems.map((it, i) => {
+    const sel = i === loSel ? ' sel' : '';
+    if (it.save) return `<div class="pi${sel}" data-n="${i}"><span class="k">${it.over ? 'replace' : 'save'} "${esc(it.save)}"</span><span class="d">this workspace's panes and tabs</span></div>`;
+    return `<div class="pi${sel}" data-n="${i}"><span class="k">${esc(it.load)}</span><span class="d">open in a free workspace</span><span class="lx" data-x="${i}" title="forget this layout">✕</span></div>`;
+  });
+  if (!rows.length) rows.push(`<div class="pi"><span class="a">${priv ? 'private layouts are never saved' : (S.layouts || []).length ? 'no saved layout matches: enter saves it' : 'no saved layouts yet: type a name and press enter'}</span></div>`);
+  $('#lolist').innerHTML = rows.join('');
+}
+function goLo(i) {
+  const it = loItems[i];
+  if (!it) return;
+  closeLo();
+  if (it.save) send('layout', ['save', it.save]); else send('layout', ['load', it.load]);
+}
+function forgetLo(i) {
+  const it = loItems[i];
+  if (!it || !it.load) return;
+  send('layout', ['delete', it.load]);
+  S.layouts = (S.layouts || []).filter((n) => n !== it.load);
+  drawLo();
+}
+$('#loq').addEventListener('input', () => { loSel = 0; drawLo(); });
+$('#loq').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') { loSel = Math.min(loSel + 1, loItems.length - 1); drawLo(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { loSel = Math.max(loSel - 1, 0); drawLo(); e.preventDefault(); }
+  else if (e.key === 'Enter') { goLo(loSel); e.preventDefault(); }
+  else if (e.key === 'Delete' && e.shiftKey) { forgetLo(loSel); e.preventDefault(); }
+  else if (e.key === 'Escape') { closeLo(); e.preventDefault(); e.stopPropagation(); }
+});
+$('#lolist').addEventListener('click', (e) => {
+  const x = e.target.closest('[data-x]');
+  if (x) { forgetLo(+x.dataset.x); $('#loq').focus(); return; }
+  const r = e.target.closest('[data-n]');
+  if (r) goLo(+r.dataset.n);
+});
+$('#lo').addEventListener('mousedown', (e) => { if (e.target.id === 'lo') closeLo(); });
+
 // Exact command at the start of the input, plus whatever follows it.
 function parsePal(q) {
   const lq = q.toLowerCase();
@@ -2312,6 +2386,7 @@ document.addEventListener('keydown', (e) => {
   else if (c && e.shiftKey && code === 'KeyW') m = 'closeat';
   else if (c && e.shiftKey && code === 'KeyB') m = 'find';
   else if (c && e.shiftKey && code === 'KeyA') m = 'tabsearch';
+  else if (c && e.shiftKey && code === 'KeyO') m = 'layouts';
   else if (e.ctrlKey && !e.metaKey && e.shiftKey && code === 'KeyQ') m = 'hideat';
   else if (c && e.shiftKey && code === 'KeyF') m = 'zoom';
   else if (c && e.shiftKey && code === 'KeyP') { if (palOn) closePal(); else send('palette', true); e.preventDefault(); return; }

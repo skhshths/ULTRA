@@ -698,6 +698,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('C')) => "friends".into(),
         (false, true, None, Some('W')) => "closeat".into(),
         (false, true, None, Some('A')) => "tabsearch".into(),
+        (false, true, None, Some('O')) => "layouts".into(),
         (false, true, None, Some('B')) => "find".into(),
         (false, true, None, Some('Q')) => "hideat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
@@ -3020,7 +3021,7 @@ impl App {
                 let _ = self.ui.focus();
                 let _ = self.ui.evaluate_script("ultra.focusUrl()");
             }
-            "overview" | "settings" | "palette" | "urlpanel" | "downloads" | "friends" | "tabsearch" | "omnibar" => {
+            "overview" | "settings" | "palette" | "urlpanel" | "downloads" | "friends" | "tabsearch" | "omnibar" | "layouts" => {
                 // These panels cover the content area, so pages are hidden while open.
                 let on = arg.as_bool().unwrap_or(!self.overlay);
                 self.overlay = on;
@@ -3563,6 +3564,12 @@ impl App {
         // ULTRA's shortcuts are accepted only when `native`: caught from a real keypress.
         let Some(i) = self.idx_slot(slot) else { return };
         let id = self.tabs[i].id;
+        if let Some(on) = msg.strip_prefix("edit:") {
+            if let Some(v) = &self.tabs[i].view {
+                macos::set_editing(macos::id(v), on == "1");
+            }
+            return;
+        }
         if let Some(body) = msg.strip_prefix("page:") {
             // ultra://history and ultra://memory asking for their data or acting on it (only
             // from those pages themselves).
@@ -3867,7 +3874,7 @@ impl App {
             self.command("dir", &json!(d));
         } else if matches!(
             msg,
-            "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat" | "hideat" | "tabsearch" | "find" | "omnibar"
+            "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat" | "hideat" | "tabsearch" | "find" | "omnibar" | "layouts"
                 | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload"
         ) {
             self.command(msg, &Value::Null);
@@ -4350,6 +4357,7 @@ mod tests {
         assert_eq!(shortcut(k('W'), true, true, false).as_deref(), Some("closeat"));
         assert_eq!(shortcut(k('Q'), true, true, false).as_deref(), Some("hideat"));
         assert_eq!(shortcut(k('A'), true, true, false).as_deref(), Some("tabsearch"));
+        assert_eq!(shortcut(k('O'), true, true, false).as_deref(), Some("layouts"));
         assert_eq!(shortcut(k('B'), true, true, false).as_deref(), Some("find"));
         assert_eq!(shortcut(k('3'), true, false, false).as_deref(), Some("tab:3"));
         assert_eq!(shortcut(k('3'), true, true, false).as_deref(), Some("mv:3"));

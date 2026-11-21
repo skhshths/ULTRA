@@ -50,6 +50,58 @@
     }, 120);
   });
   addEventListener('pointerdown', () => send('focus'), true);
+
+  // While you type in the page, ctrl/cmd+shift+1‥9 belong to it (Google Docs: numbered list,
+  // bullets, checklist) instead of pulling a tab. ULTRA catches keys before the page, so the page
+  // says when its focus is in something editable, looking into same-origin frames (Docs types
+  // into one). A page can only claim this for itself.
+  if (window.top === window) {
+    const editing = () => {
+      let d = document;
+      for (let k = 0; k < 4; k++) {
+        let a = d.activeElement;
+        while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+        if (a && a.tagName === 'IFRAME') {
+          try { if (a.contentDocument) { d = a.contentDocument; continue; } } catch (_) {}
+          return false;
+        }
+        for (let el = a; el; el = el.parentElement) {
+          if (el.isContentEditable) return true;
+          const t = el.tagName;
+          if (t === 'INPUT' || t === 'TEXTAREA') return true;
+        }
+        return false;
+      }
+      return false;
+    };
+    let edit = null;
+    const repEdit = () => setTimeout(() => {
+      const e = editing();
+      if (e !== edit) { edit = e; send(e ? 'edit:1' : 'edit:0'); }
+    }, 0);
+    // Focus moving inside a same-origin frame isn't seen up here: listen in those frames too,
+    // and re-check now and then while the page has the keyboard.
+    const hooked = new WeakSet();
+    const watch = (w) => {
+      try {
+        if (!w || hooked.has(w.document)) return;
+        hooked.add(w.document);
+        w.addEventListener('focusin', repEdit, true);
+        w.addEventListener('focusout', repEdit, true);
+        w.addEventListener('pointerdown', repEdit, true);
+      } catch (_) {}
+    };
+    watch(window);
+    addEventListener('focusin', (e) => { if (e.target && e.target.tagName === 'IFRAME') watch(e.target.contentWindow); }, true);
+    addEventListener('keydown', (e) => { if (!e.ctrlKey && !e.metaKey) repEdit(); }, true);
+    setInterval(() => {
+      if (!document.hasFocus()) return;
+      const a = document.activeElement;
+      if (a && a.tagName === 'IFRAME') watch(a.contentWindow);
+      repEdit();
+    }, 400);
+    repEdit();
+  }
   addEventListener('focus', () => send('focus'));
   const rep = () => send('url');
   for (const f of ['pushState', 'replaceState']) {
