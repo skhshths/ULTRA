@@ -188,4 +188,64 @@
     const key = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); done(); } };
     addEventListener('mousemove', move, true); addEventListener('click', click, true); addEventListener('keydown', key, true);
   };
+
+  // ── find in page (ctrl+shift+b): every match highlighted, the current one stronger. ULTRA
+  // calls __ultraFind(text, step): step 0 searches again, 1 / -1 move to the next / previous. ──
+  let findQ = '', findHits = [], findAt = 0;
+  const findStyle = () => {
+    if (window.__ultraFindCss) return;
+    window.__ultraFindCss = true;
+    const css = '::highlight(ultra-find) { background-color: rgba(255, 213, 79, .5); color: inherit; }' +
+      '::highlight(ultra-find-cur) { background-color: #ff9632; color: #000; }';
+    try {
+      // A constructed style sheet still works on pages whose CSP forbids inline styles.
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(css);
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    } catch (_) {
+      const s = document.createElement('style');
+      s.textContent = css;
+      (document.head || document.documentElement).appendChild(s);
+    }
+  };
+  window.__ultraFind = (q, step) => {
+    q = String(q || '').slice(0, 500);
+    if (q !== findQ || !step) {
+      findQ = q; findHits = []; findAt = 0;
+      if (q) {
+        const lq = q.toLowerCase();
+        const walk = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT, {
+          acceptNode: (n) => (n.parentElement && !/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(n.parentElement.tagName) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+        });
+        for (let n = walk.nextNode(); n && findHits.length < 5000; n = walk.nextNode()) {
+          const t = n.data.toLowerCase();
+          for (let at = t.indexOf(lq); at >= 0 && findHits.length < 5000; at = t.indexOf(lq, at + lq.length)) {
+            const r = document.createRange();
+            r.setStart(n, at);
+            r.setEnd(n, at + q.length);
+            if (r.getClientRects().length) findHits.push(r); // only what's actually shown
+          }
+        }
+      }
+    } else if (findHits.length) {
+      findAt = (findAt + step + findHits.length) % findHits.length;
+    }
+    const cur = findHits[findAt];
+    if (window.CSS && CSS.highlights && window.Highlight) {
+      findStyle();
+      if (findHits.length) {
+        CSS.highlights.set('ultra-find', new Highlight(...findHits));
+        CSS.highlights.set('ultra-find-cur', new Highlight(cur));
+      } else {
+        CSS.highlights.delete('ultra-find');
+        CSS.highlights.delete('ultra-find-cur');
+      }
+    } else {
+      const sel = getSelection();
+      sel.removeAllRanges();
+      if (cur) sel.addRange(cur);
+    }
+    if (cur && cur.startContainer.parentElement) cur.startContainer.parentElement.scrollIntoView({ block: 'center', inline: 'nearest' });
+    return JSON.stringify({ n: findHits.length, i: findHits.length ? findAt : 0 });
+  };
 })();

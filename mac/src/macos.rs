@@ -125,6 +125,11 @@ pub fn clear_all_data(v: &WebView) {
     }
 }
 
+/// Is a mouse button held down right now?
+pub fn mouse_down() -> bool {
+    NSEvent::pressedMouseButtons() != 0
+}
+
 /// The page address a webview is showing, if it has one. (wry's `url()` panics on a webview
 /// that hasn't loaded anything yet, such as a spare; WebKit's own `URL` is simply nil then.)
 pub fn url(v: &WebView) -> Option<String> {

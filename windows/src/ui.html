@@ -65,6 +65,14 @@ body.barsfx canvas#barsfx { display: block; }
   border: 1px solid var(--line); background: rgba(10,10,10,.6); padding: 0 8px; gap: 6px;
   transition: border-color var(--fast); }
 #urlwrap:focus-within { border-color: var(--acc-dim); }
+#findbar { flex: 1 1 260px; min-width: 120px; display: none; align-items: center; gap: 6px; height: 22px; padding: 0 6px; border: 1px solid var(--acc-dim); }
+#findbar .p { color: var(--acc); }
+#findq { flex: 1; min-width: 40px; background: none; border: 0; outline: 0; color: var(--fg); font: inherit; }
+#findn { color: var(--dim); font-size: 11px; white-space: nowrap; }
+#findn.bad { color: var(--bad); }
+#findbar .fb { color: var(--dim); cursor: pointer; padding: 0 3px; }
+#findbar .fb:hover { color: var(--fg); }
+
 #urlwrap .p { color: var(--acc); transition: color var(--fast); }
 #urlwrap.insecure { border-color: #5a2a2a; }
 #urlwrap.insecure .p { color: var(--bad); }
@@ -571,7 +579,7 @@ body.noscs .hp .scs { display: none; }
   <div id="wsbar"></div><span class="sep">│</span>
   <div id="navb"><span id="nback" class="off" title="back">‹</span><span id="nfwd" class="off" title="forward">›</span></div><span class="sep">│</span>
   <div id="tabs"></div><div id="plus" title="new tab (ctrl+t)">+</div>
-  <div id="urlwrap"><span class="p">›</span><input id="url" spellcheck="false" autocomplete="off"><span id="shield" style="display:none"></span><span id="star" title="bookmark (ctrl+d)">☆</span></div>
+  <div id="urlwrap"><span class="p">›</span><input id="url" spellcheck="false" autocomplete="off"><span id="shield" style="display:none"></span><span id="star" title="bookmark (ctrl+d)">☆</span></div><div id="findbar"><span class="p">⌕</span><input id="findq" placeholder="find in page" spellcheck="false" autocomplete="off"><span id="findn"></span><span class="fb" id="find-prev" title="previous (shift+enter)">↑</span><span class="fb" id="find-next" title="next (enter)">↓</span><span class="fb" id="find-x" title="close (esc)">✕</span></div>
   <span id="zoomchip" class="chip" title="unzoom (ctrl+shift+f)">⛶ zoom</span>
   <span id="stats"></span><span id="trim" class="chip" title="put every hidden tab to sleep">trim</span>
   <span id="clock"></span><span id="frbtn" title="friends & chat (ctrl+shift+c)">@<i></i></span><span id="dlbtn" title="downloads (ctrl+j)"><i><b></b></i>↓</span><span id="cfgbtn" title="settings (ctrl+,)"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" style="display:block"><path fill="currentColor" d="M9.4 1.2l.4 1.7c.4.1.8.3 1.1.5l1.5-.9 1.3 1.3-.9 1.5c.2.3.4.7.5 1.1l1.7.4v1.9l-1.7.4c-.1.4-.3.8-.5 1.1l.9 1.5-1.3 1.3-1.5-.9c-.3.2-.7.4-1.1.5l-.4 1.7H7.5l-.4-1.7c-.4-.1-.8-.3-1.1-.5l-1.5.9-1.3-1.3.9-1.5c-.2-.3-.4-.7-.5-1.1L1.9 9V7.1l1.7-.4c.1-.4.3-.8.5-1.1l-.9-1.5 1.3-1.3 1.5.9c.3-.2.7-.4 1.1-.5l.4-1.7h1.9zM8.5 5.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"/></svg></span>
@@ -661,6 +669,8 @@ body.noscs .hp .scs { display: none; }
   <div class="row" id="r-boot"><div><div class="name">boot animation</div><div class="desc">the logo assembles out of glyphs on launch. any key skips it. off in ULTRASPEED.</div></div><div class="sw" id="sw-boot"></div></div>
   <div class="row" id="r-scan"><div><div class="name">scanlines</div><div class="desc">retro crt lines over the chrome. off in ULTRASPEED.</div></div><div class="sw" id="sw-scan"></div></div>
   <div class="sec">INPUT</div>
+  <div class="row" id="r-hover"><div><div class="name">focus follows mouse</div>
+    <div class="desc">the pane your mouse rests on becomes the active tab, so typing and shortcuts go there.<br>it waits a moment, and never switches while you drag or type in ULTRA's own boxes.</div></div><div class="sw" id="sw-hover"></div></div>
   <div class="row" id="r-type"><div><div class="name">type to search</div>
     <div class="desc">letters &amp; numbers jump to the address bar when you aren't in a text field.<br>turn off if a site's single-key shortcuts matter to you.</div></div><div class="sw" id="sw-type"></div></div>
   <div class="row"><div><div class="name">search</div><div class="desc">used when the address bar isn't a url.</div></div>
@@ -929,6 +939,7 @@ function applyCfg(c) {
   document.body.classList.toggle('noscs', c.shortcuts === false);
   document.body.classList.toggle('bmbar', c.bmbar ?? true);
   $('#sw-type').classList.toggle('on', c.typeahead ?? true);
+  $('#sw-hover').classList.toggle('on', !!c.hoverfocus);
   $('#sw-tour').classList.toggle('on', c.tour ?? true);
   $('#t-opt').classList.toggle('on', c.tour ?? true);
   setText($('#themename'), c.theme === 'custom' ? 'custom ' + (c.accent || '') : (c.theme || 'mint'));
@@ -1180,7 +1191,7 @@ $('#dl-clear').onclick = () => send('dl', ['clear', 0]);
   const groups = [
     ['TABS', [[`${M}+t`, 'new tab'], [`${M}+w`, 'close tab'], [`${M}+shift+t`, 'reopen closed tab'], [`${M}+1‥8`, 'jump to tab'],
       [`${M}+9`, 'last tab'], [`${M}+tab`, 'next tab'], [`${M}+shift+tab`, 'previous tab'], ['middle-click', 'close a tab'], ['right-click', 'put a tab to sleep']]],
-    ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], [`${M}+shift+1‥9`, 'pull a tab to cursor'], [`${M}+shift+w`, 'close pane at cursor'], [`${M}+shift+a`, 'search every tab'], [`${M}+shift+q`, 'hide pane, keep its tab'],
+    ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], [`${M}+shift+1‥9`, 'pull a tab to cursor'], [`${M}+shift+w`, 'close pane at cursor'], [`${M}+shift+a`, 'search every tab'], [`${M}+shift+b`, 'find in page'], [`${M}+shift+q`, 'hide pane, keep its tab'],
       [`${M}+shift+r`, 'blank tab at cursor'], [`${M}+shift+f`, 'zoom pane at cursor'], [`${M}+${A}+arrows`, 'move focus between panes'],
       ['click', 'focus a pane'], ['drag a gap', 'resize panes']]],
     ['WORKSPACES', [[`${M}+${A}+1‥9`, 'switch workspace'], [`${M}+${A}+shift+1‥9`, 'send tab to workspace'],
@@ -1199,6 +1210,11 @@ ultra.imported = (msg) => {
   const r = document.querySelector('#t-import-res'); if (r) r.textContent = msg;
 };
 $('#r-type').onclick = () => toggle('typeahead', true);
+$('#r-hover').onclick = () => toggle('hoverfocus', false);
+// Hover-to-focus must not pull the keyboard out of a text box in ULTRA's own UI.
+const isBox = (t) => t && t.matches && t.matches('input, textarea, [contenteditable="true"]');
+document.addEventListener('focusin', (e) => { if (isBox(e.target)) send('typing', true); });
+document.addEventListener('focusout', (e) => { if (isBox(e.target)) send('typing', false); });
 $('#sw-tour').onclick = (e) => { e.stopPropagation(); toggle('tour', true); };
 $('.step').onclick = (e) => { const d = +e.target.dataset.d; if (d) send('set', ['warm', Math.max(0, Math.min(12, (cfg().warm ?? 3) + d))]); };
 $('#seg').onclick = (e) => { if (e.target.dataset.e) send('set', ['search', e.target.dataset.e]); };
@@ -2109,6 +2125,41 @@ tabsEl.addEventListener('drop', (e) => { e.preventDefault(); tabsEl.querySelecto
 tabsEl.addEventListener('wheel', (e) => { tabsEl.scrollLeft += e.deltaY + e.deltaX; e.preventDefault(); }, { passive: false });
 $('#plus').onclick = () => send('new');
 
+// ── find in page (ctrl+shift+b): the bar takes the address bar's place while it's open ──
+let findOn = false, findTimer = 0;
+ultra.find = () => {
+  findOn = true;
+  $('#urlwrap').style.display = 'none';
+  $('#findbar').style.display = 'flex';
+  const q = $('#findq');
+  q.focus(); q.select();
+  if (q.value) send('findq', [q.value, 0]);
+};
+function closeFind() {
+  if (!findOn) return;
+  findOn = false;
+  $('#findbar').style.display = 'none';
+  $('#urlwrap').style.display = '';
+  setText($('#findn'), '');
+  send('findq', ['', 0]);
+  send('content');
+}
+ultra.findResult = (r) => {
+  let v = r;
+  for (let k = 0; k < 2 && typeof v === 'string'; k++) { try { v = JSON.parse(v); } catch (_) { break; } }
+  const typed = !!$('#findq').value;
+  if (!v || typeof v !== 'object') { setText($('#findn'), typed ? "can't search this page" : ''); return; }
+  setText($('#findn'), v.n ? `${v.i + 1}/${v.n}${v.n >= 5000 ? '+' : ''}` : typed ? 'no matches' : '');
+  $('#findn').classList.toggle('bad', typed && !v.n);
+};
+$('#findq').addEventListener('input', () => { clearTimeout(findTimer); findTimer = setTimeout(() => send('findq', [$('#findq').value, 0]), 120); });
+$('#findq').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { clearTimeout(findTimer); send('findq', [$('#findq').value, e.shiftKey ? -1 : 1]); e.preventDefault(); }
+  else if (e.key === 'Escape') { closeFind(); e.preventDefault(); e.stopPropagation(); }
+});
+$('#find-next').onclick = () => send('findq', [$('#findq').value, 1]);
+$('#find-prev').onclick = () => send('findq', [$('#findq').value, -1]);
+$('#find-x').onclick = closeFind;
 // ── address bar ──
 const url = $('#url');
 url.addEventListener('keydown', (e) => {
@@ -2249,6 +2300,7 @@ document.addEventListener('keydown', (e) => {
   else if (c && e.shiftKey && code === 'KeyC') { if (frOn) closeFr(); else send('friends', true); e.preventDefault(); return; }
   else if (c && e.shiftKey && code === 'KeyE') m = 'mvnew';
   else if (c && e.shiftKey && code === 'KeyW') m = 'closeat';
+  else if (c && e.shiftKey && code === 'KeyB') m = 'find';
   else if (c && e.shiftKey && code === 'KeyA') m = 'tabsearch';
   else if (c && e.shiftKey && code === 'KeyQ') m = 'hideat';
   else if (c && e.shiftKey && code === 'KeyF') m = 'zoom';

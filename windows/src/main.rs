@@ -121,6 +121,9 @@ const LOCK_AFTER: u64 = 300;
 /// Wrong unlock attempts before the private workspace is wiped.
 const MAX_UNLOCK_FAILS: u32 = 5;
 const HOME: &str = "ultra:home";
+/// Hover-to-focus: how often the mouse is checked, and how long it must rest on a pane.
+const HOVER_POLL: Duration = Duration::from_millis(80);
+const HOVER_DWELL: Duration = Duration::from_millis(160);
 /// How long ultra://memory keeps per-tab sampling going after its last request.
 const MEMORY_WATCH: Duration = Duration::from_secs(6);
 const LEGACY_HOME: &str = "zenith:home";
@@ -174,6 +177,8 @@ enum UserEvent {
     /// A page tried to open too many tabs or pop-ups at once.
     PopupBlocked(u64),
     Procs(Vec<u32>),
+    /// What find in page found on the active tab (the page's JSON answer).
+    Find(String),
     /// JS heap (MB) reported by a page.
     Heap(u64, String),
     /// Next slideshow image, loaded off-thread: (data url, file name).
@@ -283,6 +288,9 @@ struct Settings {
     search: String,
     /// Letters/numbers typed outside a text field jump to the address bar.
     typeahead: bool,
+    /// The pane under the mouse becomes the active tab (after a short rest), like focus-follows-mouse.
+    #[serde(default)]
+    hoverfocus: bool,
     /// Show the tutorial every time ULTRA starts.
     tour: bool,
     /// Per-pane header with live memory/CPU.
@@ -345,6 +353,7 @@ impl Default for Settings {
             warm,
             search: "duckduckgo".into(),
             typeahead: true,
+            hoverfocus: false,
             tour: true,
             stats: false,
             block: true,
@@ -510,6 +519,10 @@ struct App {
     dirty: Cell<bool>,
     /// Support strip: when it is due to appear, and whether it is showing.
     coffee_at: Option<Instant>,
+    /// Hover-to-focus: the pane the mouse is resting on, and since when.
+    hover: Option<(u64, Instant)>,
+    /// A text box in ULTRA's own UI has the keyboard (hover-to-focus must not take it away).
+    ui_typing: bool,
     coffee: bool,
     /// Tab shown as a floating preview over the layout (ctrl/cmd+shift+click a link).
     glance: Option<u64>,
@@ -893,6 +906,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, true, None, Some('C')) => "friends".into(),
         (false, true, None, Some('W')) => "closeat".into(),
         (false, true, None, Some('A')) => "tabsearch".into(),
+        (false, true, None, Some('B')) => "find".into(),
         (false, true, None, Some('Q')) => "hideat".into(),
         (false, true, None, Some('T')) => "reopen".into(),
         (false, true, None, Some('R')) => "blankat".into(),
@@ -2388,10 +2402,35 @@ impl App {
         }
     }
 
+    /// Hover-to-focus: once the mouse has rested on another pane for a moment, that pane's tab
+    /// becomes the active one. Never while typing in ULTRA's own boxes, with a panel open, while
+    /// a mouse button is held (dragging), or when ULTRA isn't the active window.
+    fn hover_focus(&mut self, now: Instant) {
+        let busy = !self.cfg.hoverfocus || !self.win_focused || self.overlay || self.ui_typing || self.zoom.is_some() || self.glance.is_some() || self.gate();
+        let target = if busy || unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x01) } < 0 { None } else { self.pane_under_cursor().filter(|id| *id != self.focus) };
+        let Some(id) = target else {
+            self.hover = None;
+            return;
+        };
+        match self.hover {
+            Some((h, since)) if h == id => {
+                if now.duration_since(since) >= HOVER_DWELL {
+                    self.hover = None;
+                    self.set_focus(id);
+                    self.focus_active();
+                }
+            }
+            _ => self.hover = Some((id, now)),
+        }
+    }
+
     /// Next moment the event loop has to wake up on its own.
     fn deadline(&self) -> Instant {
         let now = Instant::now();
         let mut d = self.next_tick;
+        if self.cfg.hoverfocus && self.win_focused {
+            d = d.min(now + HOVER_POLL);
+        }
         if let Some(s) = self.spare_at {
             d = d.min(s);
         }
@@ -2593,6 +2632,10 @@ impl App {
                 _ => return,
             },
             "bars" => self.cfg.bars = v.as_bool().unwrap_or(false),
+            "hoverfocus" => {
+                self.cfg.hoverfocus = v.as_bool().unwrap_or(false);
+                self.hover = None;
+            }
             "memcap" => {
                 let mb = v.as_u64().unwrap_or(0).min(MEMCAP_MAX);
                 // Anything below half a gigabyte would just keep every hidden tab asleep.
@@ -2927,7 +2970,7 @@ impl App {
             }
             match msg {
                 "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings"
-                | "palette" | "mvnew" | "closeat" | "hideat" | "tabsearch" | "omnibar" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
+                | "palette" | "mvnew" | "closeat" | "hideat" | "tabsearch" | "find" | "omnibar" | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload" => {
                     self.command(msg, &Value::Null)
                 }
                 _ => {}
@@ -3333,6 +3376,25 @@ impl App {
                     }
                 }
             }
+            // Ctrl+Shift+B: the find bar.
+            "find" => {
+                let _ = self.ui.focus();
+                let _ = self.ui.evaluate_script("ultra.find()");
+            }
+            // Find in page: [text, step] (step 0 = search, 1 / -1 = next / previous; "" clears).
+            "findq" => {
+                let text: String = arg[0].as_str().unwrap_or("").chars().take(500).collect();
+                let step = arg[1].as_i64().unwrap_or(0).clamp(-1, 1);
+                if let Some(v) = &self.tabs[self.cur()].view {
+                    let js = format!("window.__ultraFind ? window.__ultraFind({}, {step}) : ''", json!(text));
+                    let proxy = self.proxy.clone();
+                    let _ = v.evaluate_script_with_callback(&js, move |r| {
+                        let _ = proxy.send_event(UserEvent::Find(r));
+                    });
+                } else {
+                    let _ = self.ui.evaluate_script("ultra.findResult('')");
+                }
+            }
             "focusurl" => {
                 let _ = self.ui.focus();
                 let _ = self.ui.evaluate_script("ultra.focusUrl()");
@@ -3612,6 +3674,8 @@ impl App {
                 }
                 self.toast("cleared all cookies, cache and site data");
             }
+            // A text box in ULTRA's UI got or lost the keyboard.
+            "typing" => self.ui_typing = arg.as_bool().unwrap_or(false),
             "idremove" => {
                 identity::remove(&self.data_dir);
                 self.me = None;
@@ -4124,6 +4188,9 @@ impl App {
                 }
             }
             UserEvent::Procs(p) => self.on_procs(p),
+            UserEvent::Find(r) => {
+                let _ = self.ui.evaluate_script(&format!("ultra.findResult({})", json!(r)));
+            }
             UserEvent::PageFullscreen(slot, on) => self.on_page_fullscreen(slot, on),
             UserEvent::Social(v) => {
                 match self.social.on_event(&v) {
@@ -4474,6 +4541,8 @@ fn main() {
         boot_until: now,
         dirty: Cell::new(false),
         coffee_at: None,
+        hover: None,
+        ui_typing: false,
         coffee: false,
         glance: None,
         zaps: BTreeMap::new(),
@@ -4606,6 +4675,7 @@ fn main() {
                 if app.anim.is_some() {
                     app.step_anim();
                 }
+                app.hover_focus(now);
                 if now >= app.next_tick {
                     app.next_tick = now + TICK;
                     app.tick();
@@ -4688,6 +4758,7 @@ mod tests {
         assert_eq!(shortcut(k('W'), true, true, false).as_deref(), Some("closeat"));
         assert_eq!(shortcut(k('Q'), true, true, false).as_deref(), Some("hideat"));
         assert_eq!(shortcut(k('A'), true, true, false).as_deref(), Some("tabsearch"));
+        assert_eq!(shortcut(k('B'), true, true, false).as_deref(), Some("find"));
         assert_eq!(shortcut(k('3'), true, false, false).as_deref(), Some("tab:3"));
         assert_eq!(shortcut(k('3'), true, true, false).as_deref(), Some("mv:3"));
         assert_eq!(shortcut(k('3'), true, false, true).as_deref(), Some("ws:3"));
