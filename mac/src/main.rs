@@ -477,6 +477,8 @@ struct App {
     coffee_at: Option<Instant>,
     /// Hover-to-focus: the pane the mouse is resting on, and since when.
     hover: Option<(u64, Instant)>,
+    /// While a tab picked from the ctrl+tab list is placed: where the mouse was when it opened.
+    pull_at: std::cell::Cell<Option<(f64, f64)>>,
     /// A text box in ULTRA's own UI has the keyboard (hover-to-focus must not take it away).
     ui_typing: bool,
     coffee: bool,
@@ -691,7 +693,6 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (true, false, None, _) if zero => "ws:0".into(),
         (true, _, None, Some('L')) => "lock".into(),
         (true, _, None, None) if arrow.is_some() => format!("dir:{}", arrow?),
-        (false, true, Some(d), _) => format!("mv:{d}"),
         (false, true, None, Some('F')) => "zoom".into(),
         (false, true, None, Some('P')) => "palette".into(),
         (false, true, None, Some('E')) => "mvnew".into(),
@@ -712,7 +713,7 @@ fn shortcut(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         (false, false, None, Some('K')) => "overview".into(),
         (false, false, None, Some('D')) => "bookmark".into(),
         (false, false, Some(d), _) => format!("tab:{d}"),
-        (false, _, None, None) if vk == 0x09 => if shift { "prev".into() } else { "next".into() },
+        (false, false, None, None) if vk == 0x09 => "tabpull".into(),
         (false, false, None, None) if vk == 0xBC => "settings".into(),
         _ => return None,
     })
@@ -777,6 +778,9 @@ impl App {
 
     /// Cursor position in logical window coordinates.
     fn cursor(&self) -> Option<(f64, f64)> {
+        if let Some(p) = self.pull_at.get() {
+            return Some(p);
+        }
         let c = self.window.cursor_position().ok()?;
         let o = self.window.inner_position().ok()?;
         let s = self.window.scale_factor();
@@ -3021,6 +3025,32 @@ impl App {
                 let _ = self.ui.focus();
                 let _ = self.ui.evaluate_script("ultra.focusUrl()");
             }
+            // Ctrl+Tab: the pull-a-tab list, opened where the mouse is.
+            "tabpull" => {
+                let on = arg.as_bool().unwrap_or(!self.overlay);
+                self.overlay = on;
+                self.apply_layout(false);
+                if on {
+                    let (x, y) = self.cursor().unwrap_or((-1.0, -1.0));
+                    let _ = self.ui.focus();
+                    let _ = self.ui.evaluate_script(&format!("ultra.tabpull(true, {x:.0}, {y:.0})"));
+                } else {
+                    self.focus_active();
+                }
+            }
+            // A tab picked from that list: [tab id, x, y] (where the mouse was when it opened).
+            "pullid" => {
+                let Some(i) = arg[0].as_u64().and_then(|id| self.idx(id)).filter(|&i| self.tabs[i].ws == self.ws) else { return };
+                let id = self.tabs[i].id;
+                let at = (arg[1].as_f64(), arg[2].as_f64());
+                if let (Some(x), Some(y)) = at {
+                    if x.is_finite() && y.is_finite() && x >= 0.0 && y >= 0.0 {
+                        self.pull_at.set(Some((x, y)));
+                    }
+                }
+                self.place_at_cursor(id);
+                self.pull_at.set(None);
+            }
             "overview" | "settings" | "palette" | "urlpanel" | "downloads" | "friends" | "tabsearch" | "omnibar" | "layouts" => {
                 // These panels cover the content area, so pages are hidden while open.
                 let on = arg.as_bool().unwrap_or(!self.overlay);
@@ -3564,12 +3594,6 @@ impl App {
         // ULTRA's shortcuts are accepted only when `native`: caught from a real keypress.
         let Some(i) = self.idx_slot(slot) else { return };
         let id = self.tabs[i].id;
-        if let Some(on) = msg.strip_prefix("edit:") {
-            if let Some(v) = &self.tabs[i].view {
-                macos::set_editing(macos::id(v), on == "1");
-            }
-            return;
-        }
         if let Some(body) = msg.strip_prefix("page:") {
             // ultra://history and ultra://memory asking for their data or acting on it (only
             // from those pages themselves).
@@ -3874,7 +3898,7 @@ impl App {
             self.command("dir", &json!(d));
         } else if matches!(
             msg,
-            "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat" | "hideat" | "tabsearch" | "find" | "omnibar" | "layouts"
+            "new" | "close" | "next" | "prev" | "reopen" | "back" | "fwd" | "friends" | "focusurl" | "overview" | "settings" | "palette" | "mvnew" | "closeat" | "hideat" | "tabsearch" | "find" | "omnibar" | "layouts" | "tabpull"
                 | "zoom" | "lock" | "bookmark" | "reader" | "blankat" | "downloads" | "reload"
         ) {
             self.command(msg, &Value::Null);
@@ -4147,6 +4171,7 @@ fn main() {
         dirty: Cell::new(false),
         coffee_at: None,
         hover: None,
+        pull_at: std::cell::Cell::new(None),
         ui_typing: false,
         coffee: false,
         glance: None,
@@ -4360,12 +4385,13 @@ mod tests {
         assert_eq!(shortcut(k('O'), true, true, false).as_deref(), Some("layouts"));
         assert_eq!(shortcut(k('B'), true, true, false).as_deref(), Some("find"));
         assert_eq!(shortcut(k('3'), true, false, false).as_deref(), Some("tab:3"));
-        assert_eq!(shortcut(k('3'), true, true, false).as_deref(), Some("mv:3"));
+        assert_eq!(shortcut(k('3'), true, true, false), None); // the page's (Google Docs' lists)
         assert_eq!(shortcut(k('3'), true, false, true).as_deref(), Some("ws:3"));
         assert_eq!(shortcut(k('3'), true, true, true).as_deref(), Some("tows:3"));
         assert_eq!(shortcut(k('0'), true, false, true).as_deref(), Some("ws:0"));
         assert_eq!(shortcut(0x27, true, false, true).as_deref(), Some("dir:r"));
-        assert_eq!(shortcut(0x09, true, true, false).as_deref(), Some("prev"));
+        assert_eq!(shortcut(0x09, true, true, false), None);
+        assert_eq!(shortcut(0x09, true, false, false).as_deref(), Some("tabpull"));
         assert_eq!(shortcut(0xBC, true, false, false).as_deref(), Some("settings"));
         assert_eq!(shortcut(0x78, false, false, false).as_deref(), Some("reader"));
         // ctrl+alt+p is left to the page script (it needs the key press as a user gesture).

@@ -288,19 +288,6 @@ pub fn focus_is_loose(window: &NSWindow) -> bool {
     webview_of(responder_view(window.firstResponder())).is_none()
 }
 
-thread_local! {
-    /// Webviews whose page has its focus in something editable: cmd+shift+1‥9 go to the page there.
-    static EDITING: std::cell::RefCell<std::collections::HashSet<usize>> = std::cell::RefCell::new(Default::default());
-}
-
-/// A page says whether you're typing in it (see content.js).
-pub fn set_editing(view: usize, on: bool) {
-    EDITING.with(|e| {
-        let mut e = e.borrow_mut();
-        if on { e.insert(view); } else { e.remove(&view); }
-    });
-}
-
 /// Watch every key and extra mouse button headed for ULTRA's window. `send(webview, message)`
 /// gets the shortcut and the pane it came from (0 when no page has focus).
 /// Keys typed into the chrome UI are left to its own JavaScript, exactly as on Windows.
@@ -331,11 +318,8 @@ pub fn watch_input(window: &NSWindow, ui: usize, send: impl Fn(usize, String) + 
                 }
                 let Some(k) = vk(e) else { return pass };
                 let Some(msg) = mac_shortcut(k, cmd, ctrl, shift, opt) else { return pass };
-                if msg.starts_with("mv:") && target.is_some_and(|t| EDITING.with(|e| e.borrow().contains(&t))) {
-                    return pass; // typing in the page: the page's own shortcut (e.g. Docs' bullets)
-                }
-                // Held keys auto-repeat: act once, except ctrl+tab cycling and zooming.
-                let repeats = k == VK_TAB || msg.starts_with("zoom") && msg != "zoom";
+                // Held keys auto-repeat: act once, except zooming.
+                let repeats = msg.starts_with("zoom") && msg != "zoom";
                 if !e.isARepeat() || repeats {
                     send(target.unwrap_or(0), msg);
                 }

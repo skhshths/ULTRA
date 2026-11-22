@@ -206,6 +206,21 @@ body.sizing-h, body.sizing-h * { cursor: row-resize !important; }
 #lolist .pi { cursor: pointer; }
 #lolist .lx { color: #4a4a4a; padding: 0 4px; margin-left: 8px; }
 #lolist .lx:hover { color: var(--bad); }
+#tp { background: transparent; }
+#tpbox { position: fixed; min-width: 240px; max-width: 400px; max-height: 60vh; overflow-y: auto; border: 1px solid #2c2c2c;
+  background: #161616; box-shadow: 0 10px 30px rgba(0,0,0,.55); transform: scale(.97); transform-origin: top left;
+  transition: transform var(--fast) var(--ease); }
+#tp.on #tpbox { transform: none; }
+.tphd { padding: 7px 12px 5px; color: var(--dim); font-size: 11px; letter-spacing: .08em; }
+.tpi { display: flex; gap: 10px; align-items: baseline; padding: 6px 12px; color: var(--mid); cursor: pointer; white-space: nowrap; }
+.tpi.sel { background: var(--acc-bg); }
+.tpi .tn { color: var(--acc); width: 10px; flex: none; }
+.tpi .tt { color: var(--fg); overflow: hidden; text-overflow: ellipsis; max-width: 230px; }
+.tpi.sel .tt { color: var(--acc); }
+.tpi.vis .tt { color: var(--mid); }
+.tpi .th { color: #5c5c5c; font-size: 11px; margin-left: auto; padding-left: 10px; overflow: hidden; text-overflow: ellipsis; }
+.tpft { padding: 5px 12px 7px; color: #4a4a4a; font-size: 11px; border-top: 1px solid #222; }
+
 
 #tslist .k { overflow: hidden; text-overflow: ellipsis; max-width: 62%; }
 .idagree { display: block; margin-top: 6px; cursor: pointer; }
@@ -722,6 +737,7 @@ body.noscs .hp .scs { display: none; }
   <div id="omlist"></div>
   <div class="oft"><span><b>enter</b> open</span><span><b>shift+enter</b> new tab</span><span><b>↑↓</b> choose</span><span><b>esc</b> close</span></div>
 </div></div>
+<div id="tp" class="ovl" tabindex="-1"><div id="tpbox"><div class="tphd">pull a tab here</div><div id="tplist"></div><div class="tpft">click · 1‥9 · enter · esc</div></div></div>
 <div id="lo" class="ovl" tabindex="-1"><div class="pbox">
   <div class="pin"><span>layout</span><input id="loq" placeholder="name this layout to save it, or pick one to open…" spellcheck="false" autocomplete="off"></div>
   <div id="lolist"></div>
@@ -899,6 +915,7 @@ window.ultra = {
   palette(on) { setPal(on); },
   tabsearch(on) { setTs(on); },
   layouts(on) { setLo(on); },
+  tabpull(on, x, y) { setTp(on, x, y); },
   omnibar(on) { setOmni(on); },
   downloads(on) { setDl(on); },
   friends(on) { setFr(on); },
@@ -1210,8 +1227,8 @@ $('#dl-clear').onclick = () => send('dl', ['clear', 0]);
   const MAC = !!window.__ultraMac, M = MAC ? 'cmd' : 'ctrl', A = MAC ? 'opt' : 'alt';
   const groups = [
     ['TABS', [[`${M}+t`, 'new tab'], [`${M}+w`, 'close tab'], [`${M}+shift+t`, 'reopen closed tab'], [`${M}+1‥8`, 'jump to tab'],
-      [`${M}+9`, 'last tab'], [`${M}+tab`, 'next tab'], [`${M}+shift+tab`, 'previous tab'], ['middle-click', 'close a tab'], ['right-click', 'put a tab to sleep']]],
-    ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], [`${M}+shift+1‥9`, 'pull a tab to cursor'], [`${M}+shift+w`, 'close pane at cursor'], [`${M}+shift+a`, 'search every tab'], [`${M}+shift+b`, 'find in page'], [`${M}+shift+o`, 'save / open layouts'], ['ctrl+shift+q', 'hide pane, keep its tab'],
+      [`${M}+9`, 'last tab'], ['middle-click', 'close a tab'], ['right-click', 'put a tab to sleep']]],
+    ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], ['ctrl+tab', 'pull a tab to cursor (list at the mouse)'], [`${M}+shift+w`, 'close pane at cursor'], [`${M}+shift+a`, 'search every tab'], [`${M}+shift+b`, 'find in page'], [`${M}+shift+o`, 'save / open layouts'], ['ctrl+shift+q', 'hide pane, keep its tab'],
       [`${M}+shift+r`, 'blank tab at cursor'], [`${M}+shift+f`, 'zoom pane at cursor'], [`${M}+${A}+arrows`, 'move focus between panes'],
       ['click', 'focus a pane'], ['drag a gap', 'resize panes']]],
     ['WORKSPACES', [[`${M}+${A}+1‥9`, 'switch workspace'], [`${M}+${A}+shift+1‥9`, 'send tab to workspace'],
@@ -1479,6 +1496,7 @@ function setOmni(on) {
     if (typeof tsOn !== 'undefined' && tsOn) setTs(false);
     if (typeof loOn !== 'undefined' && loOn) setLo(false);
     if (typeof upOn !== 'undefined' && upOn) setUp(false);
+    if (typeof tpOn !== 'undefined' && tpOn) setTp(false);
     $('#omq').value = ''; omniQ = ''; omniHist = []; omniSel = 0; drawOmni(); setTimeout(() => $('#omq').focus(), 0);
   } else $('#omq').blur();
   renderPanes();
@@ -1581,6 +1599,7 @@ function setLo(on) {
   if (on) {
     if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false); if (dlOn) setDl(false); if (frOn) setFr(false); if (tourOn) setTour(false); if (tsOn) setTs(false);
     if (typeof omniOn !== 'undefined' && omniOn) setOmni(false);
+    if (typeof tpOn !== 'undefined' && tpOn) setTp(false);
     $('#loq').value = ''; loSel = 0; drawLo(); setTimeout(() => $('#loq').focus(), 0);
   } else $('#loq').blur();
   renderPanes();
@@ -1630,6 +1649,59 @@ $('#lolist').addEventListener('click', (e) => {
   if (r) goLo(+r.dataset.n);
 });
 $('#lo').addEventListener('mousedown', (e) => { if (e.target.id === 'lo') closeLo(); });
+// ── pull a tab (ctrl+tab): this workspace's tabs in a small list right at the mouse. The one you
+// pick (click, its number, or enter) is pulled into the pane that was under the mouse. ──
+let tpOn = false, tpItems = [], tpSel = 0, tpAt = [-1, -1];
+function setTp(on, x, y) {
+  tpOn = on;
+  $('#tp').classList.toggle('on', on);
+  if (on) {
+    if (ovOn) setOv(false); if (cfgOn) setCfg(false); if (palOn) setPal(false); if (dlOn) setDl(false); if (frOn) setFr(false); if (tsOn) setTs(false);
+    if (typeof upOn !== 'undefined' && upOn) setUp(false);
+    if (loOn) setLo(false);
+    if (typeof omniOn !== 'undefined' && omniOn) setOmni(false);
+    tpAt = [typeof x === 'number' ? x : -1, typeof y === 'number' ? y : -1];
+    drawTp(true);
+    const b = $('#tpbox'), w = b.offsetWidth, h = b.offsetHeight;
+    const px = tpAt[0] >= 0 ? tpAt[0] : innerWidth / 2 - w / 2, py = tpAt[1] >= 0 ? tpAt[1] : innerHeight / 3;
+    // The first tab sits right under the mouse, kept inside the window.
+    b.style.left = Math.max(8, Math.min(px - 22, innerWidth - w - 8)) + 'px';
+    b.style.top = Math.max(8, Math.min(py - 40, innerHeight - h - 8)) + 'px';
+    setTimeout(() => $('#tp').focus(), 0);
+  }
+  renderPanes();
+}
+function closeTp() { if (tpOn) { setTp(false); send('tabpull', false); } }
+function drawTp(reset) {
+  const host = (u) => { try { return new URL(u).host || u; } catch (_) { return u; } };
+  tpItems = S.tabs.filter((t) => t.w === S.ws && !t.g);
+  if (reset) { tpSel = tpItems.findIndex((t) => !t.v); if (tpSel < 0) tpSel = 0; }
+  tpSel = Math.min(tpSel, Math.max(0, tpItems.length - 1));
+  $('#tplist').innerHTML = tpItems.length ? tpItems.map((t, n) =>
+    `<div class="tpi${n === tpSel ? ' sel' : ''}${t.v ? ' vis' : ''}" data-n="${n}"><span class="tn">${n < 9 ? n + 1 : ''}</span>` +
+    `<span class="tt">${esc(t.t || (t.s === 'home' ? 'new tab' : host(t.u)))}</span><span class="th">${t.v ? 'on screen' : t.s === 'home' ? '' : esc(host(t.u))}</span></div>`).join('')
+    : '<div class="tpi"><span class="tt">no tabs here</span></div>';
+}
+function pullTp(n) {
+  const t = tpItems[n];
+  if (!t) return;
+  closeTp();
+  send('pullid', [t.id, tpAt[0], tpAt[1]]);
+}
+$('#tp').addEventListener('keydown', (e) => {
+  const k = e.key, digit = /^(Digit|Numpad)([1-9])$/.exec(e.code || ''), n = Math.max(1, tpItems.length);
+  if (k === 'Escape') closeTp();
+  else if (k === 'Enter' || k === ' ') pullTp(tpSel);
+  else if (digit && !e.altKey && !e.shiftKey) pullTp(+digit[2] - 1);
+  else if (k === 'ArrowDown' || (k === 'Tab' && !e.shiftKey)) { tpSel = (tpSel + 1) % n; drawTp(); }
+  else if (k === 'ArrowUp' || (k === 'Tab' && e.shiftKey)) { tpSel = (tpSel - 1 + n) % n; drawTp(); }
+  else return;
+  e.preventDefault(); e.stopPropagation();
+});
+$('#tplist').addEventListener('mousemove', (e) => { const r = e.target.closest('[data-n]'); if (r && +r.dataset.n !== tpSel) { tpSel = +r.dataset.n; drawTp(); } });
+$('#tplist').addEventListener('click', (e) => { const r = e.target.closest('[data-n]'); if (r) pullTp(+r.dataset.n); });
+$('#tp').addEventListener('mousedown', (e) => { if (e.target.id === 'tp') closeTp(); });
+
 
 // Exact command at the start of the input, plus whatever follows it.
 function parsePal(q) {
@@ -1709,7 +1781,7 @@ const TOUR = [
       starting fresh? skip this. you can import later from settings.` },
   { t: 'tabs', art: `<pre> ULTRA │ 1 2 │ <b>1 docs</b>  2 mail  <i>3 news</i>\n                ───────\n\n <b>1</b>  focused tab\n 2  loaded, hidden\n <i>3</i>  asleep: ~0 memory</pre>`,
     b: `tabs sit in the bar up top, numbered by slot.<br>
-      <kbd>cmd+t</kbd> new · <kbd>cmd+w</kbd> close · <kbd>cmd+1‥9</kbd> jump<br><kbd>ctrl+tab</kbd> cycle · <kbd>cmd+shift+t</kbd> reopen closed<br><br>
+      <kbd>cmd+t</kbd> new · <kbd>cmd+w</kbd> close · <kbd>cmd+1‥9</kbd> jump<br><kbd>cmd+shift+t</kbd> reopen closed<br><br>
       <i>italic</i> tabs are asleep: they cost almost nothing and wake when clicked.` },
   { t: 'split a pane', map: true, try: 'move the mouse to a side of the window (the map previews the split), then press cmd+shift+e.',
     b: `point at any side of the window and press <kbd>cmd+shift+e</kbd>.<br>ULTRA splits the pane under your cursor toward the nearest edge and opens a blank tab there.`,
@@ -1717,8 +1789,8 @@ const TOUR = [
   { t: 'split again', map: true, try: 'point near the bottom of a pane and press cmd+shift+e.',
     b: `every pane can split again. wide panes prefer side-by-side, tall ones stack.<br>when a pane is too small to split, ULTRA tells you instead of cramming another one in.`,
     check: (a, b) => b.panes.length > a.panes.length },
-  { t: 'pull a tab in', map: true, try: 'point at a pane and press cmd+shift+1.',
-    b: `<kbd>cmd+shift+1‥9</kbd> pulls that tab into the pane under your cursor, splitting it the same smart way.`,
+  { t: 'pull a tab in', map: true, try: 'point at a pane, press ctrl+tab and pick a tab.',
+    b: `<kbd>ctrl+tab</kbd> opens your tabs right at the mouse. Pick one (click it, press its number, or enter) and it's pulled into the pane under your cursor, splitting it the same smart way.`,
     check: (a, b) => paneSig(b) !== paneSig(a) },
   { t: 'focus & resize', map: true, try: 'press cmd+opt+← or cmd+opt+→.',
     b: `<kbd>cmd+opt+arrows</kbd> move focus between panes, or just click one.<br>drag the gaps between panes to resize them.`,
@@ -2380,7 +2452,6 @@ document.addEventListener('keydown', (e) => {
   else if (c && e.altKey && digit) { m = 'ws'; a = +digit[2] - 1; }
   else if (c && e.altKey && !e.shiftKey && (code === 'Digit0' || code === 'Numpad0')) { m = 'ws'; a = 9; }
   else if (c && e.altKey && code === 'KeyL') m = 'lock';
-  else if (c && e.shiftKey && digit) { m = 'mv'; a = +digit[2] - 1; }
   else if (c && e.shiftKey && code === 'KeyC') { if (frOn) closeFr(); else send('friends', true); e.preventDefault(); return; }
   else if (c && e.shiftKey && code === 'KeyE') m = 'mvnew';
   else if (c && e.shiftKey && code === 'KeyW') m = 'closeat';
@@ -2410,8 +2481,8 @@ document.addEventListener('keydown', (e) => {
     && !e.target.closest('input,textarea,select,[contenteditable]') && !anyOverlay()) {
     e.preventDefault(); ultra.typeUrl(e.key); return;
   }
-  else if (c && k === 'tab') m = e.shiftKey ? 'prev' : 'next';
-  else if (c && !e.altKey && digit) { if (digit[2] === '9') m = 'last'; else { m = 'slot'; a = +digit[2] - 1; } }
+  else if (c && !e.shiftKey && !e.altKey && k === 'tab') m = 'tabpull';
+  else if (c && !e.altKey && !e.shiftKey && digit) { if (digit[2] === '9') m = 'last'; else { m = 'slot'; a = +digit[2] - 1; } }
   else if (c && e.shiftKey && !e.altKey && code === 'KeyR') m = 'reader';
   else if (k === 'f9' && !c && !e.altKey) m = 'reader';
   else if (c && e.altKey && !e.shiftKey && code === 'KeyP') m = 'pip';
