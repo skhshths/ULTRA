@@ -142,7 +142,7 @@ input::selection { background: var(--acc-sel); }
 .dg-row .t { text-align: right; color: var(--mid); }
 .keys b { color: var(--mid); font-weight: 400; }
 .sp { position: fixed; z-index: 4; transition: background-color var(--fast); }
-.sp.v { cursor: col-resize; } .sp.h { cursor: row-resize; }
+.sp.v, .sp.h { cursor: grab; }
 .sp:hover, .sp.drag { background: color-mix(in srgb, var(--acc) 18%, transparent); }
 #panes.anim .sp { display: none; }
 #snapholo { position: fixed; inset: 0; pointer-events: none; z-index: 6; }
@@ -155,8 +155,8 @@ body.snapping .sp { opacity: 0; }
   box-shadow: 0 0 24px color-mix(in srgb, var(--acc) 25%, transparent); }
 
 body.sizing, body.sizing * { user-select: none !important; }
-body.sizing-v, body.sizing-v * { cursor: col-resize !important; }
-body.sizing-h, body.sizing-h * { cursor: row-resize !important; }
+body.sizing-v, body.sizing-v * { cursor: grabbing !important; }
+body.sizing-h, body.sizing-h * { cursor: grabbing !important; }
 
 /* overlays covering the content area */
 .ovl { position: fixed; left: calc(var(--gap) + 1px); top: calc(var(--top) + 1px); right: calc(var(--gap) + 1px);
@@ -1235,7 +1235,7 @@ $('#dl-clear').onclick = () => send('dl', ['clear', 0]);
       [`${M}+9`, 'last tab'], ['middle-click', 'close a tab'], ['right-click', 'put a tab to sleep']]],
     ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], ['ctrl+tab', 'pull a tab to cursor (list at the mouse)'], [`${M}+shift+w`, 'close pane at cursor'], [`${M}+shift+a`, 'search every tab'], [`${M}+shift+b`, 'find in page'], [`${M}+shift+o`, 'save / open layouts'], [`${M}+shift+q`, 'hide pane, keep its tab'],
       [`${M}+shift+r`, 'blank tab at cursor'], [`${M}+shift+f`, 'zoom pane at cursor'], [`${M}+${A}+arrows`, 'move focus between panes'],
-      ['click', 'focus a pane'], ['drag a gap', 'resize panes'], ['drag a gap to the edge', 'snap that pane along the whole side']]],
+      ['click', 'focus a pane'], ['drag a gap', 'snap the pane beside it along the whole side']]],
     ['WORKSPACES', [[`${M}+${A}+1‥9`, 'switch workspace'], [`${M}+${A}+shift+1‥9`, 'send tab to workspace'],
       [`${M}+${A}+0`, 'private workspace'], [`${M}+${A}+l`, 'lock private workspace']]],
     ['PAGES', [[`${M}+f`, 'omnibar: search, go, find tabs and more'], [`${M}+l`, 'address bar'], ['just type', 'search from anywhere'], [MAC ? 'cmd+[ / cmd+]' : 'alt+← / alt+→', 'back / forward'],
@@ -1798,7 +1798,7 @@ const TOUR = [
     b: `<kbd>ctrl+tab</kbd> opens your tabs right at the mouse. Pick one (click it, press its number, or enter) and it's pulled into the pane under your cursor, splitting it the same smart way.`,
     check: (a, b) => paneSig(b) !== paneSig(a) },
   { t: 'focus & resize', map: true, try: 'press ctrl+alt+← or ctrl+alt+→.',
-    b: `<kbd>ctrl+alt+arrows</kbd> move focus between panes, or just click one.<br>drag the gaps between panes to resize them.`,
+    b: `<kbd>ctrl+alt+arrows</kbd> move focus between panes, or just click one.<br>drag a gap between panes and the pane beside it snaps along that whole side (outlines show where).`,
     check: (a, b) => b.a !== a.a },
   { t: 'zoom', map: true, try: 'point at a pane and press ctrl+shift+f (press it again to unzoom).',
     b: `<kbd>ctrl+shift+f</kbd> zooms the pane under your cursor to fill the workspace. press it again and it snaps back; the rest of the layout waits untouched.`,
@@ -2216,21 +2216,19 @@ panesEl.addEventListener('pointerdown', (e) => {
   e.preventDefault(); // a drag, never a text selection
   sp.setPointerCapture(e.pointerId); sp.classList.add('drag');
   document.body.classList.add('sizing', info.v ? 'sizing-v' : 'sizing-h');
-  let pending = null, raf = 0;
-  // Snapping: drag a gap all the way to the far edge and the pane on the side you grabbed (at
-  // the spot you grabbed) is laid along that whole side instead; outlines preview it.
-  const gx = e.clientX, gy = e.clientY, g0 = { ...info.gap }, par = info.parent;
+  // Dragging a gap snaps, it doesn't resize: drag it ~24px either way and the pane on the side
+  // it moves away from (at the spot you grabbed) is laid along that whole side; outlines
+  // preview it, release applies, coming back to where you started cancels.
+  const gx = e.clientX, gy = e.clientY, g0 = { ...info.gap };
   const panes0 = S.panes.map((p) => ({ id: p.id, r: { ...p.r } }));
-  const r0 = info.v ? (g0.x - par.x) / (par.w - 6) : (g0.y - par.y) / (par.h - 6);
   const A = panes0.reduce((a, { r }) => ({ x: Math.min(a.x, r.x), y: Math.min(a.y, r.y), x2: Math.max(a.x2, r.x + r.w), y2: Math.max(a.y2, r.y + r.h) }),
     { x: Infinity, y: Infinity, x2: -Infinity, y2: -Infinity });
   let snap = null, snapKey = '';
   const snapAt = (ev) => {
-    const Z = 34, near = (a, b) => Math.abs(a - b) < 2.5;
-    let dir = null;
-    if (!info.v) { if (ev.clientY >= A.y2 - Z) dir = 'd'; else if (ev.clientY <= A.y + Z) dir = 'u'; }
-    else if (ev.clientX >= A.x2 - Z) dir = 'r'; else if (ev.clientX <= A.x + Z) dir = 'l';
-    if (!dir) return null;
+    const T = 24, near = (a, b) => Math.abs(a - b) < 2.5;
+    const d = info.v ? ev.clientX - gx : ev.clientY - gy;
+    if (Math.abs(d) < T) return null;
+    const dir = info.v ? (d > 0 ? 'r' : 'l') : (d > 0 ? 'd' : 'u');
     const inX = (r) => gx >= r.x && gx < r.x + r.w, inY = (r) => gy >= r.y && gy < r.y + r.h;
     const p = panes0.find(({ r }) => dir === 'd' ? near(r.y + r.h, g0.y) && inX(r) : dir === 'u' ? near(r.y, g0.y + g0.h) && inX(r)
       : dir === 'r' ? near(r.x + r.w, g0.x) && inY(r) : near(r.x, g0.x + g0.w) && inY(r));
@@ -2242,20 +2240,9 @@ panesEl.addEventListener('pointerdown', (e) => {
   };
   const move = (ev) => {
     const s = snapAt(ev), key = JSON.stringify(s);
-    if (key !== snapKey) {
-      snapKey = key; snap = s;
-      if (s) {
-        if (raf) { cancelAnimationFrame(raf); raf = 0; }
-        send('ratio', [info.path, r0]); // the rest keeps the proportions it had
-        send('snapprev', s);
-      } else send('snapprev', null);
-    }
-    if (snap) return;
-    const r = info.parent;
-    pending = info.v ? (ev.clientX - r.x - 3) / (r.w - 6) : (ev.clientY - r.y - 3) / (r.h - 6);
-    // Both sides keep at least ~60px (and at least 10%), so a drag can't squeeze a pane away.
-    const min = Math.min(0.45, Math.max(0.1, 60 / ((info.v ? r.w : r.h) - 6)));
-    if (!raf) raf = requestAnimationFrame(() => { raf = 0; send('ratio', [info.path, Math.min(1 - min, Math.max(min, pending))]); });
+    if (key === snapKey) return;
+    snapKey = key; snap = s;
+    send('snapprev', s);
   };
   const up = (ev) => {
     removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
