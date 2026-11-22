@@ -202,6 +202,20 @@ impl Node {
         }
     }
 
+    /// Take leaf `id` out and lay it along one whole side, beside everything else: `v` puts it
+    /// left/right (full height), otherwise top/bottom (full width); `first` = left/top; it gets
+    /// `share` of the space. Needs at least one other leaf.
+    pub fn span(&mut self, id: u64, v: bool, first: bool, share: f64) -> bool {
+        if !self.contains(id) || !self.remove(id) {
+            return false;
+        }
+        let rest = std::mem::replace(self, Node::Leaf(0));
+        let share = share.clamp(0.1, 0.9);
+        let (a, b, r) = if first { (Node::Leaf(id), rest, share) } else { (rest, Node::Leaf(id), 1.0 - share) };
+        *self = Node::Split { v, r, a: Box::new(a), b: Box::new(b) };
+        true
+    }
+
     pub fn map(&self, f: &impl Fn(u64) -> Option<u64>) -> Option<Node> {
         match self {
             Node::Leaf(x) => f(*x).map(Node::Leaf),
@@ -259,5 +273,28 @@ mod tests {
         assert_eq!(l, vec![7, 2, 9]);
         // Layout changed since: no exact match.
         assert!(!n.restore(&[5, 6], 8, true, 0.5, true));
+    }
+
+    #[test]
+    fn span_lays_a_pane_along_a_whole_side() {
+        // (1 | 2) over 3: snap 2 to run the full height on the right -> (1 over 3) | 2.
+        let mut n = Node::Leaf(1);
+        n.split(1, 2, true, false);
+        n.set_ratio("", 0.5);
+        let top = n.clone();
+        n = Node::Split { v: false, r: 0.6, a: Box::new(top), b: Box::new(Node::Leaf(3)) };
+        assert!(n.span(2, true, false, 0.5));
+        let mut v = Vec::new();
+        n.rects(R { x: 0.0, y: 0.0, w: 206.0, h: 106.0 }, 6.0, &mut v);
+        let r2 = v.iter().find(|x| x.0 == 2).unwrap().1;
+        assert_eq!((r2.x, r2.y, r2.w, r2.h), (106.0, 0.0, 100.0, 106.0));
+        let mut l = Vec::new();
+        n.leaves(&mut l);
+        assert_eq!(l, vec![1, 3, 2]);
+        // The (1 over 3) part keeps its own proportions.
+        let r1 = v.iter().find(|x| x.0 == 1).unwrap().1;
+        assert_eq!(r1.h, 60.0);
+        // A lone leaf can't be spanned.
+        assert!(!Node::Leaf(5).span(5, true, true, 0.5));
     }
 }

@@ -523,6 +523,8 @@ struct App {
     hover: Option<(u64, Instant)>,
     /// While a tab picked from the ctrl+tab list is placed: where the mouse was when it opened.
     pull_at: std::cell::Cell<Option<(f64, f64)>>,
+    /// A gap-drag is previewing a snap: pages are hidden while the outlines show.
+    snapping: bool,
     /// A text box in ULTRA's own UI has the keyboard (hover-to-focus must not take it away).
     ui_typing: bool,
     coffee: bool,
@@ -1052,6 +1054,16 @@ impl App {
         Some(((c.x - o.x as f64) / s, (c.y - o.y as f64) / s))
     }
 
+    /// The layout with pane `arg[0]` laid along a whole side (see `Node::span`), if it can be.
+    fn snap_tree(&self, arg: &Value) -> Option<Node> {
+        let id = arg[0].as_u64()?;
+        if self.zoom.is_some() || !self.root.contains(id) {
+            return None;
+        }
+        let mut t = self.root.clone();
+        t.span(id, arg[1].as_bool()?, arg[2].as_bool()?, arg[3].as_f64()?).then_some(t)
+    }
+
     fn pane_under_cursor(&self) -> Option<u64> {
         let (px, py) = self.cursor()?;
         self.panes().into_iter().find(|(_, r)| r.contains(px, py)).map(|(id, _)| id)
@@ -1303,7 +1315,7 @@ impl App {
         let now = Instant::now();
         // Keep private pages out of screenshots and screen sharing while that workspace is shown.
         privacy::exclude_from_capture(self.window.hwnd() as isize, self.ws == PRIVATE_WS);
-        let hidden = self.overlay || self.tour || self.gate() || self.booting;
+        let hidden = self.overlay || self.snapping || self.tour || self.gate() || self.booting;
         // A glance covers the layout, so the panes behind it are hidden (but stay warm).
         let covered = hidden || glance.is_some();
         let animate = animate && !covered && !self.cfg.ultraspeed;
@@ -3322,6 +3334,42 @@ impl App {
             }
             "trim" => self.trim(),
             "dir" => self.focus_dir(arg.as_str().unwrap_or("r")),
+            // Snapping a pane by dragging its edge to the far side of the window:
+            // [id, v, first, share] previews the new layout (pages hidden, the UI draws the
+            // outlines); null ends the preview. "snapgo" applies it.
+            "snapprev" => {
+                let tree = self.snap_tree(arg);
+                let was = self.snapping;
+                self.snapping = tree.is_some();
+                if let Some(t) = tree {
+                    let me = arg[0].as_u64();
+                    let mut v = Vec::new();
+                    t.rects(self.area(), GAP, &mut v);
+                    let boxes: Vec<Value> = v
+                        .iter()
+                        .map(|(id, r)| {
+                            let t = self.idx(*id).map(|i| self.tabs[i].title.clone()).unwrap_or_default();
+                            json!({ "id": id, "r": r, "t": t, "me": Some(*id) == me })
+                        })
+                        .collect();
+                    let _ = self.ui.evaluate_script(&format!("ultra.snapPreview({})", json!(boxes)));
+                } else {
+                    let _ = self.ui.evaluate_script("ultra.snapPreview(null)");
+                }
+                if was != self.snapping {
+                    self.apply_layout(false);
+                }
+            }
+            "snapgo" => {
+                let tree = self.snap_tree(arg);
+                self.snapping = false;
+                let _ = self.ui.evaluate_script("ultra.snapPreview(null)");
+                if let Some(t) = tree {
+                    self.root = t;
+                }
+                self.apply_layout(false);
+                self.sync();
+            }
             "ratio" => {
                 if let (Some(p), Some(r)) = (arg[0].as_str(), arg[1].as_f64()) {
                     self.root.set_ratio(p, r);
@@ -4574,6 +4622,7 @@ fn main() {
         coffee_at: None,
         hover: None,
         pull_at: std::cell::Cell::new(None),
+        snapping: false,
         ui_typing: false,
         coffee: false,
         glance: None,

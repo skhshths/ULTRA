@@ -145,6 +145,15 @@ input::selection { background: var(--acc-sel); }
 .sp.v { cursor: col-resize; } .sp.h { cursor: row-resize; }
 .sp:hover, .sp.drag { background: color-mix(in srgb, var(--acc) 18%, transparent); }
 #panes.anim .sp { display: none; }
+#snapholo { position: fixed; inset: 0; pointer-events: none; z-index: 6; }
+body.snapping .sp { opacity: 0; }
+#snapholo .sh { position: fixed; display: flex; align-items: center; justify-content: center; overflow: hidden;
+  border: 1px solid var(--acc-dim); background: color-mix(in srgb, var(--acc) 5%, rgba(16,16,16,.55)); color: var(--dim);
+  font-size: 12px; transition: left var(--med) var(--ease), top var(--med) var(--ease), width var(--med) var(--ease), height var(--med) var(--ease); }
+#snapholo .sh span { max-width: 80%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#snapholo .sh.me { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 16%, rgba(16,16,16,.55)); color: var(--acc);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--acc) 25%, transparent); }
+
 body.sizing, body.sizing * { user-select: none !important; }
 body.sizing-v, body.sizing-v * { cursor: col-resize !important; }
 body.sizing-h, body.sizing-h * { cursor: row-resize !important; }
@@ -1232,7 +1241,7 @@ $('#dl-clear').onclick = () => send('dl', ['clear', 0]);
       [`${M}+9`, 'last tab'], ['middle-click', 'close a tab'], ['right-click', 'put a tab to sleep']]],
     ['PANES', [[`${M}+shift+e`, 'new pane at cursor'], ['ctrl+tab', 'pull a tab to cursor (list at the mouse)'], [`${M}+shift+w`, 'close pane at cursor'], [`${M}+shift+a`, 'search every tab'], [`${M}+shift+b`, 'find in page'], [`${M}+shift+o`, 'save / open layouts'], ['ctrl+shift+q', 'hide pane, keep its tab'],
       [`${M}+shift+r`, 'blank tab at cursor'], [`${M}+shift+f`, 'zoom pane at cursor'], [`${M}+${A}+arrows`, 'move focus between panes'],
-      ['click', 'focus a pane'], ['drag a gap', 'resize panes']]],
+      ['click', 'focus a pane'], ['drag a gap', 'resize panes'], ['drag a gap to the edge', 'snap that pane along the whole side']]],
     ['WORKSPACES', [[`${M}+${A}+1‥9`, 'switch workspace'], [`${M}+${A}+shift+1‥9`, 'send tab to workspace'],
       [`${M}+${A}+0`, 'private workspace'], [`${M}+${A}+l`, 'lock private workspace']]],
     ['PAGES', [[`${M}+f`, 'omnibar: search, go, find tabs and more'], [`${M}+l`, 'address bar'], ['just type', 'search from anywhere'], [MAC ? 'cmd+[ / cmd+]' : 'alt+← / alt+→', 'back / forward'],
@@ -2214,16 +2223,51 @@ panesEl.addEventListener('pointerdown', (e) => {
   sp.setPointerCapture(e.pointerId); sp.classList.add('drag');
   document.body.classList.add('sizing', info.v ? 'sizing-v' : 'sizing-h');
   let pending = null, raf = 0;
+  // Snapping: drag a gap all the way to the far edge and the pane on the side you grabbed (at
+  // the spot you grabbed) is laid along that whole side instead; outlines preview it.
+  const gx = e.clientX, gy = e.clientY, g0 = { ...info.gap }, par = info.parent;
+  const panes0 = S.panes.map((p) => ({ id: p.id, r: { ...p.r } }));
+  const r0 = info.v ? (g0.x - par.x) / (par.w - 6) : (g0.y - par.y) / (par.h - 6);
+  const A = panes0.reduce((a, { r }) => ({ x: Math.min(a.x, r.x), y: Math.min(a.y, r.y), x2: Math.max(a.x2, r.x + r.w), y2: Math.max(a.y2, r.y + r.h) }),
+    { x: Infinity, y: Infinity, x2: -Infinity, y2: -Infinity });
+  let snap = null, snapKey = '';
+  const snapAt = (ev) => {
+    const Z = 34, near = (a, b) => Math.abs(a - b) < 2.5;
+    let dir = null;
+    if (!info.v) { if (ev.clientY >= A.y2 - Z) dir = 'd'; else if (ev.clientY <= A.y + Z) dir = 'u'; }
+    else if (ev.clientX >= A.x2 - Z) dir = 'r'; else if (ev.clientX <= A.x + Z) dir = 'l';
+    if (!dir) return null;
+    const inX = (r) => gx >= r.x && gx < r.x + r.w, inY = (r) => gy >= r.y && gy < r.y + r.h;
+    const p = panes0.find(({ r }) => dir === 'd' ? near(r.y + r.h, g0.y) && inX(r) : dir === 'u' ? near(r.y, g0.y + g0.h) && inX(r)
+      : dir === 'r' ? near(r.x + r.w, g0.x) && inY(r) : near(r.x, g0.x + g0.w) && inY(r));
+    if (!p) return null;
+    const tall = dir === 'd' || dir === 'u', r = p.r, W = A.x2 - A.x, H = A.y2 - A.y;
+    if (tall ? r.w >= W - 2 : r.h >= H - 2) return null; // already spans it: nothing to snap
+    const first = tall ? r.x + r.w / 2 < A.x + W / 2 : r.y + r.h / 2 < A.y + H / 2;
+    return [p.id, tall, first, +(tall ? r.w / W : r.h / H).toFixed(3)];
+  };
   const move = (ev) => {
+    const s = snapAt(ev), key = JSON.stringify(s);
+    if (key !== snapKey) {
+      snapKey = key; snap = s;
+      if (s) {
+        if (raf) { cancelAnimationFrame(raf); raf = 0; }
+        send('ratio', [info.path, r0]); // the rest keeps the proportions it had
+        send('snapprev', s);
+      } else send('snapprev', null);
+    }
+    if (snap) return;
     const r = info.parent;
     pending = info.v ? (ev.clientX - r.x - 3) / (r.w - 6) : (ev.clientY - r.y - 3) / (r.h - 6);
     // Both sides keep at least ~60px (and at least 10%), so a drag can't squeeze a pane away.
     const min = Math.min(0.45, Math.max(0.1, 60 / ((info.v ? r.w : r.h) - 6)));
     if (!raf) raf = requestAnimationFrame(() => { raf = 0; send('ratio', [info.path, Math.min(1 - min, Math.max(min, pending))]); });
   };
-  const up = () => {
+  const up = (ev) => {
     removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
     sp.classList.remove('drag'); document.body.classList.remove('sizing', 'sizing-v', 'sizing-h');
+    if (snap) send(ev.type === 'pointerup' ? 'snapgo' : 'snapprev', ev.type === 'pointerup' ? snap : null);
+    snap = null;
   };
   addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
 });
@@ -2234,6 +2278,29 @@ panesEl.addEventListener('keydown', (e) => {
 });
 
 // ── overview (cmd+k): every tab in every workspace ──
+// ── snap preview: outlines of the layout a gap-drag is about to make, sliding from where each
+// pane is now to where it will go ──
+ultra.snapPreview = (boxes) => {
+  let el = document.getElementById('snapholo');
+  document.body.classList.toggle('snapping', !!boxes); // gaps hide while the outlines show
+  if (!boxes) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.id = 'snapholo'; document.body.appendChild(el); }
+  const now = new Map(S.panes.map((p) => [p.id, p.r]));
+  const put = (d, r) => { d.style.left = r.x + 'px'; d.style.top = r.y + 'px'; d.style.width = r.w + 'px'; d.style.height = r.h + 'px'; };
+  el.innerHTML = '';
+  const ds = boxes.map((b) => {
+    const d = document.createElement('div');
+    d.className = 'sh' + (b.me ? ' me' : '');
+    const t = document.createElement('span');
+    t.textContent = b.t || 'new tab';
+    d.appendChild(t);
+    put(d, now.get(b.id) || b.r);
+    el.appendChild(d);
+    return [d, b.r];
+  });
+  requestAnimationFrame(() => requestAnimationFrame(() => ds.forEach(([d, r]) => put(d, r))));
+};
+
 function setOv(on) {
   ovOn = on;
   $('#ov').classList.toggle('on', on);
