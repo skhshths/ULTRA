@@ -860,7 +860,9 @@ window.ultra = {
     setText($('#def-btn'), s.isdef ? '✓ ULTRA is default' : 'make default');
     $('#def-btn').disabled = !!s.isdef;
     const cur = s.tabs[s.a] || { s: 'home', u: '' };
-    const url = $('#url'); if (document.activeElement !== url) url.value = cur.s === 'home' ? '' : cur.u;
+    // The bar keeps what you're typing only while ULTRA's UI really has the keyboard: once a page
+    // has it, the input can still be the UI's activeElement, and the bar must follow the tab.
+    const url = $('#url'); if (document.activeElement !== url || !document.hasFocus()) url.value = cur.s === 'home' ? '' : cur.u;
     const insecure = cur.s !== 'home' && /^http:/i.test(cur.u) && !/^http:\/\/(localhost|127\.)/i.test(cur.u);
     $('#urlwrap').classList.toggle('insecure', insecure);
     setText($('#urlwrap .p'), insecure ? '⚠' : '›');
@@ -2389,6 +2391,8 @@ document.addEventListener('beforeinput', (e) => { sgDel = (e.inputType || '').st
 // Moving focus to another box closes any list and waits for fresh typing.
 document.addEventListener('focusin', (e) => { if (e.target !== sgInput) { sgHide(); sgTyped = false; sgInput = null; } });
 url.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== url) sgHide(); }, 0));
+// A page took the keyboard: let go of the address bar so it shows the active tab again.
+window.addEventListener('blur', () => { if (document.activeElement === url) { sgHide(); url.blur(); if (S) ultra.render(S); } });
 panesEl.addEventListener('input', (e) => { const q = e.target.closest('.hp input'); if (q) { sgTyped = true; sgAsk(q); } });
 $('#star').onclick = () => send('bookmark');
 $('#shield').onclick = () => send('blocksite');
